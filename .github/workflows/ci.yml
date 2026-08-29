@@ -17,11 +17,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # Fail rather than silently reaching the network for a package the lockfile
-  # does not name.
-  UV_FROZEN: "1"
-
 jobs:
   check:
     name: Lint, type-check and test
@@ -46,8 +41,11 @@ jobs:
       - name: Install Python
         run: uv python install
 
-      # `--locked` fails if uv.lock has drifted from pyproject.toml rather than
-      # resolving something that was never tested.
+      # `--locked` asserts uv.lock is already in step with pyproject.toml and
+      # fails if it is not, rather than resolving something that was never
+      # tested. Note it is mutually exclusive with UV_FROZEN, which tells uv to
+      # skip that check entirely - setting both is an error, not a belt and
+      # braces.
       - name: Install dependencies
         run: uv sync --locked --all-groups
 

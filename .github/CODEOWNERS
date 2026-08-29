@@ -1,0 +1,3 @@
+# Default owner for everything in this repository.
+# Applies org-wide only where a repo has no CODEOWNERS of its own.
+* @AlzyWelzy

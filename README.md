@@ -16,7 +16,7 @@ their users. That is the point of AGPL over GPL for a hosted service.
 | --- | --- |
 | Stack | Undecided |
 | Hostname | `api.pacestreak.com` (not yet pointed anywhere) |
-| Consumers | `PaceStreak/web` (the frontend, also unbuilt) |
+| Consumers | `PaceStreak/app` (the product frontend, also unbuilt) |
 | Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
 
 ## Constraints already settled
@@ -42,7 +42,7 @@ was learned by breaking something.
 
 ### The frontend's CSP will block this API until it is widened
 
-`PaceStreak/landing` (and `web`, when it exists) ships:
+`PaceStreak/web` (and `app`, when it exists) ships:
 
 ```http
 Content-Security-Policy: default-src 'self'; connect-src 'self'; …
@@ -53,6 +53,9 @@ silently from the page's perspective. Whoever wires the first call must add
 `connect-src 'self' https://api.pacestreak.com` to that site's `public/_headers`
 in the same change.
 
+In practice the caller is `app.pacestreak.com`, not `www` — the public site is
+deliberately static and makes no authenticated requests at all.
+
 ### Versioning
 
 Prefix routes with `/v1/`. Retrofitting a version prefix after clients exist is
@@ -60,7 +63,7 @@ far more expensive than carrying one from the first commit.
 
 ### Data export is a product promise
 
-The landing page states: *"Full JSON and CSV export from day one."* Export is a
+The public site states: *"Full JSON and CSV export from day one."* Export is a
 launch requirement, not a later feature — design the schema so a complete export
 is a query, not a migration.
 

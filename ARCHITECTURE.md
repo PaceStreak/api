@@ -6,14 +6,14 @@ commit does not have to guess.
 ## Where it sits
 
 ```text
-www.pacestreak.com     Cloudflare Pages (static)   →  the marketing site
-                                                       PaceStreak/landing
-app or www             the frontend application    →  PaceStreak/web
+www.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/web    the public site
+app.pacestreak.com     Cloudflare Pages            →  PaceStreak/app    the product
 api.pacestreak.com     THIS REPOSITORY             →  the backend
+blog.pacestreak.com    Cloudflare Pages (static)   →  PaceStreak/blog   the build log
 status.pacestreak.com  GitHub Pages (Upptime)      →  public status page
 ```
 
-All four sit under one registrable domain, `pacestreak.com`, on Cloudflare DNS.
+All of them sit under one registrable domain, `pacestreak.com`, on Cloudflare DNS.
 That single fact drives most of the constraints below.
 
 ## Trust boundary

@@ -26,9 +26,10 @@ These come from decisions already made elsewhere and will fail review if broken:
 
 Do these in the same pull request, or the frontend breaks silently:
 
-1. Widen `connect-src` in `PaceStreak/landing` (and `web`) `public/_headers` to
-   include `https://api.pacestreak.com`. The CSP is `default-src 'self'`, so the
-   browser blocks the call with no visible error on the page.
+1. Widen `connect-src` in [`PaceStreak/app`](https://github.com/PaceStreak/app)'s
+   `public/_headers` to include `https://api.pacestreak.com`. The CSP is
+   `default-src 'self'`, so the browser blocks the call with no visible error on
+   the page.
 2. Add a health endpoint and register it in
    [`PaceStreak/status`](https://github.com/PaceStreak/status) with a body
    content assertion — a 200 alone does not prove the service works.

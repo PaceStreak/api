@@ -1,0 +1,135 @@
+# Base stack: the API, Postgres and Redis.
+#
+#   docker compose up --build              development (compose.override.yaml
+#                                          is picked up automatically)
+#   docker compose -f compose.yaml up      production-shaped, no override
+#
+# The only thing that changes between the two is APP_MODE, which the entrypoint
+# turns into `fastapi dev` or `fastapi run`.
+#
+# Defaults are inline (${VAR:-default}), so this runs with no .env file. Copy
+# .env.example to .env to override any of them.
+
+name: pacestreak-api
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_MODE: ${APP_MODE:-prod}
+      APP_MODULE: ${APP_MODULE:-app.main:app}
+      APP_PORT: ${APP_PORT:-8000}
+
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pacestreak}:${POSTGRES_PASSWORD:-pacestreak}@postgres:5432/${POSTGRES_DB:-pacestreak}
+      REDIS_URL: redis://redis:6379/0
+
+      # Deliberately valueless. A key with no value passes the host's variable
+      # through only if it is actually set; writing
+      # `WEB_CONCURRENCY: ${WEB_CONCURRENCY:-}` instead sets it to the EMPTY
+      # STRING, and uvicorn tests for presence rather than emptiness - it runs
+      # int("") and dies at startup with a stack trace that says nothing about
+      # compose. The entrypoint also unsets empties as a second line of
+      # defence.
+      #
+      # WEB_CONCURRENCY: worker processes. Leave unset on a platform that
+      # scales by running more containers - workers inside a replicated
+      # container multiply memory for nothing.
+      WEB_CONCURRENCY:
+      # FORWARDED_ALLOW_IPS: addresses uvicorn will trust X-Forwarded-* from.
+      # Inside a compose network the peer is another container; "*" would let
+      # any caller forge a client IP, so never set it on an exposed service.
+      FORWARDED_ALLOW_IPS:
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      # `service_healthy`, not `service_started`. Postgres accepts TCP
+      # connections seconds before it will accept queries, so starting the API
+      # on "started" produces a crash loop that looks like an application bug.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # python, not curl: the slim base image has no curl, and installing one
+      # to check a health endpoint is a package to patch forever.
+      #
+      # NOTE: the app currently registers this route as /heatlth, not /health.
+      # Fix the route or set API_HEALTH_PATH=/heatlth, or this check fails.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          try:
+              with urllib.request.urlopen("http://127.0.0.1:8000${API_HEALTH_PATH:-/health}", timeout=3) as r:
+                  sys.exit(0 if r.status == 200 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Gives the process time to boot before a failure counts against it,
+      # instead of restarting a container that was merely still starting.
+      start_period: 20s
+    networks: [backend]
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pacestreak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pacestreak}
+      POSTGRES_DB: ${POSTGRES_DB:-pacestreak}
+      # Postgres only applies initdb arguments on first boot, when the volume
+      # is empty. Changing them later does nothing until the volume is dropped.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data.
+      #
+      # Postgres 18 changed this. The image now stores data in a
+      # major-version-specific subdirectory so `pg_upgrade --link` does not
+      # have to cross a mount boundary, and it refuses to start when it finds
+      # data at the old path with nothing mounted at the new one. On 17 and
+      # earlier the correct path is /var/lib/postgresql/data - moving between
+      # the two is a dump and restore, not a volume rename.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # -U and -d matter: bare `pg_isready` checks the default database, which
+      # can report ready while the one the app uses is not.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pacestreak} -d ${POSTGRES_DB:-pacestreak}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Not published to the host here. The dev override does that; production
+    # has no reason to expose a database on a public interface.
+    networks: [backend]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    # Append-only persistence. Without it a restart silently empties whatever
+    # is in here, which is fine for a cache and not fine for a rate limiter or
+    # a session store.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks: [backend]
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  backend:
+    driver: bridge

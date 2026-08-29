@@ -1,7 +1,21 @@
 # Architecture
 
-Nothing is built yet. This records the shape the API has to fit, so the first
-commit does not have to guess.
+The stack is chosen; no product endpoints exist yet. This records the shape the
+API has to fit and the one question still genuinely open.
+
+## Stack
+
+Python 3.14, FastAPI, and the Astral toolchain: **uv** for packaging and the
+interpreter, **Ruff** for linting and formatting, **ty** for type checking.
+
+**Why it was chosen:** the owner's preference, and a deliberate one. The
+practical consequences are recorded below rather than left to be discovered.
+
+**ty is pre-1.0** (`0.0.x`). Its diagnostics still move between releases, so it
+is pinned through `uv.lock`; a new version cannot break CI without an explicit,
+reviewable dependency bump. If it ever becomes an obstacle, swapping it for
+mypy is a `pyproject.toml` change, not a rewrite - nothing depends on
+ty-specific syntax.
 
 ## Where it sits
 
@@ -29,16 +43,37 @@ Practical rules that follow:
   widgets) on a subdomain. Use a separate domain if one is ever needed.
 - Treat every subdomain as production, because to the cookie it is.
 
-## Statelessness and deployment
+## Hosting
 
-Undecided, but the surrounding infrastructure is entirely serverless and
-free-tier: Cloudflare Pages for the static sites, GitHub Actions for monitoring.
-An API that needs a long-running VM breaks that pattern and its cost profile.
-Cloudflare Workers plus D1 or KV is the path of least resistance; anything else
-should be a deliberate, written decision rather than a default.
+**This is the open decision.**
+
+An earlier version of this file said Cloudflare Workers plus D1 was the path of
+least resistance, because everything else in this organization is free-tier
+serverless on Cloudflare. **Choosing FastAPI closes that path.** Cloudflare's
+Python Workers run under Pyodide; they will not carry FastAPI together with a
+real database driver. This is the deliberate, written decision that the earlier
+text asked for, and the cost is stated plainly: **this is the first component
+that will not be free.**
+
+What is already true:
+
+- `Dockerfile` produces a ~55MB non-root image. Any container host will take
+  it, so this decision is not locked in by the code.
+- Scale-to-zero matters more than throughput at this traffic. Google Cloud Run
+  and Fly.io both do it and both stay near-free at zero usage.
+- Whatever runs it sits behind Cloudflare's proxy on `api.pacestreak.com`, so
+  the edge, the WAF and TLS termination are unchanged from the rest of the
+  estate.
+- **Do not create the DNS record until something answers on it.** A proxied
+  record with nothing behind it returns `522`, which reads as a broken product
+  rather than an unlaunched one.
+
+Record the choice in [`PaceStreak/infra`](https://github.com/PaceStreak/infra)'s
+`DECISIONS.md` when it is made.
 
 ## What is deliberately not decided here
 
-Language, framework, database and ORM. Recording those before there is a single
-endpoint would be premature. What is recorded above is only the set of things
-that are *already true* because of choices made elsewhere.
+Database and ORM. Recording those before there is a single endpoint would be
+premature - but note that the hosting decision above and the database decision
+are coupled, and picking a managed Postgres before picking a host is how a
+service ends up paying for cross-region egress on every query.

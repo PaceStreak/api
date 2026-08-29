@@ -1,35 +1,149 @@
 [project]
-name = "api"
+name = "pacestreak-api"
 version = "0.1.0"
-description = "Add your description here"
+description = "Backend for PaceStreak, served from api.pacestreak.com."
 readme = "README.md"
-authors = [
-    { name = "AlzyWelzy", email = "welzyalzy@gmail.com" }
-]
 requires-python = ">=3.14"
-dependencies = [
-    "fastapi[all]>=0.141.1",
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "AlzyWelzy", email = "welzyalzy@gmail.com" }]
+keywords = ["fastapi", "fitness", "pacestreak"]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Framework :: FastAPI",
+    "Programming Language :: Python :: 3.14",
 ]
+
+# Pinned to explicit extras rather than `fastapi[all]`, which pulls jinja2,
+# orjson, ujson, python-multipart and more that nothing here imports. Every
+# dependency is one more thing to patch.
+dependencies = [
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.urls]
+Homepage = "https://www.pacestreak.com"
+Source = "https://github.com/PaceStreak/api"
+Changelog = "https://github.com/PaceStreak/api/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
+    "httpx2>=2.12.0",
+    "pre-commit>=4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.0",
     "ruff>=0.16.5",
     "ty>=0.0.75",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# uv
+# ---------------------------------------------------------------------------
+
+[tool.uv]
+# Fail rather than silently resolving something else when uv.lock has drifted
+# from pyproject.toml. CI runs `uv sync --locked`; this makes local behaviour
+# match instead of diverging quietly.
+required-version = ">=0.12"
+
+# ---------------------------------------------------------------------------
+# Ruff - linter and formatter
+# ---------------------------------------------------------------------------
+
 [tool.ruff]
 line-length = 100
 target-version = "py314"
-
+src = ["."]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # import sorting
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # shadowed builtins
+    "C4",     # comprehensions
+    "DTZ",    # naive datetimes - a streak tracker gets these wrong at midnight
+    "T20",    # no stray print()
+    "PT",     # pytest style
+    "RET",    # return simplification
+    "SIM",    # simplify
+    "TID",    # tidy imports
+    "PTH",    # prefer pathlib
+    "ERA",    # commented-out code
+    "PL",     # pylint subset
+    "RUF",    # ruff-specific
+    "S",      # bandit - security
+    "ASYNC",  # blocking calls inside async def
+]
+ignore = [
+    # FastAPI's dependency injection is expressed as function-call defaults.
+    "B008",
+]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.ruff.lint.per-file-ignores]
+# `assert` is how pytest reports, and hard-coded credentials in a test are test
+# data. Neither is a finding worth silencing inline on every occurrence.
+"tests/**/*.py" = ["S101", "S105", "S106", "PLR2004"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# ty - type checker
+# ---------------------------------------------------------------------------
 
 [tool.ty.environment]
 python-version = "3.14"
+root = ["."]
+
+[tool.ty.rules]
+# ty is pre-1.0 and its diagnostics still move between releases. It is pinned
+# through uv.lock so a new version cannot break CI without an explicit bump.
+possibly-unresolved-reference = "error"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

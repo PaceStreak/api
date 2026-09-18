@@ -12,15 +12,15 @@ private.
 
 ## Scope
 
-Once this service exists, it holds user training data and session cookies, which
+This service holds user account data, credentials, and session cookies, which
 makes it the highest-value target in the organization.
 
 | In scope | Out of scope |
 | --- | --- |
-| Authentication and session handling | Cloudflare and GitHub infrastructure |
+| Authentication and session handling, including 2FA/TOTP and recovery codes | Cloudflare and GitHub infrastructure |
 | Authorization — reading or writing another user's data | Findings with no demonstrated impact |
-| Injection, SSRF, deserialization | Rate limiting on unauthenticated endpoints, unless it enables something worse |
-| Anything that leaks the `Domain=pacestreak.com` cookie | Social engineering |
+| Injection, SSRF, deserialization | Rate limits configured too loosely, unless it enables something worse |
+| Anything that leaks the `Domain=pacestreak.com` cookie, or bypasses CSRF or rate limiting entirely | Social engineering |
 
 ## Known and deliberate
 

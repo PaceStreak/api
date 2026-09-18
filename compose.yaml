@@ -26,6 +26,32 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pacestreak}:${POSTGRES_PASSWORD:-pacestreak}@postgres:5432/${POSTGRES_DB:-pacestreak}
       REDIS_URL: redis://redis:6379/0
 
+      # Auth settings. Passed through from the host/.env so `docker compose up`
+      # and `make run` (no containers) read the same values - see .env.example
+      # for what each one does.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-True}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-0}
+      JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-./keys/private.pem}
+      JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-./keys/public.pem}
+      JWT_ISSUER: ${JWT_ISSUER:-api.pacestreak.com}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-pacestreak}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-False}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      REQUIRE_VERIFIED_EMAIL: ${REQUIRE_VERIFIED_EMAIL:-False}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-console}
+      EMAIL_FROM: ${EMAIL_FROM:-no-reply@pacestreak.com}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+
       # Deliberately valueless. A key with no value passes the host's variable
       # through only if it is actually set; writing
       # `WEB_CONCURRENCY: ${WEB_CONCURRENCY:-}` instead sets it to the EMPTY
@@ -42,6 +68,10 @@ services:
       # Inside a compose network the peer is another container; "*" would let
       # any caller forge a client IP, so never set it on an exposed service.
       FORWARDED_ALLOW_IPS:
+    volumes:
+      # Read-only: the container signs tokens with the private key, it never
+      # needs to write it. Not committed - see .gitignore and `make keys`.
+      - ./keys:/srv/keys:ro
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -55,9 +85,6 @@ services:
     healthcheck:
       # python, not curl: the slim base image has no curl, and installing one
       # to check a health endpoint is a package to patch forever.
-      #
-      # NOTE: the app currently registers this route as /heatlth, not /health.
-      # Fix the route or set API_HEALTH_PATH=/heatlth, or this check fails.
       test:
         - CMD
         - python
@@ -112,10 +139,16 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
-    # Append-only persistence. Without it a restart silently empties whatever
-    # is in here, which is fine for a cache and not fine for a rate limiter or
-    # a session store.
-    command: ["redis-server", "--appendonly", "yes"]
+    # --appendonly: without it a restart silently empties whatever is in here,
+    # which is fine for a cache and not fine for a rate limiter or a session
+    # denylist.
+    #
+    # --maxmemory-policy noeviction: under an LRU policy Redis cannot tell a
+    # cached user (auth:user:*) from a logout revocation record
+    # (auth:revoked_sid:*), and evicting the latter to make room for the
+    # former would quietly un-revoke a logged-out session. Refusing the write
+    # instead is the correct failure - see app/auth/cache.py.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     volumes:
       - redisdata:/data
     healthcheck:

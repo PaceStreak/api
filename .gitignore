@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# RS256 signing keypair (`make keys`). Never committed - a leaked private key
+# forges valid access tokens for any user.
+keys/*.pem

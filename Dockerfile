@@ -40,6 +40,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY README.md ./
 COPY app/ ./app/
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -59,6 +61,8 @@ WORKDIR /srv
 
 COPY --from=builder --chown=app:app /srv/.venv /srv/.venv
 COPY --from=builder --chown=app:app /srv/app /srv/app
+COPY --from=builder --chown=app:app /srv/alembic.ini /srv/alembic.ini
+COPY --from=builder --chown=app:app /srv/alembic /srv/alembic
 COPY --chown=app:app docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN chmod +x /usr/local/bin/entrypoint.sh

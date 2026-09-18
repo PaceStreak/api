@@ -50,13 +50,12 @@ fi
 [ -z "${WEB_CONCURRENCY:-}" ] && unset WEB_CONCURRENCY || true
 [ -z "${FORWARDED_ALLOW_IPS:-}" ] && unset FORWARDED_ALLOW_IPS || true
 
-# Somewhere to hang schema migrations once there is a database. Kept as an
-# opt-in variable so the entrypoint does not silently run DDL on every boot -
-# with more than one replica, every replica would run it at once.
+# Opt-in so the entrypoint does not silently run DDL on every boot - with more
+# than one replica, every replica would run it at once. Alembic is the only
+# thing allowed to change the schema; see README.md#migrations.
 if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
-    echo "entrypoint: RUN_MIGRATIONS=1 but no migration command is configured yet" >&2
-    echo "entrypoint: add it here before turning this on" >&2
-    exit 1
+    echo "entrypoint: running migrations"
+    alembic upgrade head
 fi
 
 case "$APP_MODE" in

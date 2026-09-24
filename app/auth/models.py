@@ -11,6 +11,9 @@ from app.database import Base
 
 class UserRole(StrEnum):
     ADMIN = "admin"
+    # Reviews reports and moderates content. Cannot change roles or delete
+    # accounts - those stay with admins.
+    MODERATOR = "moderator"
     USER = "user"
 
 

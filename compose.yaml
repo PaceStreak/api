@@ -18,7 +18,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
+    # Anchored so the worker below runs with exactly the same configuration -
+    # two copies of this block would drift the first time someone edits one.
+    environment: &api-env
       APP_MODE: ${APP_MODE:-prod}
       APP_MODULE: ${APP_MODULE:-app.main:app}
       APP_PORT: ${APP_PORT:-8000}
@@ -51,6 +53,9 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+      VAPID_PRIVATE_KEY_PATH: ${VAPID_PRIVATE_KEY_PATH:-./keys/vapid_private.pem}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:hello@pacestreak.com}
+      WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-120}
 
       # Deliberately valueless. A key with no value passes the host's variable
       # through only if it is actually set; writing
@@ -102,6 +107,25 @@ services:
       # Gives the process time to boot before a failure counts against it,
       # instead of restarting a container that was merely still starting.
       start_period: 20s
+    networks: [backend]
+
+  # Streak refreshes, reminders, digests, challenge results and account purges
+  # (app/worker.py). Same image, different command - the entrypoint execs any
+  # arguments it is given instead of starting the web server.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment: *api-env
+    volumes:
+      - ./keys:/srv/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks: [backend]
 
   postgres:

@@ -6,7 +6,25 @@ thing at API_V1_PREFIX - it does not know or care what lives underneath.
 
 from fastapi import APIRouter
 
+from app.account.router import router as account_router
+from app.admin.router import router as admin_router
 from app.auth.router import router as auth_router
+from app.game.leaderboards import router as leaderboards_router
+from app.game.router import router as stats_router
+from app.groups.router import router as groups_router
+from app.notifications.router import router as notifications_router
+from app.profile.router import router as profile_router
+from app.social.router import router as social_router
+from app.training.router import router as training_router
 
 router = APIRouter()
 router.include_router(auth_router)
+router.include_router(profile_router)
+router.include_router(stats_router)
+router.include_router(account_router)
+router.include_router(training_router)
+router.include_router(social_router)
+router.include_router(groups_router)
+router.include_router(leaderboards_router)
+router.include_router(notifications_router)
+router.include_router(admin_router)

@@ -2,10 +2,12 @@ import secrets
 from datetime import timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.account.service import note_sign_in
+from app.account.service import record as record_security_event
 from app.auth.cache import revoke_session
 from app.auth.dependencies import (
     CurrentAuth,
@@ -67,6 +69,7 @@ from app.email import (
     send_password_reset_email,
     send_verification_email,
 )
+from app.notifications.service import deliver
 from app.ratelimit import limiter
 from app.versioning import API_V1_PREFIX
 
@@ -196,6 +199,7 @@ async def login(
     request: Request,
     body: LoginRequest,
     response: Response,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     # Lowercased to match how signup stores it, or mixed-case addresses could
@@ -223,11 +227,13 @@ async def login(
     access_token, refresh_token, expires_in = await login_user(
         db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
     )
+    notes = await note_sign_in(db, user.id, request)
     await db.commit()
+    background.add_task(deliver, notes)
 
     csrf_token = secrets.token_urlsafe(32)
     set_auth_cookies(response, refresh_token, csrf_token)
-    return TokenResponse(access_token=access_token, expires_in=expires_in)
+    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -249,7 +255,7 @@ async def refresh(
 
     csrf_token = secrets.token_urlsafe(32)
     set_auth_cookies(response, new_refresh_token, csrf_token)
-    return TokenResponse(access_token=access_token, expires_in=expires_in)
+    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -286,11 +292,13 @@ async def logout(
 
 @router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_all(
+    request: Request,
     response: Response,
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
 ):
     await revoke_all_sessions(db, user)
+    await record_security_event(db, user.id, "logout_all", request)
     await db.commit()
     # Must follow the commit: a concurrent request could otherwise repopulate
     # the cache with the pre-bump token_version.
@@ -321,6 +329,7 @@ async def verify_email(request: TokenOnlyRequest, db: AsyncSession = Depends(get
     if not user.is_verified:
         user.is_verified = True
         user.verified_at = utcnow()
+        await record_security_event(db, user.id, "email_verified")
 
     await db.commit()
     # is_verified is part of the cached record, so drop the stale copy.
@@ -403,6 +412,7 @@ async def reset_password(
         user.is_verified = True
         user.verified_at = utcnow()
 
+    await record_security_event(db, user.id, "password_reset")
     await revoke_all_sessions(db, user)
     await db.commit()
     await finish_revoke_all(user.id)
@@ -452,13 +462,14 @@ async def change_password(
     access_token, refresh_token, expires_in = await login_user(
         db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
     )
+    await record_security_event(db, user.id, "password_changed", request)
     await db.commit()
     await finish_revoke_all(user.id)
 
     csrf_token = secrets.token_urlsafe(32)
     set_auth_cookies(response, refresh_token, csrf_token)
     await send_password_changed_email(user.email)
-    return TokenResponse(access_token=access_token, expires_in=expires_in)
+    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
 
 
 # ===========================================================================
@@ -504,6 +515,11 @@ async def delete_session(
     sessions.
     """
     revoked = await revoke_session_family(db, auth.user, session_id)
+    if revoked:
+        await record_security_event(
+            db, auth.user.id, "session_revoked", meta={"session": str(session_id)}
+        )
+        await db.commit()
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -592,6 +608,7 @@ async def two_factor_enable(
     user.totp_enabled = True
     user.totp_confirmed_at = utcnow()
     codes = await issue_recovery_codes(db, user)
+    await record_security_event(db, user.id, "totp_enabled")
     await db.commit()
     await finish_revoke_all(user.id)
 
@@ -626,6 +643,7 @@ async def two_factor_disable(
     user.totp_confirmed_at = None
     user.totp_last_used_step = None
     await db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user.id))
+    await record_security_event(db, user.id, "totp_disabled")
     await db.commit()
     await finish_revoke_all(user.id)
 
@@ -648,6 +666,7 @@ async def regenerate_recovery_codes(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid code")
 
     codes = await issue_recovery_codes(db, user)
+    await record_security_event(db, user.id, "recovery_codes_regenerated")
     await db.commit()
     return RecoveryCodesResponse(recovery_codes=codes)
 
@@ -658,6 +677,7 @@ async def two_factor_verify(
     request: Request,
     body: MfaVerifyRequest,
     response: Response,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Second half of login: exchange the MFA challenge plus a code for
@@ -692,8 +712,10 @@ async def two_factor_verify(
     access_token, refresh_token, expires_in = await login_user(
         db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
     )
+    notes = await note_sign_in(db, user.id, request)
     await db.commit()
+    background.add_task(deliver, notes)
 
     csrf_token = secrets.token_urlsafe(32)
     set_auth_cookies(response, refresh_token, csrf_token)
-    return TokenResponse(access_token=access_token, expires_in=expires_in)
+    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)

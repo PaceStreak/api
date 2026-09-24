@@ -1,0 +1,96 @@
+from datetime import date, datetime
+from uuid import UUID
+
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
+
+
+class UserStats(Base):
+    """A projection of everything the engine derives from history.
+
+    Nothing here is a source of truth - it is rebuilt from workouts by
+    app/game/service.py after every write, and nightly by the worker so
+    streaks that lapsed without a write still read correctly. It exists so a
+    leaderboard is one indexed query rather than a replay of every user's log.
+    """
+
+    __tablename__ = "user_stats"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True, nullable=False
+    )
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # The user's local date when computed. The worker recomputes rows whose
+    # date has rolled over, which is how a streak "breaks" with no new write.
+    computed_for: Mapped[date] = mapped_column(Date, nullable=False)
+
+    total_xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    season_id: Mapped[str] = mapped_column(String(8), nullable=False)
+    season_xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    current_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    longest_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consistency: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    this_week_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    this_week_target: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+
+    sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    season_prs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_prs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_active: Mapped[date | None] = mapped_column(Date)
+
+
+class UserAchievement(Base):
+    __tablename__ = "user_achievements"
+    __table_args__ = (
+        UniqueConstraint("user_id", "achievement_id", "tier", name="uq_user_achievement_tier"),
+        Index("ix_user_achievements_achievement", "achievement_id"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    achievement_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    # NULL for single badges. Postgres treats NULLs as distinct in a unique
+    # constraint, so single badges are de-duplicated in code (see service.py).
+    tier: Mapped[str | None] = mapped_column(String(8))
+    unlocked_on: Mapped[date] = mapped_column(Date, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class PersonalRecord(Base):
+    """Every time a record moved. A projection like UserStats: replaced
+    wholesale per user on recompute, so deleting or editing an old session
+    corrects every record after it."""
+
+    __tablename__ = "personal_records"
+    __table_args__ = (Index("ix_personal_records_user_key", "user_id", "key"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    previous: Mapped[float | None] = mapped_column(Float)
+    gain_pct: Mapped[float | None] = mapped_column(Float)
+    achieved_on: Mapped[date] = mapped_column(Date, nullable=False)
+    workout_id: Mapped[UUID | None] = mapped_column()
+    flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rewarded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # True for the current best of its key - the row the records page shows.
+    is_current: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

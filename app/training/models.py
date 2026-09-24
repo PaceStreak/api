@@ -1,0 +1,242 @@
+from datetime import date, datetime
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Sequence,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+# One sequence for every row a client syncs. `updated_at` would be the obvious
+# cursor, but two writes can share a timestamp and a clock can step backwards;
+# a sequence is strictly increasing, so "give me everything after 1042" can
+# never skip a row.
+sync_seq = Sequence("sync_seq", metadata=Base.metadata)
+
+
+class Workout(Base):
+    """One training session.
+
+    The id is chosen by the client, not the server. That is what makes offline
+    logging safe: the app creates the row locally, and however many times the
+    save is retried - a flaky gym basement, a tab closed mid-request - it is
+    the same id, so it upserts instead of duplicating.
+    """
+
+    __tablename__ = "workouts"
+    __table_args__ = (
+        Index("ix_workouts_user_date", "user_id", "local_date"),
+        Index("ix_workouts_user_seq", "user_id", "seq"),
+        CheckConstraint("effort IS NULL OR effort BETWEEN 1 AND 10", name="ck_workouts_effort"),
+        CheckConstraint("feel IS NULL OR feel BETWEEN 1 AND 5", name="ck_workouts_feel"),
+        CheckConstraint("duration_sec IS NULL OR duration_sec >= 0", name="ck_workouts_duration"),
+        CheckConstraint("distance_m IS NULL OR distance_m >= 0", name="ck_workouts_distance"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    discipline: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(80))
+    # Private. Notes are never shown to anyone but their author.
+    notes: Mapped[str | None] = mapped_column(String(1000))
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # The user's calendar date for started_at, in their timezone at the time of
+    # writing. Stored, not derived on read, so moving house to another timezone
+    # does not reshuffle a year of history into different days.
+    local_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    duration_sec: Mapped[int | None] = mapped_column(Integer)
+    distance_m: Mapped[float | None] = mapped_column(Float)
+    elevation_m: Mapped[float | None] = mapped_column(Float)
+    # Session RPE, 1-10. How hard it was, not how much was lifted.
+    effort: Mapped[int | None] = mapped_column(SmallInteger)
+    # How it felt, 1-5. Tracked because a streak built on miserable sessions
+    # is one that ends, and the trend is worth seeing.
+    feel: Mapped[int | None] = mapped_column(SmallInteger)
+
+    routine_id: Mapped[UUID | None] = mapped_column()
+    # "app" or "import". Imported history counts for the personal streak but
+    # never for challenges, where backfilling would be cheating.
+    source: Mapped[str] = mapped_column(String(10), default="app", nullable=False)
+
+    # Last-write-wins, judged by the client's own edit time: an old queued
+    # offline edit arriving late must not overwrite a newer one made since.
+    client_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Soft delete, so a deletion can sync to the user's other devices. Rows
+    # with deleted_at set are excluded everywhere except the sync feed.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seq: Mapped[int] = mapped_column(
+        BigInteger, sync_seq, server_default=sync_seq.next_value(), nullable=False
+    )
+
+    sets: Mapped[list[WorkoutSet]] = relationship(
+        "WorkoutSet",
+        back_populates="workout",
+        cascade="all, delete-orphan",
+        order_by="(WorkoutSet.position, WorkoutSet.set_index)",
+        lazy="selectin",
+    )
+
+
+class WorkoutSet(Base):
+    __tablename__ = "workout_sets"
+    __table_args__ = (
+        Index("ix_workout_sets_user_exercise", "user_id", "exercise_id"),
+        CheckConstraint("reps IS NULL OR reps >= 0", name="ck_sets_reps"),
+        CheckConstraint("weight_kg IS NULL OR weight_kg >= 0", name="ck_sets_weight"),
+        CheckConstraint("rpe IS NULL OR rpe BETWEEN 1 AND 10", name="ck_sets_rpe"),
+        CheckConstraint("kind IN ('work', 'warmup', 'drop', 'failure')", name="ck_sets_kind"),
+    )
+
+    workout_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workouts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    workout: Mapped[Workout] = relationship("Workout", back_populates="sets")
+    # Denormalised from the workout so exercise history is one indexed lookup.
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    exercise_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    set_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), default="work", nullable=False)
+    # Always kilograms. The predecessor stored "whatever unit the user had
+    # selected", so switching kg to lb silently corrupted every total and PR.
+    # Conversion happens at the edge, in the client, and nowhere else.
+    weight_kg: Mapped[float | None] = mapped_column(Float)
+    reps: Mapped[int | None] = mapped_column(Integer)
+    rpe: Mapped[float | None] = mapped_column(Float)
+    duration_sec: Mapped[int | None] = mapped_column(Integer)
+    distance_m: Mapped[float | None] = mapped_column(Float)
+    completed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CustomExercise(Base):
+    __tablename__ = "custom_exercises"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    pattern: Mapped[str] = mapped_column(String(20), nullable=False)
+    equipment: Mapped[str] = mapped_column(String(20), nullable=False)
+    primary: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    secondary: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    load_type: Mapped[str] = mapped_column(String(12), default="weight", nullable=False)
+    rest_sec: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
+    unilateral: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cue: Mapped[str | None] = mapped_column(String(200))
+    # Archived rather than deleted once it has history, so old sets still name
+    # the movement they were.
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    @property
+    def exercise_id(self) -> str:
+        from app.training.library import CUSTOM_PREFIX
+
+        return f"{CUSTOM_PREFIX}{self.id}"
+
+
+class Routine(Base):
+    """A reusable plan: an ordered list of exercises with targets.
+
+    Items are JSON rather than a child table - a routine is always read and
+    written whole, and nothing queries into it.
+    """
+
+    __tablename__ = "routines"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    discipline: Mapped[str] = mapped_column(String(20), default="strength", nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(500))
+    items: Mapped[list[dict]] = mapped_column(JSONB, default=list, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BodyMetric(Base):
+    """Private only. Nothing here ever reaches a leaderboard, XP, a badge or
+    another person - a body-weight number anywhere competitive is an incentive
+    to cut, and that is a harm this product will not build in."""
+
+    __tablename__ = "body_metrics"
+    __table_args__ = (UniqueConstraint("user_id", "measured_on", name="uq_body_metric_day"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    measured_on: Mapped[date] = mapped_column(Date, nullable=False)
+    weight_kg: Mapped[float | None] = mapped_column(Float)
+    body_fat_pct: Mapped[float | None] = mapped_column(Float)
+    waist_cm: Mapped[float | None] = mapped_column(Float)
+    resting_hr: Mapped[int | None] = mapped_column(SmallInteger)
+    sleep_hours: Mapped[float | None] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(String(200))
+
+
+class StreakChain(Base):
+    """A streak: which disciplines count towards it, and the weekly target.
+
+    Everyone starts with one chain covering everything. Adding more is how
+    "lifting and running on separate chains" works.
+
+    The target is a history, not a number. Raising it from three to five must
+    not retroactively break a year of weeks that were kept under three, so
+    each change records the week it took effect from.
+    """
+
+    __tablename__ = "streak_chains"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Empty means every discipline counts.
+    disciplines: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    # [{"from": "2026-09-21", "target": 4}, ...], ascending by "from".
+    target_history: Mapped[list[dict]] = mapped_column(JSONB, default=list, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    @property
+    def target(self) -> int:
+        return int(self.target_history[-1]["target"]) if self.target_history else 3
+
+
+class StreakRepair(Base):
+    """A missed week the user chose to repair. One per person per calendar
+    month - enough to forgive a bad week, too scarce to replace training."""
+
+    __tablename__ = "streak_repairs"
+    __table_args__ = (
+        UniqueConstraint("chain_id", "week_start", name="uq_repair_chain_week"),
+        UniqueConstraint("user_id", "month", name="uq_repair_user_month"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    chain_id: Mapped[UUID] = mapped_column(
+        ForeignKey("streak_chains.id", ondelete="CASCADE"), nullable=False
+    )
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    month: Mapped[str] = mapped_column(String(7), nullable=False)

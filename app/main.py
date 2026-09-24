@@ -1,3 +1,4 @@
+import logging
 import sys
 from contextlib import asynccontextmanager
 
@@ -16,6 +17,17 @@ from app.v1.router import router as v1_router
 from app.versioning import API_V1_PREFIX, API_VERSION
 
 settings = get_settings()
+
+# The app's own loggers (app.email, app.worker, ...) have no handler unless
+# something configures one, and uvicorn only configures its own. Without
+# this, EMAIL_BACKEND=console "sends" verification links into the void and
+# local sign-up cannot be completed.
+_app_logger = logging.getLogger("app")
+if not _app_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s %(message)s"))
+    _app_logger.addHandler(_handler)
+    _app_logger.setLevel(logging.INFO)
 
 
 def _check_production_config() -> None:

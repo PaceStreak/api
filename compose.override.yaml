@@ -30,6 +30,10 @@ services:
         - action: rebuild
           path: pyproject.toml
 
+  worker:
+    volumes:
+      - ./app:/srv/app:ro
+
   postgres:
     # Published so psql, a GUI client or a migration run from the host can
     # reach it. Bound to 127.0.0.1 explicitly: "5432:5432" would listen on

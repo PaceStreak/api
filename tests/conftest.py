@@ -114,3 +114,27 @@ def csrf_headers(client) -> dict[str, str]:
     token = client.cookies.get("csrf_token")
     assert token, "no csrf_token cookie on the client - log in first"
     return {"X-CSRF-Token": token}
+
+
+def onboard(client, token: str, handle: str = "runner", **extra) -> dict:
+    """Finish onboarding. Defaults to an adult with a public profile."""
+    body = {
+        "handle": handle,
+        "display_name": handle.title(),
+        "birth_year": 1990,
+        "accept_terms": True,
+        "timezone": "UTC",
+        "weekly_target": 3,
+        "visibility": "public",
+    } | extra
+    response = client.post("/v1/me/onboarding", json=body, headers=bearer(token))
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def person(client, email: str, handle: str, **extra) -> str:
+    """Register, verify, log in and onboard. Returns an access token."""
+    register(client, email)
+    token = login(client, email)
+    onboard(client, token, handle, **extra)
+    return token

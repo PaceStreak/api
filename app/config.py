@@ -75,6 +75,21 @@ class Settings(BaseSettings):
     # outside development.
     totp_encryption_key: str | None = Field(default=None)
 
+    # --- web push -------------------------------------------------------------
+    # VAPID identifies this server to the browsers' push services. `make vapid`
+    # writes the key; with no key, push is simply off and the client never
+    # offers it. The subject must be a mailto: or https: URL the push services
+    # can contact about abuse.
+    vapid_private_key_path: str = Field(default="./keys/vapid_private.pem")
+    vapid_subject: str = Field(default="mailto:hello@pacestreak.com")
+
+    # --- worker ---------------------------------------------------------------
+    # Seconds between scheduler ticks in app/worker.py. Reminders are aimed at
+    # a local hour, so anything under a few minutes is precision nobody needs.
+    worker_interval_seconds: int = Field(default=120)
+    # Grace period between "delete my account" and the purge.
+    deletion_grace_days: int = Field(default=30)
+
     # --- rate limiting --------------------------------------------------------
     # Backed by Redis (see app/ratelimit.py) so limits hold across replicas.
     rate_limit_login: str = Field(default="10/minute")

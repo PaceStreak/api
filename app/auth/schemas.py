@@ -27,6 +27,12 @@ class TokenResponse(BaseResponse):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    # Also set as the csrf_token cookie. Returned in the body too because the
+    # cookie is scoped to this API's /v1/auth path: JavaScript running on
+    # app.pacestreak.com can never read it, so without this a browser client
+    # has no way to learn the value it must echo back. Returning it is safe -
+    # CORS stops any other origin reading this response.
+    csrf_token: str | None = None
 
 
 class UserResponse(BaseResponse):

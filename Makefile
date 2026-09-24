@@ -1,4 +1,4 @@
-.PHONY: keys dev up down logs ps clean install migrate migrate-local migration current history downgrade run test
+.PHONY: keys vapid dev up down logs ps clean install migrate migrate-local migration current history downgrade run worker test
 
 # Generates the RS256 keypair access tokens are signed with. Not committed -
 # see .gitignore - so every environment (including CI, if it ever runs the
@@ -8,6 +8,13 @@ keys:
 	openssl genrsa -out keys/private.pem 2048
 	openssl rsa -in keys/private.pem -pubout -out keys/public.pem
 	@echo "keys/private.pem and keys/public.pem written."
+
+# The VAPID key identifies this server to browsers' push services. Without it
+# push is simply off; in-app and email notifications still work.
+vapid:
+	mkdir -p keys
+	openssl ecparam -name prime256v1 -genkey -noout -out keys/vapid_private.pem
+	@echo "keys/vapid_private.pem written."
 
 dev:
 	docker compose up --build
@@ -52,6 +59,11 @@ downgrade:
 
 run:
 	uv run fastapi dev app/main.py
+
+# Reminders, digests, streak refreshes. `docker compose up` runs it as the
+# worker service; this is the no-containers equivalent.
+worker:
+	uv run python -m app.worker
 
 test:
 	docker compose exec api pytest

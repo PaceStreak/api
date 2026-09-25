@@ -84,9 +84,7 @@ async def login_user(
     refresh_token, refresh = await create_refresh_session(
         db, user, user_agent=user_agent, ip_address=ip_address
     )
-    access_token, expires_in = create_access_token(
-        user.id, user.token_version, refresh.family_id
-    )
+    access_token, expires_in = create_access_token(user.id, user.token_version, refresh.family_id)
     return access_token, refresh_token, expires_in
 
 
@@ -150,9 +148,7 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> tuple[str, s
     )
     old_token.replaced_by = new_token.id
 
-    access_token, expires_in = create_access_token(
-        user.id, user.token_version, old_token.family_id
-    )
+    access_token, expires_in = create_access_token(user.id, user.token_version, old_token.family_id)
     await db.commit()
 
     return access_token, new_raw_token, expires_in

@@ -74,7 +74,7 @@ async def get_cached_user(user_id: UUID | str) -> User | None:
 
     try:
         return _deserialize(raw)
-    except (ValueError, KeyError):
+    except ValueError, KeyError:
         logger.warning("discarding unreadable auth cache entry for %s", user_id)
         await invalidate_user(user_id)
         return None
@@ -115,9 +115,7 @@ async def revoke_session(session_id: UUID | str) -> bool:
     rely on the database fallback in is_session_revoked.
     """
     try:
-        await get_client().set(
-            _session_key(session_id), "1", ex=settings.access_token_minutes * 60
-        )
+        await get_client().set(_session_key(session_id), "1", ex=settings.access_token_minutes * 60)
         return True
     except RedisError:
         logger.warning("session revocation write failed for %s", session_id, exc_info=True)

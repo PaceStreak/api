@@ -157,16 +157,12 @@ async def require_csrf(request: Request) -> None:
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit(settings.rate_limit_signup)
-async def signup(
-    request: Request, body: SignupRequest, db: AsyncSession = Depends(get_db)
-) -> User:
+async def signup(request: Request, body: SignupRequest, db: AsyncSession = Depends(get_db)) -> User:
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
 
     if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     user = User(email=email, hashed_password=hash_password(body.password))
     db.add(user)
@@ -249,9 +245,7 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token"
         )
 
-    access_token, new_refresh_token, expires_in = await rotate_refresh_token(
-        db, raw_refresh_token
-    )
+    access_token, new_refresh_token, expires_in = await rotate_refresh_token(db, raw_refresh_token)
 
     csrf_token = secrets.token_urlsafe(32)
     set_auth_cookies(response, new_refresh_token, csrf_token)
@@ -370,9 +364,7 @@ async def resend_verification(
 
 @router.post("/forgot-password", response_model=MessageResponse)
 @limiter.limit(settings.rate_limit_password_email)
-async def forgot_password(
-    request: Request, body: EmailRequest, db: AsyncSession = Depends(get_db)
-):
+async def forgot_password(request: Request, body: EmailRequest, db: AsyncSession = Depends(get_db)):
     """Always reports success, for the same enumeration reason as above."""
     generic = MessageResponse(detail="If that address has an account, a reset link has been sent.")
 

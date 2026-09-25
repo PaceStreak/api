@@ -74,19 +74,38 @@ async def is_new_device(db: AsyncSession, user_id: UUID, request: Request) -> bo
 
 
 def describe_agent(agent: str | None) -> str:
-    """"Firefox on Linux" from a user agent string. Good enough to recognise
+    """ "Firefox on Linux" from a user agent string. Good enough to recognise
     your own devices; not a fingerprint."""
     if not agent:
         return "an unknown device"
     browser = next(
-        (name for key, name in (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"),
-                                ("Chrome/", "Chrome"), ("Safari/", "Safari")) if key in agent),
+        (
+            name
+            for key, name in (
+                ("Edg/", "Edge"),
+                ("OPR/", "Opera"),
+                ("Firefox/", "Firefox"),
+                ("Chrome/", "Chrome"),
+                ("Safari/", "Safari"),
+            )
+            if key in agent
+        ),
         "a browser",
     )
     system = next(
-        (name for key, name in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
-                                ("Mac OS X", "macOS"), ("Windows", "Windows"),
-                                ("CrOS", "ChromeOS"), ("Linux", "Linux")) if key in agent),
+        (
+            name
+            for key, name in (
+                ("iPhone", "iPhone"),
+                ("iPad", "iPad"),
+                ("Android", "Android"),
+                ("Mac OS X", "macOS"),
+                ("Windows", "Windows"),
+                ("CrOS", "ChromeOS"),
+                ("Linux", "Linux"),
+            )
+            if key in agent
+        ),
         "an unknown system",
     )
     return f"{browser} on {system}"

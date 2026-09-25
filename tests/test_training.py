@@ -17,15 +17,31 @@ def workout(**extra) -> dict:
         "client_updated_at": now().isoformat(),
         "duration_sec": 3600,
         "sets": [
-            {"exercise_id": "back-squat", "position": 0, "set_index": 0, "weight_kg": 100, "reps": 5, "rpe": 8},
-            {"exercise_id": "back-squat", "position": 0, "set_index": 1, "weight_kg": 100, "reps": 5},
+            {
+                "exercise_id": "back-squat",
+                "position": 0,
+                "set_index": 0,
+                "weight_kg": 100,
+                "reps": 5,
+                "rpe": 8,
+            },
+            {
+                "exercise_id": "back-squat",
+                "position": 0,
+                "set_index": 1,
+                "weight_kg": 100,
+                "reps": 5,
+            },
         ],
     } | extra
 
 
 def test_login_returns_csrf_token_in_body_and_refresh_accepts_it(client):
     register(client, "csrf@example.com")
-    response = client.post("/v1/auth/login", json={"email": "csrf@example.com", "password": "correct-horse-battery-staple"})
+    response = client.post(
+        "/v1/auth/login",
+        json={"email": "csrf@example.com", "password": "correct-horse-battery-staple"},
+    )
     body = response.json()
     assert body["csrf_token"] == client.cookies.get("csrf_token")
     refreshed = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": body["csrf_token"]})
@@ -58,7 +74,12 @@ def test_teen_is_forced_private(client):
     token = login(client, "teen@example.com")
     response = client.post(
         "/v1/me/onboarding",
-        json={"handle": "teen", "birth_year": now().year - 14, "accept_terms": True, "visibility": "public"},
+        json={
+            "handle": "teen",
+            "birth_year": now().year - 14,
+            "accept_terms": True,
+            "visibility": "public",
+        },
         headers=bearer(token),
     )
     assert response.json()["profile"]["visibility"] == "private"
@@ -122,20 +143,29 @@ def test_rejects_unknown_exercise_and_future_sessions(client):
     bad = workout(sets=[{"exercise_id": "made-up", "position": 0, "set_index": 0, "reps": 5}])
     assert client.put(f"/v1/workouts/{uuid4()}", json=bad, headers=bearer(token)).status_code == 422
     future = workout(started_at=(now() + timedelta(days=1)).isoformat())
-    assert client.put(f"/v1/workouts/{uuid4()}", json=future, headers=bearer(token)).status_code == 422
+    assert (
+        client.put(f"/v1/workouts/{uuid4()}", json=future, headers=bearer(token)).status_code == 422
+    )
 
 
 def test_changes_feed_includes_tombstones(client):
     token = person(client, "sync@example.com", "syncer")
     a, b = str(uuid4()), str(uuid4())
     client.put(f"/v1/workouts/{a}", json=workout(), headers=bearer(token))
-    client.put(f"/v1/workouts/{b}", json=workout(discipline="run", sets=[], distance_m=5000), headers=bearer(token))
+    client.put(
+        f"/v1/workouts/{b}",
+        json=workout(discipline="run", sets=[], distance_m=5000),
+        headers=bearer(token),
+    )
     first = client.get("/v1/workouts/changes?since=0", headers=bearer(token)).json()
     assert {w["id"] for w in first["workouts"]} == {a, b}
     cursor = first["cursor"]
 
-    client.delete(f"/v1/workouts/{a}", params={"client_updated_at": (now() + timedelta(seconds=1)).isoformat()},
-                  headers=bearer(token))
+    client.delete(
+        f"/v1/workouts/{a}",
+        params={"client_updated_at": (now() + timedelta(seconds=1)).isoformat()},
+        headers=bearer(token),
+    )
     delta = client.get(f"/v1/workouts/changes?since={cursor}", headers=bearer(token)).json()
     assert [w["id"] for w in delta["workouts"]] == [a]
     assert delta["workouts"][0]["deleted_at"] is not None
@@ -146,8 +176,12 @@ def test_batch_applies_what_it_can(client):
     ok_id, bad_id = str(uuid4()), str(uuid4())
     ops = [
         {"op": "put", "id": ok_id, "workout": workout(), "client_updated_at": now().isoformat()},
-        {"op": "put", "id": bad_id, "workout": workout(started_at=(now() + timedelta(days=3)).isoformat()),
-         "client_updated_at": now().isoformat()},
+        {
+            "op": "put",
+            "id": bad_id,
+            "workout": workout(started_at=(now() + timedelta(days=3)).isoformat()),
+            "client_updated_at": now().isoformat(),
+        },
     ]
     result = client.post("/v1/workouts/batch", json={"ops": ops}, headers=bearer(token)).json()
     assert [r["ok"] for r in result["results"]] == [True, False]
@@ -159,9 +193,19 @@ def test_stats_streak_and_records(client):
     token = person(client, "stats@example.com", "statsy")
     for days_ago, weight in ((9, 100), (2, 104)):
         started = now() - timedelta(days=days_ago)
-        body = workout(started_at=started.isoformat(), client_updated_at=now().isoformat(),
-                       sets=[{"exercise_id": "bench-press", "position": 0, "set_index": 0,
-                              "weight_kg": weight, "reps": 5}])
+        body = workout(
+            started_at=started.isoformat(),
+            client_updated_at=now().isoformat(),
+            sets=[
+                {
+                    "exercise_id": "bench-press",
+                    "position": 0,
+                    "set_index": 0,
+                    "weight_kg": weight,
+                    "reps": 5,
+                }
+            ],
+        )
         client.put(f"/v1/workouts/{uuid4()}", json=body, headers=bearer(token))
     stats = client.get("/v1/me/stats", headers=bearer(token)).json()
     assert stats["totals"]["sessions"] == 2
@@ -181,8 +225,11 @@ def test_chains_target_change_and_repair_rules(client):
     chains = client.get("/v1/chains", headers=bearer(token)).json()
     main = chains["chains"][0]
     assert main["name"] == "Everything"
-    created = client.post("/v1/chains", json={"name": "Running", "disciplines": ["run"], "target": 2},
-                          headers=bearer(token))
+    created = client.post(
+        "/v1/chains",
+        json={"name": "Running", "disciplines": ["run"], "target": 2},
+        headers=bearer(token),
+    )
     assert created.status_code == 201
     patched = client.patch(f"/v1/chains/{main['id']}", json={"target": 4}, headers=bearer(token))
     assert patched.status_code == 200
@@ -190,24 +237,51 @@ def test_chains_target_change_and_repair_rules(client):
     assert [c["name"] for c in after] == ["Everything", "Running"]
     assert after[0]["target"] == 4
     # Nothing to repair: there is no missed week.
-    bad = client.post(f"/v1/chains/{main['id']}/repair", json={"week_start": "2026-01-05"}, headers=bearer(token))
+    bad = client.post(
+        f"/v1/chains/{main['id']}/repair", json={"week_start": "2026-01-05"}, headers=bearer(token)
+    )
     assert bad.status_code == 409
 
 
 def test_custom_exercise_routine_and_body_metrics(client):
     token = person(client, "custom@example.com", "customer")
-    custom = client.post("/v1/exercises/custom", json={"name": "Sled push", "pattern": "carry",
-                         "equipment": "machine", "primary": ["quads"]}, headers=bearer(token)).json()
+    custom = client.post(
+        "/v1/exercises/custom",
+        json={
+            "name": "Sled push",
+            "pattern": "carry",
+            "equipment": "machine",
+            "primary": ["quads"],
+        },
+        headers=bearer(token),
+    ).json()
     assert custom["id"].startswith("custom-")
-    body = workout(sets=[{"exercise_id": custom["id"], "position": 0, "set_index": 0, "weight_kg": 80, "reps": 10}])
-    assert client.put(f"/v1/workouts/{uuid4()}", json=body, headers=bearer(token)).status_code == 200
+    body = workout(
+        sets=[
+            {
+                "exercise_id": custom["id"],
+                "position": 0,
+                "set_index": 0,
+                "weight_kg": 80,
+                "reps": 10,
+            }
+        ]
+    )
+    assert (
+        client.put(f"/v1/workouts/{uuid4()}", json=body, headers=bearer(token)).status_code == 200
+    )
 
     routine = client.post("/v1/routines/from-template/tpl-upper", headers=bearer(token))
     assert routine.status_code == 201
     assert len(client.get("/v1/routines", headers=bearer(token)).json()) == 1
 
     day = (now() - timedelta(days=1)).date().isoformat()
-    assert client.put(f"/v1/body-metrics/{day}", json={"weight_kg": 80.5}, headers=bearer(token)).status_code == 200
+    assert (
+        client.put(
+            f"/v1/body-metrics/{day}", json={"weight_kg": 80.5}, headers=bearer(token)
+        ).status_code
+        == 200
+    )
     assert client.get("/v1/body-metrics", headers=bearer(token)).json()[0]["weight_kg"] == 80.5
 
 
@@ -239,8 +313,9 @@ def test_export_and_import_roundtrip(client):
 
 def test_account_deletion_is_scheduled_and_cancellable(client):
     token = person(client, "bye@example.com", "leaver")
-    response = client.post("/v1/me/delete", json={"password": "correct-horse-battery-staple"},
-                           headers=bearer(token))
+    response = client.post(
+        "/v1/me/delete", json={"password": "correct-horse-battery-staple"}, headers=bearer(token)
+    )
     assert response.status_code == 200
     # Every session was ended...
     assert client.get("/v1/me", headers=bearer(token)).status_code == 401

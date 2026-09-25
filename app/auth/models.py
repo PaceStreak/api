@@ -77,9 +77,7 @@ class RefreshToken(Base):
     # Stable across rotation - identifies one login session for its lifetime,
     # and doubles as the JWT "sid" claim and the /v1/auth/sessions id.
     family_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
-    parent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("refresh_tokens.id"), nullable=True
-    )
+    parent_id: Mapped[UUID | None] = mapped_column(ForeignKey("refresh_tokens.id"), nullable=True)
     replaced_by: Mapped[UUID | None] = mapped_column(nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

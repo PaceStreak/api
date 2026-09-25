@@ -115,9 +115,7 @@ def test_refresh_reuse_of_a_rotated_token_burns_the_session(client):
     # The whole family was burned by the reuse detected above, so even a
     # second attempt with the same stale pair still fails the same way -
     # confirming the rejection wasn't a one-shot "already rotated" check.
-    refresh_again = client.post(
-        "/v1/auth/refresh", headers={"X-CSRF-Token": stale_csrf_cookie}
-    )
+    refresh_again = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": stale_csrf_cookie})
     assert refresh_again.status_code == 401
 
 

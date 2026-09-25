@@ -51,7 +51,9 @@ def test_freeze_is_earned_every_four_kept_weeks_and_spent_automatically():
 
 def test_repair_counts_a_missed_week():
     active = days(0, 2, 4, 14, 16, 18)
-    r = compute_chain(active, MON + timedelta(days=15), 0, fixed(3), repaired=[MON + timedelta(days=7)])
+    r = compute_chain(
+        active, MON + timedelta(days=15), 0, fixed(3), repaired=[MON + timedelta(days=7)]
+    )
     assert [w.status for w in r.weeks] == ["kept", "repaired", "open"]
     assert r.current == 2
 
@@ -59,12 +61,17 @@ def test_repair_counts_a_missed_week():
 def test_repairable_week_is_offered_only_when_available():
     active = days(0, 2, 4)
     today = MON + timedelta(days=15)
-    assert compute_chain(active, today, 0, fixed(3), repair_available=True).repairable_week == MON + timedelta(days=7)
+    assert compute_chain(
+        active, today, 0, fixed(3), repair_available=True
+    ).repairable_week == MON + timedelta(days=7)
     assert compute_chain(active, today, 0, fixed(3), repair_available=False).repairable_week is None
 
 
 def test_raising_the_target_does_not_rejudge_past_weeks():
-    history = [{"from": "2000-01-03", "target": 3}, {"from": (MON + timedelta(days=7)).isoformat(), "target": 5}]
+    history = [
+        {"from": "2000-01-03", "target": 3},
+        {"from": (MON + timedelta(days=7)).isoformat(), "target": 5},
+    ]
     r = compute_chain(days(0, 2, 4, 7, 8, 9), MON + timedelta(days=15), 0, target_resolver(history))
     assert r.weeks[0].status == "kept"  # judged by 3
     assert r.weeks[1].status == "missed"  # judged by 5, only 3 days
@@ -109,20 +116,24 @@ def test_pr_detection_flags_implausible_jumps_and_respects_cooldown():
 
 def test_lower_is_better_for_pace():
     d0 = date(2026, 1, 1)
-    events, _ = detect([
-        Observation("pace_5k:run", 330, d0, "a", higher_is_better=False),
-        Observation("pace_5k:run", 320, d0 + timedelta(days=10), "b", higher_is_better=False),
-    ])
+    events, _ = detect(
+        [
+            Observation("pace_5k:run", 330, d0, "a", higher_is_better=False),
+            Observation("pace_5k:run", 320, d0 + timedelta(days=10), "b", higher_is_better=False),
+        ]
+    )
     assert events[0].rewarded and round(events[0].gain_pct, 1) == 3.0
 
 
 def test_same_day_sets_are_one_pr():
     d0 = date(2026, 1, 1)
-    events, _ = detect([
-        Observation("e1rm:squat", 100, d0, "a"),
-        Observation("e1rm:squat", 104, d0 + timedelta(days=8), "b"),
-        Observation("e1rm:squat", 106, d0 + timedelta(days=8), "b"),
-    ])
+    events, _ = detect(
+        [
+            Observation("e1rm:squat", 100, d0, "a"),
+            Observation("e1rm:squat", 104, d0 + timedelta(days=8), "b"),
+            Observation("e1rm:squat", 106, d0 + timedelta(days=8), "b"),
+        ]
+    )
     assert len(events) == 1 and events[0].value == 106
 
 

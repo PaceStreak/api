@@ -7,6 +7,13 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Account recovery with a 2FA code, email change, terms versions.
+- Anonymous crash reports and an admin abuse view; both swept after 30 days.
+- Smart reminder timing, monthly goals, rest days.
+- Supersets on sets, kilometre splits from GPX/FIT, plans as files.
+- Plan challenges, coach-suggested plans, buddy at-risk nudges, group
+  announcements.
+
 - Passkeys (WebAuthn) under `/v1/auth/passkeys`; a passkey sign-in
   satisfies 2FA.
 - `/health/ready` and `/health/worker`; a worker heartbeat and per-job

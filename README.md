@@ -3,7 +3,7 @@
 Backend for [PaceStreak](https://www.pacestreak.com), a workout streak tracker.
 Will be served from **`api.pacestreak.com`**.
 
-The whole product backend is built: about 160 routes under `/v1`, a background
+The whole product backend is built: about 180 routes under `/v1`, a background
 worker, and a test suite that runs against real Postgres and Redis. It is not
 deployed yet. Where it runs is the open decision; see
 [ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
@@ -19,7 +19,7 @@ their users. That is the point of AGPL over GPL for a hosted service.
 | Stack | FastAPI, PostgreSQL, Redis, on Docker Compose |
 | Hostname | `api.pacestreak.com` (no DNS record yet, deliberately) |
 | Consumers | `PaceStreak/app` (the product frontend, built, not deployed) |
-| Tests | 134, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
+| Tests | 162, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
 | Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
 
 ## Quick start
@@ -123,6 +123,35 @@ takes one of six preset ids, once a day per pair.
 
 After deploying a release that adds a projected stats field, run
 `make recompute-all` once.
+
+### Recovery, email change, terms versions
+
+`POST /v1/auth/recover` sets a password with a 2FA recovery code (no email
+needed). `POST /v1/auth/change-email` needs the password and only moves the
+account when the link sent to the new address is confirmed
+(`/v1/auth/confirm-email-change`); the old address is told. `TERMS_VERSION`
+is the date of the current terms/privacy wording: **bump it in the same
+change as a material edit to /terms or /privacy on www**, and every
+signed-in person is asked to accept again (`POST /v1/me/terms`).
+
+### Crash reports and the abuse view
+
+`POST /v1/client-errors` is unauthenticated and anonymous, rate-limited,
+cut to the URL path, grouped by fingerprint and capped at 1000 groups.
+Failed sign-in, 2FA, passkey and recovery attempts are recorded with the IP
+and a keyed hash of the address. Admins see both under `/v1/admin/client-errors`
+and `/v1/admin/abuse`; the worker sweeps both after 30 days.
+
+### Habits, depth and shared plans
+
+Smart reminders (`reminder_mode=smart`) nudge an hour before the most
+common training hour of the last 60 days (`game/reminders.py`). Monthly goals
+and rest days live under `/v1/me/monthly-goal` and `/v1/me/rest-days`; neither
+touches a streak. Sets carry an optional `superset` number; imported
+GPX/FIT tracks produce kilometre `splits`. Plans export and import as
+`pacestreak-plan` files; `plan_sessions` challenges and coach suggestions
+(`POST /v1/groups/{id}/members/{uid}/plan`, consent required) reuse the same
+helpers. Group owners and admins post `/v1/groups/{id}/announcements`.
 
 ### Official accounts
 

@@ -59,6 +59,7 @@ class PlanIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str | None = Field(default=None, max_length=500)
     weeks: list[list[PlanSession]] = Field(min_length=1, max_length=MAX_WEEKS)
+    repeat: bool = False
 
     @field_validator("weeks")
     @classmethod
@@ -125,6 +126,17 @@ def plan_position(plan: TrainingPlan, today: date, starts_on: int) -> int | None
     return (week_start(today, starts_on) - plan.started_on).days // 7
 
 
+def cycle_start(plan: TrainingPlan, index: int | None) -> date:
+    """The week-start date of the cycle being shown. A plan that runs once
+    has one cycle, from its first week; a repeating plan shows the lap it is
+    on now, so its statuses and progress are about this time round."""
+    assert plan.started_on is not None
+    length = len(plan.weeks or []) or 1
+    if not plan.repeat or index is None or index < length:
+        return plan.started_on
+    return plan.started_on + timedelta(weeks=index - index % length)
+
+
 # --- views -----------------------------------------------------------------------
 
 
@@ -140,6 +152,7 @@ def _summary(plan: TrainingPlan) -> dict:
         "started_on": plan.started_on.isoformat() if plan.started_on else None,
         "finished_at": plan.finished_at.isoformat() if plan.finished_at else None,
         "active": plan.started_on is not None and plan.finished_at is None,
+        "repeat": plan.repeat,
     }
 
 
@@ -175,12 +188,14 @@ async def plan_view(
     if plan.started_on is None:
         return out | {"current_week": None, "today": [], "progress": None}
     weeks = plan.weeks or []
-    end = plan.started_on + timedelta(weeks=len(weeks)) - timedelta(days=1)
-    logged = await _logged(db, plan.user_id, plan.started_on, min(end, today), app_only)
+    index = plan_position(plan, today, profile.week_starts_on)
+    base = cycle_start(plan, index)
+    end = base + timedelta(weeks=len(weeks)) - timedelta(days=1)
+    logged = await _logged(db, plan.user_id, base, min(end, today), app_only)
     detailed = []
     done = total_due = 0
     for i, sessions in enumerate(weeks):
-        ws = plan.started_on + timedelta(weeks=i)
+        ws = base + timedelta(weeks=i)
         if ws > today:
             detailed.append(
                 [
@@ -201,7 +216,8 @@ async def plan_view(
                 total_due += 1
             if s["status"] == "done":
                 done += 1
-    index = plan_position(plan, today, profile.week_starts_on)
+    if index is not None:
+        index -= (base - plan.started_on).days // 7
     current = index if index is not None and 0 <= index < len(weeks) else None
     return out | {
         "weeks": detailed,
@@ -210,11 +226,12 @@ async def plan_view(
         if current is not None
         else [],
         "progress": {"done": done, "due": total_due, "total": sum(len(w) for w in weeks)},
+        "cycle": (base - plan.started_on).days // (7 * len(weeks)) + 1 if weeks else 1,
     }
 
 
 async def _finish_if_over(plan: TrainingPlan, profile: Profile) -> None:
-    if plan.started_on is None or plan.finished_at is not None:
+    if plan.started_on is None or plan.finished_at is not None or plan.repeat:
         return
     index = plan_position(plan, local_today(profile.timezone), profile.week_starts_on)
     if index is not None and index >= len(plan.weeks or []):
@@ -373,6 +390,7 @@ async def create_plan(
             name=body.plan.name.strip(),
             description=(body.plan.description or "").strip() or None,
             weeks=[[s.model_dump(mode="json") for s in w] for w in body.plan.weeks],
+            repeat=body.plan.repeat,
         )
     else:
         raise HTTPException(
@@ -426,6 +444,7 @@ async def shareable(db: AsyncSession, plan: TrainingPlan) -> dict:
         "name": plan.name,
         "description": plan.description,
         "weeks": [[session_out(s) for s in w] for w in plan.weeks or []],
+        "repeat": plan.repeat,
     }
 
 
@@ -453,6 +472,7 @@ class SharedPlan(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str | None = Field(default=None, max_length=500)
     weeks: list[list[SharedSession]] = Field(min_length=1, max_length=MAX_WEEKS)
+    repeat: bool = False
 
 
 def template_shared(template: dict) -> SharedPlan:
@@ -547,6 +567,8 @@ async def materialize(
         name=shared.name.strip(),
         description=(shared.description or "").strip() or None,
         weeks=weeks,
+        # A challenge scores a fixed run of weeks, so its copy never loops.
+        repeat=shared.repeat and "challenge_id" not in fields,
         **fields,
     )
     db.add(plan)
@@ -615,6 +637,8 @@ async def update_plan(
     plan.name = body.name.strip()
     plan.description = (body.description or "").strip() or None
     plan.weeks = [[s.model_dump(mode="json") for s in w] for w in body.weeks]
+    # A plan that has already finished stays finished until restarted.
+    plan.repeat = body.repeat
     await db.commit()
     return await plan_view(db, plan, await get_profile(db, user.id))
 

@@ -15,6 +15,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -359,6 +360,11 @@ class TrainingPlan(Base):
     # choose whether to start it, and can edit or delete it like any other.
     assigned_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A repeating plan loops its weeks for as long as it runs and never
+    # finishes: a one-week plan that repeats is a weekly schedule.
+    repeat: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
 
 class MonthlyGoal(Base):

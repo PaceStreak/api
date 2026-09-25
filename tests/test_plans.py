@@ -131,3 +131,75 @@ def test_plans_are_private_and_validated(client):
         headers=bearer(b),
     )
     assert stolen.status_code == 422
+
+
+def _backdate(plan_id: str, weeks: int) -> None:
+    """Move a running plan's first week `weeks` weeks into the past."""
+    from sqlalchemy import update
+
+    from app.database import AsyncSessionLocal
+    from app.training.models import TrainingPlan
+    from tests.test_social_plans import run
+
+    async def go():
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(TrainingPlan)
+                .where(TrainingPlan.id == plan_id)
+                .values(started_on=TrainingPlan.started_on - timedelta(weeks=weeks))
+            )
+            await db.commit()
+
+    run(go)
+
+
+def test_a_repeating_plan_loops_and_never_finishes(client):
+    token = person(client, "plan5@example.com", "planner5")
+    every_day = [{"day": d, "discipline": "run", "title": "Run"} for d in range(7)]
+    body = {"name": "Two-week loop", "weeks": [every_day, every_day], "repeat": True}
+    plan = client.post("/v1/plans", json={"plan": body}, headers=bearer(token)).json()
+    assert plan["repeat"] is True
+    client.post(f"/v1/plans/{plan['id']}/start", json={}, headers=bearer(token))
+    # Five weeks in: round three, second lap week one - well past the end
+    # of a plan that ran once.
+    _backdate(plan["id"], 4)
+    view = client.get(f"/v1/plans/{plan['id']}", headers=bearer(token)).json()
+    assert view["active"] and view["finished_at"] is None
+    assert view["current_week"] == 0 and view["cycle"] == 3
+    assert view["today"][0]["status"] == "today"
+    # Progress is this round's: nothing from earlier laps is counted as due.
+    assert view["progress"]["due"] == datetime.now(UTC).weekday() + 1
+    log_session(client, token)
+    view = client.get("/v1/plans/active", headers=bearer(token)).json()
+    assert view["today"][0]["status"] == "done"
+
+    # Switching repeat off makes it an ordinary plan, which is over.
+    body["repeat"] = False
+    client.put(f"/v1/plans/{plan['id']}", json=body, headers=bearer(token))
+    view = client.get(f"/v1/plans/{plan['id']}", headers=bearer(token)).json()
+    assert not view["active"] and view["finished_at"] is not None
+
+
+def test_repeat_survives_sharing(client):
+    token = person(client, "plan6@example.com", "planner6")
+    body = {"name": "My week", "weeks": [[]], "repeat": True}
+    plan = client.post("/v1/plans", json={"plan": body}, headers=bearer(token)).json()
+    shared = client.get(f"/v1/plans/{plan['id']}/export", headers=bearer(token)).json()
+    assert shared["repeat"] is True
+    copy = client.post("/v1/plans/import", json=shared, headers=bearer(token)).json()
+    assert copy["repeat"] is True and copy["weeks_count"] == 1
+
+
+def test_routine_items_keep_a_starting_weight(client):
+    token = person(client, "plan7@example.com", "planner7")
+    item = {"exercise_id": "back-squat", "sets": 5, "reps_min": 5, "reps_max": 5}
+    body = {"name": "Squat day", "items": [item | {"weight_kg": 60, "rest_sec": 180}]}
+    made = client.post("/v1/routines", json=body, headers=bearer(token))
+    assert made.status_code == 201, made.text
+    assert made.json()["items"][0]["weight_kg"] == 60
+    bad = client.post(
+        "/v1/routines",
+        json={"name": "x", "items": [item | {"weight_kg": -1}]},
+        headers=bearer(token),
+    )
+    assert bad.status_code == 422

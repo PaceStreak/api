@@ -186,6 +186,9 @@ class RoutineItem(BaseModel):
     reps_max: int | None = Field(default=None, ge=0, le=1000)
     rest_sec: int | None = Field(default=None, ge=0, le=900)
     target_rpe: float | None = Field(default=None, ge=1, le=10)
+    # Kilograms, like every stored weight. A starting point for someone with
+    # no history on the movement; once they have some, last time leads.
+    weight_kg: float | None = Field(default=None, ge=0, le=1000)
     note: str | None = Field(default=None, max_length=140)
 
 

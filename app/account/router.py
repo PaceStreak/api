@@ -46,6 +46,8 @@ from app.training.models import (
     BodyMetric,
     CustomExercise,
     Gear,
+    MonthlyGoal,
+    RestDay,
     Routine,
     StreakPause,
     StreakRepair,
@@ -247,6 +249,14 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 ],
             }
             for w in workouts
+        ],
+        "monthly_goals": [
+            {"month": g.month, "days": g.days}
+            for g in await all_of(MonthlyGoal, MonthlyGoal.user_id == uid)
+        ],
+        "rest_days": [
+            {"day": r.day.isoformat(), "kind": r.kind, "note": r.note}
+            for r in await all_of(RestDay, RestDay.user_id == uid)
         ],
         "gear": [
             {

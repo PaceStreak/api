@@ -464,6 +464,34 @@ class Outcome:
         return data
 
 
+async def _learn_reminder_hour(db: AsyncSession, profile: Profile) -> None:
+    """Refresh the learned nudge hour from the last 60 days of app-logged
+    sessions (imports carry a watch's clock, not the person's habit)."""
+    from app.game.reminders import learn_reminder_hour
+
+    since = utcnow() - timedelta(days=60)
+    starts = (
+        (
+            await db.execute(
+                select(Workout.started_at).where(
+                    Workout.user_id == profile.user_id,
+                    Workout.deleted_at.is_(None),
+                    Workout.source == "app",
+                    Workout.started_at >= since,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    tz = zone(profile.timezone)
+    learned = learn_reminder_hour(
+        (s.astimezone(tz).hour for s in starts), profile.quiet_start, profile.quiet_end
+    )
+    if learned != profile.learned_reminder_hour:
+        profile.learned_reminder_hour = learned
+
+
 async def recompute(
     db: AsyncSession, user_id: UUID, *, notify: bool = True, workout_id: UUID | None = None
 ) -> Outcome:
@@ -477,6 +505,7 @@ async def recompute(
     from app.social.service import emit_event
 
     snap = await snapshot(db, user_id)
+    await _learn_reminder_hour(db, snap.profile)
     profile = snap.profile
     main = snap.chains[0].result
     previous = (

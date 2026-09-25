@@ -107,6 +107,13 @@ class Profile(Base):
 
     # Reminders fire at this local hour, and never inside quiet hours.
     reminder_hour: Mapped[int] = mapped_column(SmallInteger, default=18, nullable=False)
+    # "fixed" uses reminder_hour; "smart" uses learned_reminder_hour, an hour
+    # before the person usually trains, falling back to reminder_hour until
+    # there is enough history to learn from.
+    reminder_mode: Mapped[str] = mapped_column(
+        String(5), default="fixed", server_default="fixed", nullable=False
+    )
+    learned_reminder_hour: Mapped[int | None] = mapped_column(SmallInteger)
     quiet_start: Mapped[int] = mapped_column(SmallInteger, default=22, nullable=False)
     quiet_end: Mapped[int] = mapped_column(SmallInteger, default=7, nullable=False)
 

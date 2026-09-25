@@ -22,7 +22,7 @@ from datetime import timedelta
 from uuid import UUID
 
 from redis.exceptions import RedisError
-from sqlalchemy import delete, func, literal_column, select
+from sqlalchemy import and_, case, delete, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.auth.models import User
@@ -94,7 +94,20 @@ async def streak_nudges() -> list[UUID]:
                         Profile.onboarded_at.is_not(None),
                         Profile.deletion_scheduled_at.is_(None),
                         User.is_active.is_(True),
-                        _local_hour_is(Profile.reminder_hour),
+                        # Smart mode nudges at the learned hour when there
+                        # is one; everyone else at their fixed hour.
+                        _local_hour_is(
+                            case(
+                                (
+                                    and_(
+                                        Profile.reminder_mode == "smart",
+                                        Profile.learned_reminder_hour.is_not(None),
+                                    ),
+                                    Profile.learned_reminder_hour,
+                                ),
+                                else_=Profile.reminder_hour,
+                            )
+                        ),
                     )
                     .limit(5000)
                 )

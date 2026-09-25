@@ -104,6 +104,8 @@ def profile_out(p: Profile) -> dict:
             p.deletion_scheduled_at.isoformat() if p.deletion_scheduled_at else None
         ),
         "reminder_hour": p.reminder_hour,
+        "reminder_mode": p.reminder_mode,
+        "learned_reminder_hour": p.learned_reminder_hour,
         "quiet_start": p.quiet_start,
         "quiet_end": p.quiet_end,
     }
@@ -266,6 +268,7 @@ class ProfilePatch(BaseModel):
     gamification_enabled: bool | None = None
     leaderboard_opt_in: bool | None = None
     reminder_hour: int | None = Field(default=None, ge=0, le=23)
+    reminder_mode: str | None = Field(default=None, pattern="^(fixed|smart)$")
     quiet_start: int | None = Field(default=None, ge=0, le=23)
     quiet_end: int | None = Field(default=None, ge=0, le=23)
     weekly_target: int | None = Field(default=None, ge=1, le=7)

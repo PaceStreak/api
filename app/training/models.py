@@ -346,3 +346,41 @@ class TrainingPlan(Base):
     # The week-start date of week one, while the plan is running.
     started_on: Mapped[date | None] = mapped_column(Date)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MonthlyGoal(Base):
+    """A personal target of active days for one calendar month. Private and
+    never ranked: it exists to give a quiet month a shape."""
+
+    __tablename__ = "monthly_goals"
+    __table_args__ = (
+        UniqueConstraint("user_id", "month", name="uq_monthly_goal"),
+        CheckConstraint("days BETWEEN 1 AND 31", name="ck_monthly_goal_days"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    month: Mapped[str] = mapped_column(String(7), nullable=False)  # "2026-10"
+    days: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+
+class RestDay(Base):
+    """A rest day logged on purpose: sleep, mobility, or just rest. Shown on
+    the grid as a choice rather than a gap. It never counts toward a streak
+    or a target - rest is already free in a week-based streak, and counting
+    it would make "rest" a way to game the number."""
+
+    __tablename__ = "rest_days"
+    __table_args__ = (
+        UniqueConstraint("user_id", "day", name="uq_rest_day"),
+        CheckConstraint("kind IN ('rest', 'sleep', 'mobility', 'sick')", name="ck_rest_kind"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), default="rest", nullable=False)
+    # Private, like workout notes.
+    note: Mapped[str | None] = mapped_column(String(200))

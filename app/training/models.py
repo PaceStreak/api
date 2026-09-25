@@ -76,6 +76,11 @@ class Workout(Base):
     tags: Mapped[list[str]] = mapped_column(
         JSONB, default=list, server_default="[]", nullable=False
     )
+    # Per-kilometre times from an imported track: [{"m": 1000, "sec": 312}].
+    # Private, like the rest of the session detail; never ranked.
+    splits: Mapped[list[dict]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
     # Shoes, bike, board... NULLed if the gear is deleted, so removing a pair
     # of shoes never touches the training log itself.
     gear_id: Mapped[UUID | None] = mapped_column(
@@ -125,6 +130,7 @@ class WorkoutSet(Base):
     exercise_id: Mapped[str] = mapped_column(String(80), nullable=False)
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     set_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    superset: Mapped[int | None] = mapped_column(SmallInteger)
     kind: Mapped[str] = mapped_column(String(8), default="work", nullable=False)
     # Always kilograms. The predecessor stored "whatever unit the user had
     # selected", so switching kg to lb silently corrupted every total and PR.

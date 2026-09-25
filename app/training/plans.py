@@ -26,9 +26,10 @@ from app.common.time import local_today, utcnow, week_start
 from app.database import get_db
 from app.profile.models import Profile
 from app.profile.service import get_profile
-from app.training.library import DISCIPLINE_IDS, TEMPLATE_BY_ID
+from app.training.library import DISCIPLINE_IDS, EXERCISE_BY_ID, TEMPLATE_BY_ID
 from app.training.models import Routine, TrainingPlan, Workout
 from app.training.plan_templates import PLAN_TEMPLATE_BY_ID, PLAN_TEMPLATES
+from app.training.schemas import RoutineItem
 
 router = APIRouter(prefix="/plans", tags=["training"])
 
@@ -371,6 +372,142 @@ async def create_plan(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "Choose a template or send a plan"
         )
+    db.add(plan)
+    await db.commit()
+    await db.refresh(plan)
+    return await plan_view(db, plan, await get_profile(db, user.id))
+
+
+PLAN_FORMAT = "pacestreak-plan"
+
+
+@router.get("/{plan_id}/export")
+async def export_plan(
+    plan_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """A plan as a file to share. Routines belong to an account, so each
+    one a session uses is embedded by value; the recipient gets their own
+    copy. Custom exercises are someone else's too, so routine items naming
+    them are left out rather than exported as ids that mean nothing."""
+    plan = await _own(db, user, plan_id)
+    ids = {s.get("routine_id") for w in plan.weeks or [] for s in w if s.get("routine_id")}
+    routines = (
+        {
+            str(r.id): r
+            for r in (
+                await db.execute(
+                    select(Routine).where(Routine.user_id == user.id, Routine.id.in_(ids))
+                )
+            ).scalars()
+        }
+        if ids
+        else {}
+    )
+
+    def session_out(s: dict) -> dict:
+        out = {
+            k: s.get(k) for k in ("day", "discipline", "title", "minutes", "distance_km", "note")
+        }
+        r = routines.get(str(s.get("routine_id")))
+        if r is not None:
+            out["routine"] = {
+                "name": r.name,
+                "discipline": r.discipline,
+                "notes": r.notes,
+                "items": [i for i in r.items if i.get("exercise_id") in EXERCISE_BY_ID],
+            }
+        return out
+
+    return {
+        "format": PLAN_FORMAT,
+        "version": 1,
+        "name": plan.name,
+        "description": plan.description,
+        "weeks": [[session_out(s) for s in w] for w in plan.weeks or []],
+    }
+
+
+class SharedRoutine(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    discipline: str = "strength"
+    notes: str | None = Field(default=None, max_length=500)
+    items: list[RoutineItem] = Field(default_factory=list, max_length=40)
+
+
+class SharedSession(PlanSession):
+    routine: SharedRoutine | None = None
+
+
+class SharedPlan(BaseModel):
+    format: str = Field(pattern=f"^{PLAN_FORMAT}$")
+    version: int = Field(ge=1, le=1)
+    name: str = Field(min_length=1, max_length=60)
+    description: str | None = Field(default=None, max_length=500)
+    weeks: list[list[SharedSession]] = Field(min_length=1, max_length=MAX_WEEKS)
+
+
+@router.post("/import", status_code=201)
+async def import_plan(
+    body: SharedPlan, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Bring in a shared plan. Embedded routines become the importer's own,
+    reusing one with the same name; items naming exercises this library
+    doesn't have are dropped."""
+    if any(len(w) > MAX_PER_WEEK for w in body.weeks):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"at most {MAX_PER_WEEK} sessions a week"
+        )
+    count = (
+        await db.execute(
+            select(func.count()).select_from(TrainingPlan).where(TrainingPlan.user_id == user.id)
+        )
+    ).scalar_one()
+    if count >= MAX_PLANS:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"{MAX_PLANS} plans is the limit. Delete an old one first."
+        )
+    made: dict[str, UUID] = {}
+    weeks: list[list[dict]] = []
+    for week in body.weeks:
+        out_week = []
+        for s in sorted(week, key=lambda x: x.day):
+            data = s.model_dump(mode="json", exclude={"routine", "routine_id"})
+            if s.routine is not None:
+                key = s.routine.name.lower()
+                if key not in made:
+                    existing = (
+                        await db.execute(
+                            select(Routine).where(
+                                Routine.user_id == user.id, func.lower(Routine.name) == key
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        existing = Routine(
+                            user_id=user.id,
+                            name=s.routine.name,
+                            discipline=s.routine.discipline
+                            if s.routine.discipline in DISCIPLINE_IDS
+                            else "strength",
+                            notes=s.routine.notes,
+                            items=[
+                                i.model_dump()
+                                for i in s.routine.items
+                                if i.exercise_id in EXERCISE_BY_ID
+                            ],
+                        )
+                        db.add(existing)
+                        await db.flush()
+                    made[key] = existing.id
+                data["routine_id"] = str(made[key])
+            out_week.append(data)
+        weeks.append(out_week)
+    plan = TrainingPlan(
+        user_id=user.id,
+        name=body.name.strip(),
+        description=(body.description or "").strip() or None,
+        weeks=weeks,
+    )
     db.add(plan)
     await db.commit()
     await db.refresh(plan)

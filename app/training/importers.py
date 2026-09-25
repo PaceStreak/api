@@ -19,7 +19,7 @@ Safety:
 import csv
 import io
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -106,6 +106,39 @@ class ParsedSession:
     notes: str | None = None
     effort: int | None = None
     feel: int | None = None
+    # [{"m": 1000, "sec": 312}, ..., {"m": 420, "sec": 140}]: whole kilometres,
+    # then the last partial one. Empty when the file has no timed track.
+    splits: list[dict] = field(default_factory=list)
+
+
+def km_splits(track: list[tuple[float, datetime]]) -> list[dict]:
+    """Per-kilometre times from (cumulative metres, time) points, oldest
+    first. Crossing points are interpolated between samples, so a watch
+    recording every 5 seconds still gives honest splits. Pure.
+
+    Stored for the person's own session view only; never ranked, never in a
+    feed - a split is a detail of your run, not a score.
+    """
+    pts = [(d, t) for d, t in track if d is not None and t is not None]
+    if len(pts) < 2 or pts[-1][0] - pts[0][0] < 100:
+        return []
+    splits: list[dict] = []
+    base_d, base_t = pts[0]
+    mark = base_d + 1000
+    last_cross = base_t
+    for (d0, t0), (d1, t1) in zip(pts, pts[1:], strict=False):
+        while d1 >= mark > d0 and len(splits) < 500:
+            frac = (mark - d0) / (d1 - d0) if d1 > d0 else 0
+            cross = t0 + (t1 - t0) * frac
+            splits.append({"m": 1000, "sec": round((cross - last_cross).total_seconds())})
+            last_cross = cross
+            mark += 1000
+    remainder = pts[-1][0] - (mark - 1000)
+    if remainder >= 50:
+        splits.append(
+            {"m": round(remainder), "sec": round((pts[-1][1] - last_cross).total_seconds())}
+        )
+    return splits
 
 
 @dataclass
@@ -236,6 +269,13 @@ def parse_gpx(data: bytes, discipline: str | None = None) -> ParseResult:
             continue
 
         distance = sum(_haversine(a[:2], b[:2]) for a, b in zip(points, points[1:], strict=False))
+        track_points: list[tuple[float, datetime]] = []
+        running = 0.0
+        for i, p in enumerate(points):
+            if i:
+                running += _haversine(points[i - 1][:2], p[:2])
+            if p[3] is not None:
+                track_points.append((running, p[3]))
         climb = pending = 0.0
         elevations = [p[2] for p in points if p[2] is not None]
         for a, b in zip(elevations, elevations[1:], strict=False):
@@ -255,6 +295,7 @@ def parse_gpx(data: bytes, discipline: str | None = None) -> ParseResult:
                 distance_m=round(distance, 1) if distance else None,
                 elevation_m=round(climb, 1) if elevations else None,
                 title=(_text(track, "name") or "")[:80] or None,
+                splits=km_splits(track_points),
             )
         )
     if not sessions and not problems:
@@ -280,10 +321,21 @@ def _guess_from_speed(distance_m: float, duration_sec: int) -> str:
 def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
     sessions: list[ParsedSession] = []
     problems: list[str] = []
+    records: list[tuple[float, datetime]] = []
     try:
         with fitdecode.FitReader(io.BytesIO(data)) as reader:
             for frame in reader:
-                if frame.frame_type != fitdecode.FIT_FRAME_DATA or frame.name != "session":
+                if frame.frame_type != fitdecode.FIT_FRAME_DATA:
+                    continue
+                if frame.name == "record":
+                    when = frame.get_value("timestamp", fallback=None)
+                    dist = frame.get_value("distance", fallback=None)
+                    if isinstance(when, datetime) and dist is not None:
+                        records.append(
+                            (float(dist), when if when.tzinfo else when.replace(tzinfo=UTC))
+                        )
+                    continue
+                if frame.name != "session":
                     continue
                 start = frame.get_value("start_time", fallback=None)
                 if not isinstance(start, datetime):
@@ -307,6 +359,15 @@ def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
                         duration_sec=int(elapsed) if elapsed else None,
                         distance_m=float(distance) if distance else None,
                         elevation_m=float(ascent) if ascent else None,
+                        splits=km_splits(
+                            [
+                                r
+                                for r in records
+                                if start
+                                <= r[1]
+                                <= start + timedelta(seconds=float(elapsed or 0) + 60)
+                            ]
+                        ),
                     )
                 )
     except fitdecode.FitError as error:

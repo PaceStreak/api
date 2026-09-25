@@ -89,6 +89,19 @@ def _names(customs: list[CustomExercise]) -> dict[str, str]:
     }
 
 
+def _valid_splits(raw: object) -> list[dict]:
+    """Imported splits are kept only if every entry is well-formed; a bad
+    file loses its splits, never the session."""
+    from app.training.schemas import SplitIn
+
+    if not isinstance(raw, list) or len(raw) > 500:
+        return []
+    try:
+        return [SplitIn.model_validate(x).model_dump() for x in raw]
+    except Exception:
+        return []
+
+
 async def build_export(db: AsyncSession, user: User) -> dict:
     uid = user.id
     profile = await get_profile(db, uid)
@@ -230,6 +243,7 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "feel": w.feel,
                 "routine_id": str(w.routine_id) if w.routine_id else None,
                 "tags": w.tags,
+                "splits": w.splits,
                 "gear_id": str(w.gear_id) if w.gear_id else None,
                 "source": w.source,
                 "sets": [
@@ -237,6 +251,7 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                         "exercise_id": s.exercise_id,
                         "position": s.position,
                         "set_index": s.set_index,
+                        "superset": s.superset,
                         "kind": s.kind,
                         "weight_kg": s.weight_kg,
                         "reps": s.reps,
@@ -662,6 +677,7 @@ async def import_data(
                 effort=item.get("effort"),
                 feel=item.get("feel"),
                 tags=clean_tags([t for t in item.get("tags") or [] if isinstance(t, str)]),
+                splits=_valid_splits(item.get("splits")),
                 gear_id=gear_map.get(str(item.get("gear_id"))),
                 source="import",
                 client_updated_at=utcnow(),

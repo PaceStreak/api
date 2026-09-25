@@ -207,6 +207,7 @@ async def _apply_put(
     workout.feel = body.feel
     workout.routine_id = body.routine_id
     workout.tags = body.tags
+    workout.splits = [s.model_dump() for s in body.splits]
     workout.gear_id = gear_id
     workout.client_updated_at = body.client_updated_at
     workout.deleted_at = None
@@ -1013,6 +1014,7 @@ async def import_file(
         workout.elevation_m = session.elevation_m
         workout.effort = session.effort
         workout.feel = session.feel
+        workout.splits = session.splits
         workout.source = "import"
         workout.client_updated_at = now
         workout.deleted_at = None

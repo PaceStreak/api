@@ -12,6 +12,9 @@ class SetIn(BaseModel):
     exercise_id: str = Field(min_length=1, max_length=80)
     position: int = Field(ge=0, le=200)
     set_index: int = Field(ge=0, le=100)
+    # Exercises sharing a number are a superset: done back to back, resting
+    # after the last one. None means a straight set.
+    superset: int | None = Field(default=None, ge=0, le=50)
     kind: Literal["work", "warmup", "drop", "failure"] = "work"
     weight_kg: float | None = Field(default=None, ge=0, le=2000)
     reps: int | None = Field(default=None, ge=0, le=1000)
@@ -19,6 +22,11 @@ class SetIn(BaseModel):
     duration_sec: int | None = Field(default=None, ge=0, le=86_400)
     distance_m: float | None = Field(default=None, ge=0, le=1_000_000)
     completed: bool = True
+
+
+class SplitIn(BaseModel):
+    m: int = Field(ge=1, le=1000)
+    sec: int = Field(ge=0, le=86_400)
 
 
 TAG_RE = re.compile(r"[^a-z0-9-]+")
@@ -47,6 +55,8 @@ class WorkoutIn(BaseModel):
     routine_id: UUID | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     gear_id: UUID | None = None
+    # Echoed back by the client so editing an imported run keeps its splits.
+    splits: list[SplitIn] = Field(default_factory=list, max_length=500)
     client_updated_at: datetime
     sets: list[SetIn] = Field(default_factory=list, max_length=400)
 
@@ -80,6 +90,7 @@ class SetOut(BaseModel):
     exercise_id: str
     position: int
     set_index: int
+    superset: int | None = None
     kind: str
     weight_kg: float | None
     reps: int | None
@@ -106,6 +117,7 @@ class WorkoutOut(BaseModel):
     routine_id: UUID | None
     tags: list[str] = []
     gear_id: UUID | None = None
+    splits: list[dict] = []
     source: str
     client_updated_at: datetime
     deleted_at: datetime | None

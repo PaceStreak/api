@@ -1,15 +1,15 @@
 # Architecture
 
-Nothing is built yet. This records the shape the API has to fit, so the first
-commit does not have to guess.
+How the API fits together and why. The feature list is in
+[README.md](./README.md#what-it-does); this file is the reasoning.
 
 ## Where it sits
 
 ```text
 www.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/web    the public site
-app.pacestreak.com     Cloudflare Pages            →  PaceStreak/app    the product
+app.pacestreak.com     Cloudflare Pages (planned)  →  PaceStreak/app    the product
 api.pacestreak.com     THIS REPOSITORY             →  the backend
-blog.pacestreak.com    Cloudflare Pages (static)   →  PaceStreak/blog   the build log
+blog.pacestreak.com    Cloudflare Pages (static)   →  PaceStreak/blog   the blog
 status.pacestreak.com  GitHub Pages (Upptime)      →  public status page
 ```
 
@@ -74,9 +74,9 @@ surprises: see [README.md#known-gaps](./README.md#known-gaps).
 ## URL structure and versioning
 
 `app/versioning.py` defines `API_V1_PREFIX = "/v1"` once. `app/v1/router.py`
-is the only file that mounts anything under it - today just
-`app/auth/router.py`'s router, included unprefixed and given its `/v1` by
-the aggregator rather than hardcoding it itself. A new feature area follows
+is the only file that mounts anything under it: every feature router is
+included unprefixed and given its `/v1` by the aggregator rather than
+hardcoding it itself. A new feature area follows
 the same shape: its own `app/<feature>/router.py` with no version in its own
 prefix, added to `app/v1/router.py`'s `include_router` calls.
 
@@ -86,8 +86,48 @@ counts as a breaking change, how a `/v2` gets added feature-area by feature
 area, and how a version gets deprecated with `Deprecation`/`Sunset` headers
 rather than just a changelog entry.
 
+## The engine: pure functions, recomputed on read
+
+`app/game/service.py`'s `snapshot()` loads one user's history and runs the pure
+engines over it: streak, XP, levels, records, achievements. `recompute()`
+persists the projections (`user_stats`, `personal_records`, new achievements)
+and emits events for anything new.
+
+Nothing a user sees about their streak is stored as authoritative state. There
+is no cron that closes a week. Editing last month's session corrects every
+streak, record and total after it, with no incremental bookkeeping to get wrong.
+It is linear in history; if it ever becomes slow, `snapshot()` is the one
+function to optimise.
+
+Week statuses, in the order the engine decides them: `kept` (target met),
+`paused` (a declared pause covers 4+ days of the week), `open` (the current
+week), `repaired`, `frozen` (auto-spent, only with a run to protect), `missed`.
+
+## Sync
+
+Workouts are created with client-chosen ids and upserted, last-write-wins on
+the client's `client_updated_at`. A single Postgres sequence (`sync_seq`) is the
+change cursor: `/workouts/changes?since=N` returns everything after N,
+deletions included. A sequence, not a timestamp, because timestamps collide and
+clocks step backwards.
+
+## The worker
+
+`python -m app.worker` ticks every `WORKER_INTERVAL_SECONDS`, taking a Redis
+lock per tick (two replicas are safe) and giving every notification a dedupe
+key (a retried tick cannot notify twice). `--once` runs one tick for cron-style
+platforms. Anyone on an active pause gets no nudges.
+
+## Privacy boundaries in code
+
+- Social visibility: `app/social/service.py`, checked at emit and again at read.
+- Age gates: `Profile.social_allowed()`. Under 16: nothing is shown to anyone.
+- Moderation removes social privileges only; the training log is untouched.
+- The calendar feed stores only a SHA-256 of its token and never includes notes.
+- Reserved handles: `is_reserved()` in `app/profile/router.py`; only
+  `POST /admin/users/{id}/official` may assign one.
+
 ## What is deliberately not decided here
 
 Where this actually runs in production (see "Statelessness and deployment"
-above), and everything about the product itself: streaks, workouts, and the
-export format the public site already promises.
+above), and which email provider sends verification and reset mail.

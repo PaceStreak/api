@@ -3,12 +3,10 @@
 Backend for [PaceStreak](https://www.pacestreak.com), a workout streak tracker.
 Will be served from **`api.pacestreak.com`**.
 
-Auth is built: email/password signup and login, RS256 access tokens, rotating
-refresh tokens with reuse detection, CSRF-protected cookie transport, and two
-independent revocation paths — log out this device, or log out everywhere.
-Also: email verification, password reset and change, remote session
-management, and TOTP two-factor with recovery codes. Everything else this API
-will eventually do (streaks, workouts, export) is still undecided.
+The whole product backend is built: about 110 routes under `/v1`, a background
+worker, and a test suite that runs against real Postgres and Redis. It is not
+deployed yet. Where it runs is the open decision; see
+[ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
 
 Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE) — anyone
 running a modified version of this over a network must offer its source to
@@ -19,8 +17,9 @@ their users. That is the point of AGPL over GPL for a hosted service.
 | | |
 | --- | --- |
 | Stack | FastAPI, PostgreSQL, Redis, on Docker Compose |
-| Hostname | `api.pacestreak.com` (not yet pointed anywhere) |
-| Consumers | `PaceStreak/app` (the product frontend, also unbuilt) |
+| Hostname | `api.pacestreak.com` (no DNS record yet, deliberately) |
+| Consumers | `PaceStreak/app` (the product frontend, built, not deployed) |
+| Tests | 87, `make test`, nothing mocked |
 | Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
 
 ## Quick start
@@ -40,6 +39,56 @@ make ps            # container status
 make down          # stop
 make clean         # stop and delete both data volumes (Postgres and Redis)
 ```
+
+## What it does
+
+| Area | Module | Highlights |
+| --- | --- | --- |
+| Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes |
+| Profile | `app/profile/` | Onboarding, age gates (13 / 16), settings, reserved handles and brand-impersonation checks |
+| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 78-exercise library, routines, custom exercises, body metrics, streak chains, repairs, **pauses**, **GPX/FIT/CSV file import** |
+| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 23 achievements, 4 opt-in leaderboards, **weekly recap** |
+| Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports; visibility checked at emit and at read |
+| Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges |
+| Notifications | `app/notifications/` | Inbox, Web Push (VAPID), email, per-category preferences, RFC 8058 unsubscribe |
+| Account | `app/account/` | Export (JSON/CSV/ICS), import, deletion with a 30-day grace, security history, **private calendar feed** |
+| Admin | `app/admin/` | Reports, moderation, append-only audit log, metrics, **official accounts** |
+| Worker | `app/worker.py` | Stale-stat refresh, timezone-aware nudges (silent during a pause), weekly digest, challenge resolution, deletion purge |
+
+The pure engines (`game/streak.py`, `xp.py`, `levels.py`, `records.py`,
+`achievements.py`, `training/pauses.py`, `training/importers.py`) do no I/O and
+are tested without a database. Everything a user sees about their streak is
+recomputed from their log on read; nothing is stored that can drift.
+
+### Pauses
+
+`/v1/pauses`: declare an injury/illness/life break. A week the pause covers
+for 4+ days is `paused`: it neither breaks nor extends the run, spends and earns
+no freeze, pays no XP, and is excluded from consistency. Limits: start up to 14
+days back or 30 ahead, 12 weeks each, 120 days per trailing year, no overlaps;
+a pause that has sheltered weeks can be ended but not deleted.
+
+### File import
+
+`POST /v1/workouts/import` (multipart `file`, optional `discipline`). GPX via
+`defusedxml`, FIT via `fitdecode`, CSV with forgiving column names. Imported
+rows are `source="import"` with a deterministic `uuid5` id and a 3-minute
+duplicate window, so re-uploads never double-count. They count for the streak,
+never for challenges or rewarded records.
+
+### Calendar feed
+
+`POST /v1/me/calendar` returns a feed URL once; only its SHA-256 is stored.
+`DELETE` revokes it; creating again rotates it. The public
+`GET /v1/calendar/{token}.ics` carries time, discipline, title and
+duration/distance, never notes. Needs `PUBLIC_API_URL`.
+
+### Official accounts
+
+`POST /v1/admin/users/{id}/official` (admin only, audited) is the only way a
+reserved handle such as `pacestreak` can be assigned. Non-official accounts
+cannot use the brand anywhere in a handle or display name, including with
+separators or look-alike digits.
 
 ## Auth endpoints
 
@@ -129,9 +178,9 @@ would get added, how a version eventually gets deprecated - is in
 
 ### Data export is a product promise
 
-The public site states: *"Full JSON and CSV export from day one."* Export is a
-launch requirement, not a later feature — design the schema so a complete export
-is a query, not a migration.
+The public site promises full export. It is built (`/v1/me/export`, JSON, CSV
+and ICS), and any new table holding user data must be added to both
+`build_export` and `import_data` in `app/account/router.py`, as pauses were.
 
 ## Migrations
 
@@ -154,6 +203,17 @@ not race itself; see `docker/entrypoint.sh`.
 ```bash
 make dev      # the suite runs against the real Postgres and Redis
 make test
+```
+
+**`make test` truncates every table in the database it points at.** Run it
+against a throwaway database if the dev one holds anything you care about:
+
+```bash
+docker compose exec postgres psql -U pacestreak -c "CREATE DATABASE pacestreak_test"
+DATABASE_URL=postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test \
+REDIS_URL=redis://localhost:6379/15 uv run alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test \
+REDIS_URL=redis://localhost:6379/15 uv run pytest
 ```
 
 Nothing is mocked: the behaviour under test is mostly about transactions,

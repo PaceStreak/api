@@ -7,6 +7,26 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Streak pauses (`/v1/pauses`): injury/illness/life breaks that shelter any
+  week they cover for four days or more. Bounded (14 days back, 30 ahead, 12
+  weeks each, 120 days a year, no overlap); reminders stop while one runs;
+  included in export and import.
+- Weekly recap (`GET /v1/me/recap`), shared with the Monday digest.
+- GPX, FIT and CSV file import (`POST /v1/workouts/import`), idempotent, with
+  `defusedxml` and `fitdecode`.
+- Private calendar feed (`/v1/me/calendar`, `/v1/calendar/{token}.ics`) and a
+  shared RFC 5545 builder for the ICS export. New setting: `PUBLIC_API_URL`.
+- Official accounts (`POST /v1/admin/users/{id}/official`), `official` on
+  profiles and people, and brand-impersonation checks on handles and display
+  names.
+- Migration `8a26a9caf99a`.
+- The product backend: profiles and onboarding with age gates; training logs
+  with offline-safe sync, the exercise library, routines and body metrics;
+  the week-based streak engine, XP, levels, records, achievements and
+  leaderboards; the social layer, groups and challenges; notifications with
+  Web Push and email; export, import and deletion; admin and moderation; and
+  the background worker. Migration `fd264d571db7`.
+
 - Full auth system under `/v1/auth`: email/password signup and login, RS256
   access tokens, rotating single-use refresh tokens with reuse detection and
   session-family revocation, CSRF-protected cookie transport, email
@@ -34,6 +54,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
   change the frontend needs before its first call to this service.
 
 ### Fixed
+
+- The dev compose override now mounts `alembic/`, so the container sees every
+  migration rather than the ones baked into the image at build time.
 
 - The health check route was `/heatlth`; it is `/health` now, matching what
   `compose.yaml`'s healthcheck and `.env.example` already assumed.

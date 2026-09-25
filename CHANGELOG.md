@@ -7,6 +7,18 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Passkeys (WebAuthn) under `/v1/auth/passkeys`; a passkey sign-in
+  satisfies 2FA.
+- `/health/ready` and `/health/worker`; a worker heartbeat and per-job
+  results in admin metrics; `make recompute-all`.
+- Opt-in monthly backup reminder (the `backup` notification category).
+- Chain requirements, 12/52-week consistency, `/v1/me/review`,
+  `/v1/me/records/history`, `travel` pauses.
+- Workout tags and gear (`/v1/gear`), training plans (`/v1/plans`).
+- Buddy streaks (`/v1/buddies`), group streaks with `streak_threshold`,
+  preset encouragement; `user_stats.recent_weeks`.
+- Export version 2: tags, gear, plans, requirements, buddies.
+
 - `compose.prod.yaml`: host-agnostic production stack (required secrets,
   loopback-only API, one-shot migrations, read-only containers, limits, log
   rotation). JWT/VAPID keys can be injected as PEM environment variables.

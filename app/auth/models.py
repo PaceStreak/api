@@ -2,8 +2,9 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -137,3 +138,51 @@ class RecoveryCode(Base):
     )
     code_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Passkey(Base):
+    """A WebAuthn credential: a key pair whose private half never leaves the
+    person's device or password manager.
+
+    Only the public key is stored, so a database dump yields nothing that can
+    sign in. A passkey is phishing-resistant by construction - the browser
+    binds every assertion to the origin - which is why signing in with one
+    satisfies two-factor on its own (see app/auth/passkeys.py).
+    """
+
+    __tablename__ = "passkeys"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # base64url of the authenticator's credential id. Unique across the whole
+    # table: an id is how a usernameless sign-in finds its account.
+    credential_id: Mapped[str] = mapped_column(String(1400), unique=True, nullable=False)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Most synced passkeys report 0 forever; a counter that does move and then
+    # goes backwards means a cloned authenticator, and is refused.
+    sign_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    transports: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    # Whether the credential is synced (iCloud Keychain, Google Password
+    # Manager...). Shown in the list so people know which ones survive losing
+    # a phone.
+    backed_up: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WebAuthnChallenge(Base):
+    """A pending passkey ceremony. Kept in Postgres rather than Redis because
+    Redis here is best-effort by design, and a challenge that can be replayed
+    after a Redis outage is a correctness bug, not a performance one. Deleted
+    on use; the worker sweeps expired rows."""
+
+    __tablename__ = "webauthn_challenges"
+
+    challenge: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    # NULL for sign-in: a usernameless ceremony does not know who is coming.
+    user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    purpose: Mapped[str] = mapped_column(String(12), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

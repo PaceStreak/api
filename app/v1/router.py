@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.account.calendar import router as calendar_router
 from app.account.router import router as account_router
 from app.admin.router import router as admin_router
+from app.auth.passkeys import router as passkeys_router
 from app.auth.router import router as auth_router
 from app.game.leaderboards import router as leaderboards_router
 from app.game.router import router as stats_router
@@ -20,6 +21,7 @@ from app.training.router import router as training_router
 
 router = APIRouter()
 router.include_router(auth_router)
+router.include_router(passkeys_router)
 router.include_router(profile_router)
 router.include_router(stats_router)
 router.include_router(account_router)

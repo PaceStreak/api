@@ -19,6 +19,8 @@ LABELS = {
     "deletion_scheduled": "Account deletion scheduled",
     "deletion_cancelled": "Account deletion cancelled",
     "data_exported": "Data exported",
+    "passkey_added": "Passkey added",
+    "passkey_removed": "Passkey removed",
 }
 
 

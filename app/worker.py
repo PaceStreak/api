@@ -24,6 +24,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import delete, func, literal_column, select
 
 from app.auth.models import User
+from app.auth.passkeys import sweep_expired_challenges
 from app.cache import close_cache, get_client, init_cache
 from app.common.time import local_now, local_today, utcnow, week_start
 from app.config import get_settings
@@ -236,6 +237,7 @@ async def housekeeping() -> None:
         await db.execute(
             delete(Notification).where(Notification.created_at < utcnow() - timedelta(days=180))
         )
+        await sweep_expired_challenges(db)
         await db.commit()
 
 

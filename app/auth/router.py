@@ -155,6 +155,28 @@ async def require_csrf(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
 
 
+async def start_session(
+    request: Request,
+    response: Response,
+    background: BackgroundTasks,
+    db: AsyncSession,
+    user: User,
+) -> TokenResponse:
+    """The last step of every way in - password, second factor or passkey:
+    mint the pair, record the sign-in, set the cookies. One place, so the
+    three paths cannot drift apart on what a session is."""
+    access_token, refresh_token, expires_in = await login_user(
+        db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
+    )
+    notes = await note_sign_in(db, user.id, request)
+    await db.commit()
+    background.add_task(deliver, notes)
+
+    csrf_token = secrets.token_urlsafe(32)
+    set_auth_cookies(response, refresh_token, csrf_token)
+    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
+
+
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit(settings.rate_limit_signup)
 async def signup(request: Request, body: SignupRequest, db: AsyncSession = Depends(get_db)) -> User:
@@ -220,16 +242,7 @@ async def login(
         mfa_token, mfa_expires_in = create_mfa_challenge_token(user.id, user.token_version)
         return MfaChallengeResponse(mfa_token=mfa_token, expires_in=mfa_expires_in)
 
-    access_token, refresh_token, expires_in = await login_user(
-        db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
-    )
-    notes = await note_sign_in(db, user.id, request)
-    await db.commit()
-    background.add_task(deliver, notes)
-
-    csrf_token = secrets.token_urlsafe(32)
-    set_auth_cookies(response, refresh_token, csrf_token)
-    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
+    return await start_session(request, response, background, db, user)
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -701,13 +714,4 @@ async def two_factor_verify(
         if not await consume_recovery_code(db, user, body.code):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
 
-    access_token, refresh_token, expires_in = await login_user(
-        db, user, user_agent=request.headers.get("user-agent"), ip_address=client_ip(request)
-    )
-    notes = await note_sign_in(db, user.id, request)
-    await db.commit()
-    background.add_task(deliver, notes)
-
-    csrf_token = secrets.token_urlsafe(32)
-    set_auth_cookies(response, refresh_token, csrf_token)
-    return TokenResponse(access_token=access_token, expires_in=expires_in, csrf_token=csrf_token)
+    return await start_session(request, response, background, db, user)

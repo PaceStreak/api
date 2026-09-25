@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     # outside development.
     totp_encryption_key: str | None = Field(default=None)
 
+    # --- passkeys (WebAuthn) ---------------------------------------------------
+    # The relying party id is the host the passkey is bound to. It defaults to
+    # the host of FRONTEND_URL (app.pacestreak.com), not the registrable domain:
+    # binding to pacestreak.com would let any subdomain ask for the same
+    # credentials. Changing it later orphans every registered passkey.
+    webauthn_rp_id: str | None = Field(default=None)
+    webauthn_rp_name: str = Field(default="PaceStreak")
+    webauthn_challenge_seconds: int = Field(default=300)
+    max_passkeys: int = Field(default=10)
+
     # --- web push -------------------------------------------------------------
     # VAPID identifies this server to the browsers' push services. `make vapid`
     # writes the key; with no key, push is simply off and the client never
@@ -142,6 +152,16 @@ class Settings(BaseSettings):
     @property
     def jwt_private_key(self) -> str:
         return _read_key(self.jwt_private_key_pem, self.jwt_private_key_path)
+
+    @property
+    def passkey_rp_id(self) -> str:
+        from urllib.parse import urlsplit
+
+        return self.webauthn_rp_id or (urlsplit(self.frontend_url).hostname or "localhost")
+
+    @property
+    def passkey_origin(self) -> str:
+        return self.frontend_url.rstrip("/")
 
     @property
     def jwt_public_key(self) -> str:

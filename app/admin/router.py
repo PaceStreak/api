@@ -26,6 +26,7 @@ from app.database import get_db
 from app.game.models import UserStats
 from app.groups.models import Challenge, Group
 from app.notifications.service import deliver, notify
+from app.ops.health import worker_state
 from app.profile.models import Profile
 from app.profile.router import _check_handle, _handle_taken, is_reserved, mentions_brand
 from app.social.models import ActivityEvent, Comment, Report
@@ -412,4 +413,5 @@ async def metrics(mod: User = Depends(require_moderator), db: AsyncSession = Dep
         "open_reports": await count(Report.status == "open"),
         "suspended": await count(Profile.social_suspended_at.is_not(None)),
         "signups_by_week": [{"week": w.date().isoformat(), "count": n} for w, n in signups],
+        "worker": await worker_state(),
     }

@@ -43,7 +43,8 @@ def clean_database():
             await conn.execute(
                 text(
                     "TRUNCATE users, refresh_tokens, one_time_tokens, "
-                    "recovery_codes, webauthn_challenges RESTART IDENTITY CASCADE"
+                    "recovery_codes, webauthn_challenges, worker_heartbeats "
+                    "RESTART IDENTITY CASCADE"
                 )
             )
         # These connections belong to the loop asyncio.run() just created;

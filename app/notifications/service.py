@@ -36,6 +36,10 @@ CATEGORIES: dict[str, dict] = {
     "achievements": {"label": "Achievements and records", "push": False, "email": False},
     "social": {"label": "Follows, kudos and comments", "push": True, "email": False},
     "groups": {"label": "Groups and challenges", "push": True, "email": False},
+    # Opt-in on every channel: a monthly nudge to download a copy of your own
+    # data. It carries a link into the app, never the data or a download
+    # token, so nothing sensitive ever sits in an inbox.
+    "backup": {"label": "Monthly backup reminder", "push": False, "email": False},
     # Security notices always email and cannot be turned off - they are how
     # someone learns their account was touched by somebody else.
     "security": {"label": "Security", "push": True, "email": True, "locked": True},

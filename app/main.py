@@ -13,6 +13,7 @@ from app.auth.router import CSRF_HEADER
 from app.cache import close_cache, init_cache
 from app.config import get_settings
 from app.database import Base, engine
+from app.ops.health import router as health_router
 from app.ratelimit import limiter
 from app.v1.router import router as v1_router
 from app.versioning import API_V1_PREFIX, API_VERSION
@@ -128,9 +129,7 @@ def create_app() -> FastAPI:
             response.headers["PaceStreak-Version"] = API_VERSION
         return response
 
-    @app.get("/health", tags=["health"])
-    async def health_check():
-        return {"status": "healthy"}
+    app.include_router(health_router)
 
     return app
 

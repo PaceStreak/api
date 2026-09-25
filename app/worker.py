@@ -17,11 +17,13 @@ prefer an external cron to a long-running process.
 import asyncio
 import logging
 import sys
+import time
 from datetime import timedelta
 from uuid import UUID
 
 from redis.exceptions import RedisError
 from sqlalchemy import delete, func, literal_column, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.auth.models import User
 from app.auth.passkeys import sweep_expired_challenges
@@ -33,8 +35,10 @@ from app.game.models import UserStats
 from app.game.recap import build_recap, digest_lines
 from app.game.service import recompute, snapshot
 from app.groups.router import resolve_finished
-from app.notifications.models import Notification
-from app.notifications.service import deliver, notify
+from app.notifications.models import Notification, NotificationPreference
+from app.notifications.service import channels_for, deliver, notify
+from app.ops.health import WORKER_NAME
+from app.ops.models import WorkerHeartbeat
 from app.profile.models import Profile
 
 logger = logging.getLogger("app.worker")
@@ -214,6 +218,50 @@ async def weekly_digest() -> list[UUID]:
     return note_ids
 
 
+async def monthly_backup() -> list[UUID]:
+    """09:00 local on the 1st: remind the people who opted in to download a
+    copy of their data. Nothing is created for anyone who has not opted in,
+    so the inbox never fills with a reminder nobody asked for."""
+    note_ids: list[UUID] = []
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Profile, NotificationPreference.channels)
+                .join(User, User.id == Profile.user_id)
+                .join(NotificationPreference, NotificationPreference.user_id == Profile.user_id)
+                .where(
+                    Profile.onboarded_at.is_not(None),
+                    Profile.deletion_scheduled_at.is_(None),
+                    User.is_active.is_(True),
+                    _local_hour_is(9),
+                )
+                .limit(5000)
+            )
+        ).all()
+    for profile, prefs in rows:
+        wanted = channels_for(prefs, "backup")
+        if not (wanted["email"] or wanted["push"]):
+            continue
+        now = local_now(profile.timezone)
+        if now.day != 1:
+            continue
+        async with AsyncSessionLocal() as db:
+            nid = await notify(
+                db,
+                profile.user_id,
+                kind="monthly_backup",
+                category="backup",
+                title="Your monthly PaceStreak backup",
+                body="A new month. Download a copy of everything you've logged - "
+                "one tap, and it's yours to keep.",
+                url="/settings/data?backup=1",
+                dedupe_key=f"backup:{now:%Y-%m}",
+            )
+            await db.commit()
+            note_ids += [nid] if nid else []
+    return note_ids
+
+
 async def purge_deleted_accounts() -> int:
     async with AsyncSessionLocal() as db:
         due = (
@@ -262,20 +310,56 @@ async def tick() -> None:
         ("nudges", streak_nudges),
         ("digest", weekly_digest),
         ("challenges", resolve_challenges),
+        ("backup", monthly_backup),
         ("purge", purge_deleted_accounts),
         ("housekeeping", housekeeping),
     )
+    started = time.monotonic()
+    report: dict[str, dict] = {}
     for name, job in jobs:
         try:
             result = await job()
             if isinstance(result, list):
                 await deliver(result)
                 result = len(result)
+            report[name] = {"result": int(result or 0)}
             if result:
                 logger.info("worker %s: %s", name, result)
-        except Exception:
+        except Exception as err:
             # One failing job must not starve the rest of the tick.
             logger.exception("worker job %s failed", name)
+            report[name] = {"error": type(err).__name__}
+    await record_heartbeat(report, int((time.monotonic() - started) * 1000))
+
+
+async def record_heartbeat(report: dict[str, dict], duration_ms: int) -> None:
+    """Upsert this worker's row. Failure to record is logged, never raised:
+    a heartbeat problem must not stop the jobs themselves."""
+    failed = any("error" in r for r in report.values())
+    try:
+        async with AsyncSessionLocal() as db:
+            stmt = pg_insert(WorkerHeartbeat).values(
+                name=WORKER_NAME,
+                last_tick_at=utcnow(),
+                duration_ms=duration_ms,
+                jobs=report,
+                failing_ticks=1 if failed else 0,
+            )
+            await db.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[WorkerHeartbeat.name],
+                    set_={
+                        "last_tick_at": stmt.excluded.last_tick_at,
+                        "duration_ms": stmt.excluded.duration_ms,
+                        "jobs": stmt.excluded.jobs,
+                        "failing_ticks": (WorkerHeartbeat.failing_ticks + 1) if failed else 0,
+                        "updated_at": func.now(),
+                    },
+                )
+            )
+            await db.commit()
+    except Exception:
+        logger.exception("worker heartbeat not recorded")
 
 
 async def main(once: bool) -> None:

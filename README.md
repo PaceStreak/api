@@ -3,7 +3,7 @@
 Backend for [PaceStreak](https://www.pacestreak.com), a workout streak tracker.
 Will be served from **`api.pacestreak.com`**.
 
-The whole product backend is built: about 110 routes under `/v1`, a background
+The whole product backend is built: about 160 routes under `/v1`, a background
 worker, and a test suite that runs against real Postgres and Redis. It is not
 deployed yet. Where it runs is the open decision; see
 [ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
@@ -19,7 +19,7 @@ their users. That is the point of AGPL over GPL for a hosted service.
 | Stack | FastAPI, PostgreSQL, Redis, on Docker Compose |
 | Hostname | `api.pacestreak.com` (no DNS record yet, deliberately) |
 | Consumers | `PaceStreak/app` (the product frontend, built, not deployed) |
-| Tests | 92, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
+| Tests | 134, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
 | Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
 
 ## Quick start
@@ -44,16 +44,17 @@ make clean         # stop and delete both data volumes (Postgres and Redis)
 
 | Area | Module | Highlights |
 | --- | --- | --- |
-| Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes |
+| Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes, **passkeys (WebAuthn)** |
 | Profile | `app/profile/` | Onboarding, age gates (13 / 16), settings, reserved handles and brand-impersonation checks |
-| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 78-exercise library, routines, custom exercises, body metrics, streak chains, repairs, **pauses**, **GPX/FIT/CSV file import** |
-| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 23 achievements, 4 opt-in leaderboards, **weekly recap** |
-| Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports; visibility checked at emit and at read |
-| Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges |
+| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 78-exercise library, routines, custom exercises, body metrics, streak chains with **requirements**, repairs, **pauses** (incl. travel), **GPX/FIT/CSV file import**, **tags**, **gear**, **training plans** |
+| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 23 achievements, 4 opt-in leaderboards, **weekly recap**, **year review**, **record history**, **joint (buddy/group) streaks** |
+| Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports, **buddy streaks**, **preset encouragement**; visibility checked at emit and at read |
+| Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges, mute, **group streak** |
 | Notifications | `app/notifications/` | Inbox, Web Push (VAPID), email, per-category preferences, RFC 8058 unsubscribe |
 | Account | `app/account/` | Export (JSON/CSV/ICS), import, deletion with a 30-day grace, security history, **private calendar feed** |
 | Admin | `app/admin/` | Reports, moderation, append-only audit log, metrics, **official accounts** |
-| Worker | `app/worker.py` | Stale-stat refresh, timezone-aware nudges (silent during a pause), weekly digest, challenge resolution, deletion purge |
+| Worker | `app/worker.py` | Stale-stat refresh, timezone-aware nudges (silent during a pause), weekly digest, challenge resolution, **monthly backup reminder**, deletion purge, housekeeping; writes a **heartbeat** every tick |
+| Ops | `app/ops/` | `/health` (liveness), `/health/ready` (Postgres required, Redis reported), `/health/worker` (503 after three missed ticks) |
 
 The pure engines (`game/streak.py`, `xp.py`, `levels.py`, `records.py`,
 `achievements.py`, `training/pauses.py`, `training/importers.py`) do no I/O and
@@ -82,6 +83,46 @@ never for challenges or rewarded records.
 `DELETE` revokes it; creating again rotates it. The public
 `GET /v1/calendar/{token}.ics` carries time, discipline, title and
 duration/distance, never notes. Needs `PUBLIC_API_URL`.
+
+### Passkeys
+
+`/v1/auth/passkeys`: `register/options` (needs the password) then `register`;
+`sign-in/options` then `sign-in` (usernameless, no allow-list, rate limited
+like login). User verification is required, so a passkey sign-in skips the TOTP
+step. Challenges are rows in `webauthn_challenges`, deleted on use and swept by
+the worker. The relying party id defaults to the host of `FRONTEND_URL`
+(`app.pacestreak.com`); set `WEBAUTHN_RP_ID` only if that must differ, and
+never change it after launch - every registered passkey is bound to it.
+Tests use a software authenticator that produces real signatures.
+
+### Streak requirements, consistency, review
+
+A chain's `requirements` ("at least 2 days of run", max 3, summing to no more
+than the target) have a history like `target_history` and apply from the week
+they were set. `consistency_12`/`consistency_52` join the 4-week score.
+`GET /v1/me/review?year=` and `GET /v1/me/records/history?key=` read the same
+snapshot as everything else. Attendance only, never volume.
+
+### Tags, gear, plans
+
+Workouts carry private `tags` (normalised slugs, max 8) and an optional
+`gear_id`; unknown or foreign gear is dropped, not rejected, so offline edits
+still sync. `/v1/gear` mileage is summed from the log, never stored.
+`/v1/plans` (templates in `training/plan_templates.py`): one plan runs at a
+time; what's done is read from the log, and a session moved to another day of
+the same week still counts.
+
+### Buddies, group streaks, encouragement
+
+`/v1/buddies` pairs people with an accepted follow in either direction. A
+shared week is judged from each member's own week verdicts
+(`game/joint.py`), stored as `user_stats.recent_weeks` so no replay is needed.
+Blocking ends a pair. Group detail includes `streak`, judged against the
+owner's `streak_threshold` (50-100). `POST /v1/people/{handle}/encourage`
+takes one of six preset ids, once a day per pair.
+
+After deploying a release that adds a projected stats field, run
+`make recompute-all` once.
 
 ### Official accounts
 
@@ -272,11 +313,18 @@ chosen; set up SPF, DKIM and DMARC for the sending domain when it is.
 ```bash
 make create-admin email=you@example.com   # prompts for the password
 make set-password email=you@example.com   # also signs out every session
+make recompute-all                        # rebuild every stats projection
 docker compose exec api python -m app.cli set-role someone@example.com moderator
 ```
 
 Passwords are prompted for (or read from `PACESTREAK_PASSWORD` for
 automation), never taken from argv.
+
+### Health and monitoring
+
+Point the status page at `/health/ready` (API and database) and
+`/health/worker` (reminders, digests and purges actually running). The admin
+Metrics tab shows each job's last result.
 
 ### Backups
 

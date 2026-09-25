@@ -49,6 +49,7 @@ from app.training.models import (
     Routine,
     StreakPause,
     StreakRepair,
+    TrainingPlan,
     Workout,
     WorkoutSet,
 )
@@ -240,6 +241,17 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "note": g.note,
             }
             for g in await all_of(Gear, Gear.user_id == uid)
+        ],
+        "plans": [
+            {
+                "name": p.name,
+                "description": p.description,
+                "template_id": p.template_id,
+                "weeks": p.weeks,
+                "started_on": p.started_on.isoformat() if p.started_on else None,
+                "finished_at": _iso(p.finished_at),
+            }
+            for p in await all_of(TrainingPlan, TrainingPlan.user_id == uid)
         ],
         "routines": [
             {

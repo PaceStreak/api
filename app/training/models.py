@@ -319,3 +319,30 @@ class Gear(Base):
     initial_m: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(String(200))
+
+
+class TrainingPlan(Base):
+    """A multi-week plan: which sessions, on which days of each week.
+
+    `weeks` is [[{"day": 0-6, "discipline": "run", "title": "...",
+    "minutes": 20, "distance_km": null, "routine_id": null, "note": "..."}],
+    ...], one list per week, days counted from the person's week start. JSON
+    because a plan is always read and written whole, like a routine.
+
+    At most one plan is active at a time. A plan tells you what to do; it
+    never changes what the streak counts - logging something else on a plan
+    day still keeps the week.
+    """
+
+    __tablename__ = "training_plans"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    template_id: Mapped[str | None] = mapped_column(String(40))
+    weeks: Mapped[list[list[dict]]] = mapped_column(JSONB, default=list, nullable=False)
+    # The week-start date of week one, while the plan is running.
+    started_on: Mapped[date | None] = mapped_column(Date)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

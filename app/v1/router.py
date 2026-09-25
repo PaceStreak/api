@@ -18,6 +18,7 @@ from app.notifications.router import router as notifications_router
 from app.profile.router import router as profile_router
 from app.social.router import router as social_router
 from app.training.gear import router as gear_router
+from app.training.plans import router as plans_router
 from app.training.router import router as training_router
 
 router = APIRouter()
@@ -29,6 +30,7 @@ router.include_router(account_router)
 router.include_router(calendar_router)
 router.include_router(training_router)
 router.include_router(gear_router)
+router.include_router(plans_router)
 router.include_router(social_router)
 router.include_router(groups_router)
 router.include_router(leaderboards_router)

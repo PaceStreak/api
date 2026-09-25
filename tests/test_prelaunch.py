@@ -184,3 +184,17 @@ def test_abuse_view_counts_failures_and_names_only_real_accounts(client):
     make_role("abuse-mod@example.com", "moderator")
     mod = login(client, "abuse-mod@example.com")
     assert client.get("/v1/admin/abuse", headers=bearer(mod)).status_code == 404
+
+
+def test_crash_reports_are_bounded(client, monkeypatch):
+    import app.ops.router as ops
+
+    monkeypatch.setattr(ops, "MAX_GROUPS", 2)
+    for i in range(3):
+        r = client.post("/v1/client-errors", json={"message": f"Error {i}"})
+        assert r.status_code == 202
+    assert r.json() == {"received": False}  # a third distinct group is refused
+    # ...but a known one still counts.
+    assert client.post("/v1/client-errors", json={"message": "Error 0"}).json() == {
+        "received": True
+    }

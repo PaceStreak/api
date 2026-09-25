@@ -20,6 +20,9 @@ from app.ratelimit import limiter
 
 router = APIRouter(tags=["ops"])
 
+# Distinct crash groups kept at once (resolved ones free their slot).
+MAX_GROUPS = 1000
+
 
 class ClientErrorIn(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
@@ -41,8 +44,18 @@ async def report_client_error(
     message = body.message[:500]
     stack = body.stack[:4000] if body.stack else None
     agent = (request.headers.get("user-agent") or "")[:400] or None
+    fp = fingerprint(message, stack)
+    # Unauthenticated, so bounded: past MAX_GROUPS distinct crashes, only
+    # ones already known are counted. Real crashes repeat; floods rotate.
+    known = (
+        await db.execute(select(ClientError.id).where(ClientError.fingerprint == fp))
+    ).scalar_one_or_none()
+    if known is None:
+        groups = (await db.execute(select(func.count()).select_from(ClientError))).scalar_one()
+        if groups >= MAX_GROUPS:
+            return {"received": False}
     stmt = insert(ClientError).values(
-        fingerprint=fingerprint(message, stack),
+        fingerprint=fp,
         message=message,
         stack=stack,
         path=path,

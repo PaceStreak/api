@@ -144,3 +144,40 @@ def test_monthly_backup_reminder_is_opt_in_and_monthly(client, monkeypatch):
 
     monkeypatch.setattr(worker, "local_now", lambda _tz: datetime(2026, 10, 2, 9, 5, tzinfo=UTC))
     assert run(worker.monthly_backup) == []
+
+
+def test_smart_reminders_nudge_at_the_learned_hour(client):
+    token = person(client, "smartnudge@example.com", "smartnudge", weekly_target=7)
+    now = datetime.now(UTC)
+    # Fixed hour set away from now, learned hour set to now: only smart mode
+    # should nudge this tick.
+    client.patch(
+        "/v1/me/profile",
+        json={"reminder_mode": "smart", "reminder_hour": (now.hour + 12) % 24},
+        headers=bearer(token),
+    )
+    log_session(client, token)
+
+    async def learn():
+        async with AsyncSessionLocal() as db:
+            from app.profile.models import Profile
+
+            await db.execute(update(Profile).values(learned_reminder_hour=now.hour))
+            await db.commit()
+
+    run(learn)
+    assert len(run(streak_nudges)) == 1
+
+    client.patch("/v1/me/profile", json={"reminder_mode": "fixed"}, headers=bearer(token))
+    run(lambda: _clear_notes())
+    assert run(streak_nudges) == []  # fixed mode: 12 hours away
+
+
+async def _clear_notes():
+    from sqlalchemy import delete
+
+    from app.notifications.models import Notification
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(Notification))
+        await db.commit()

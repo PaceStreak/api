@@ -15,6 +15,7 @@ from app.game.leaderboards import router as leaderboards_router
 from app.game.router import router as stats_router
 from app.groups.router import router as groups_router
 from app.notifications.router import router as notifications_router
+from app.ops.router import router as ops_router
 from app.profile.router import router as profile_router
 from app.social.buddies import router as buddies_router
 from app.social.router import router as social_router
@@ -38,3 +39,4 @@ router.include_router(groups_router)
 router.include_router(leaderboards_router)
 router.include_router(notifications_router)
 router.include_router(admin_router)
+router.include_router(ops_router)

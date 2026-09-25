@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     # outside development.
     totp_encryption_key: str | None = Field(default=None)
 
+    # --- legal ------------------------------------------------------------------
+    # The date of the current terms/privacy wording that needs agreeing to.
+    # Bump it in the same commit as a material change to /terms or /privacy
+    # on www, and every signed-in person is asked to accept again.
+    terms_version: str = Field(default="2026-09-25")
+    email_change_token_hours: int = Field(default=24)
+
     # --- passkeys (WebAuthn) ---------------------------------------------------
     # The relying party id is the host the passkey is bound to. It defaults to
     # the host of FRONTEND_URL (app.pacestreak.com), not the registrable domain:

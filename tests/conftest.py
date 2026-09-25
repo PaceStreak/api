@@ -43,7 +43,8 @@ def clean_database():
             await conn.execute(
                 text(
                     "TRUNCATE users, refresh_tokens, one_time_tokens, "
-                    "recovery_codes, webauthn_challenges, worker_heartbeats "
+                    "recovery_codes, webauthn_challenges, worker_heartbeats, "
+                    "client_errors, auth_failures "
                     "RESTART IDENTITY CASCADE"
                 )
             )

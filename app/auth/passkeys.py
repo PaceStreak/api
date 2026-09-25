@@ -51,6 +51,7 @@ from app.auth.router import start_session
 from app.auth.security import utcnow, verify_password
 from app.config import get_settings
 from app.database import get_db
+from app.ops.service import record_failure
 from app.ratelimit import limiter
 from app.schemas import BaseRequest, BaseResponse
 
@@ -332,12 +333,14 @@ async def sign_in(
     raw_id = body.credential.get("id")
     if not isinstance(raw_id, str) or len(raw_id) > 1400:
         await db.commit()
+        await record_failure(db, "passkey", request)
         raise failed
     passkey = (
         await db.execute(select(Passkey).where(Passkey.credential_id == raw_id))
     ).scalar_one_or_none()
     if passkey is None:
         await db.commit()
+        await record_failure(db, "passkey", request)
         raise failed
 
     try:
@@ -352,11 +355,13 @@ async def sign_in(
         )
     except InvalidAuthenticationResponse as err:
         await db.commit()
+        await record_failure(db, "passkey", request)
         raise failed from err
 
     user = await db.get(User, passkey.user_id)
     if user is None or not user.is_active:
         await db.commit()
+        await record_failure(db, "passkey", request)
         raise failed
     if settings.require_verified_email and not user.is_verified:
         await db.commit()

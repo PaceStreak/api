@@ -3,14 +3,16 @@
 import re
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.account.service import record as record_security_event
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.common.time import is_valid_timezone, local_today, utcnow, week_start
+from app.config import get_settings
 from app.database import get_db
 from app.game.service import recompute
 from app.notifications.models import Notification
@@ -19,6 +21,7 @@ from app.profile.models import MIN_AGE, SOCIAL_MIN_AGE, Profile
 from app.profile.service import get_chains, get_profile, set_chain_target
 from app.social.models import Follow
 
+settings = get_settings()
 router = APIRouter(tags=["me"])
 
 HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -153,6 +156,11 @@ async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(
         },
         "profile": profile_out(profile),
         "needs_onboarding": profile.onboarded_at is None,
+        # Onboarded under an older wording: the app asks them to accept the
+        # current one before carrying on.
+        "needs_terms": profile.onboarded_at is not None
+        and profile.accepted_terms_version != settings.terms_version,
+        "terms_version": settings.terms_version,
         "social_allowed": profile.social_allowed(year),
         "min_age": MIN_AGE,
         "social_min_age": SOCIAL_MIN_AGE,
@@ -198,6 +206,7 @@ async def onboarding(
     profile.display_name = (body.display_name or "").strip() or None
     profile.birth_year = body.birth_year
     profile.accepted_terms_at = utcnow()
+    profile.accepted_terms_version = settings.terms_version
     profile.timezone = body.timezone
     profile.week_starts_on = body.week_starts_on
     profile.weight_unit = body.weight_unit
@@ -214,6 +223,32 @@ async def onboarding(
     await recompute(db, user.id, notify=False)
     await db.commit()
     return {"profile": profile_out(profile)}
+
+
+class TermsIn(BaseModel):
+    version: str = Field(max_length=20)
+
+
+@router.post("/me/terms")
+async def accept_terms(
+    body: TermsIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Accept the current terms. The version must match what the server
+    considers current, so an app that loaded an old version can't accept a
+    wording the person never saw."""
+    if body.version != settings.terms_version:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The terms changed again. Reload and review them."
+        )
+    profile = await get_profile(db, user.id)
+    profile.accepted_terms_at = utcnow()
+    profile.accepted_terms_version = settings.terms_version
+    await record_security_event(db, user.id, "terms_accepted", request, {"version": body.version})
+    await db.commit()
+    return {"accepted": settings.terms_version}
 
 
 class ProfilePatch(BaseModel):

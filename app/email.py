@@ -150,3 +150,25 @@ async def send_password_changed_email(to: str) -> None:
         "Your password was just changed and all other sessions were signed "
         "out.\n\nIf this was not you, reset your password immediately.",
     )
+
+
+async def send_email_change_email(to: str, token: str) -> None:
+    link = f"{settings.frontend_url}/confirm-email?token={token}"
+    await send_email(
+        to,
+        f"Confirm your new {settings.app_name} email address",
+        f"Open this link to use this address for your {settings.app_name} account:\n\n"
+        f"{link}\n\nThe link expires in {settings.email_change_token_hours} hours. "
+        "If you didn't ask for this, ignore this message; nothing has changed.",
+    )
+
+
+async def send_email_changed_notice(old: str, new: str) -> None:
+    """To the old address: the only warning someone gets if their account
+    was moved away from them."""
+    await send_email(
+        old,
+        f"Your {settings.app_name} email address was changed",
+        f"Your account now uses {new}. If this wasn't you, reply to this email "
+        "straight away and we will help you get it back.",
+    )

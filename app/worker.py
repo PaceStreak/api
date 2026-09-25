@@ -39,6 +39,7 @@ from app.notifications.models import Notification, NotificationPreference
 from app.notifications.service import channels_for, deliver, notify
 from app.ops.health import WORKER_NAME
 from app.ops.models import WorkerHeartbeat
+from app.ops.service import sweep as sweep_ops
 from app.profile.models import Profile
 
 logger = logging.getLogger("app.worker")
@@ -286,6 +287,7 @@ async def housekeeping() -> None:
             delete(Notification).where(Notification.created_at < utcnow() - timedelta(days=180))
         )
         await sweep_expired_challenges(db)
+        await sweep_ops(db)
         await db.commit()
 
 

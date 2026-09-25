@@ -3,6 +3,7 @@ from datetime import timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,11 +66,14 @@ from app.auth.service import (
 from app.config import get_settings
 from app.database import get_db
 from app.email import (
+    send_email_change_email,
+    send_email_changed_notice,
     send_password_changed_email,
     send_password_reset_email,
     send_verification_email,
 )
 from app.notifications.service import deliver
+from app.ops.service import record_failure
 from app.ratelimit import limiter
 from app.versioning import API_V1_PREFIX
 
@@ -189,6 +193,9 @@ async def signup(request: Request, body: SignupRequest, db: AsyncSession = Depen
     user = User(email=email, hashed_password=hash_password(body.password))
     db.add(user)
     await db.flush()
+    # With the IP, so the admin abuse view can spot one address creating
+    # accounts in bulk.
+    await record_security_event(db, user.id, "signup", request)
 
     raw_token = await issue_one_time_token(
         db, user, TokenPurpose.EMAIL_VERIFY, timedelta(hours=settings.email_verify_token_hours)
@@ -225,6 +232,7 @@ async def login(
     user = await authenticate_user(db, body.email.lower(), body.password)
 
     if user is None:
+        await record_failure(db, "login", request, body.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
         )
@@ -712,6 +720,119 @@ async def two_factor_verify(
 
     if not await consume_totp_code(db, user, body.code):
         if not await consume_recovery_code(db, user, body.code):
+            await record_failure(db, "mfa", request, user_id=user.id)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
 
     return await start_session(request, response, background, db, user)
+
+
+# ===========================================================================
+# Recovery without the mailbox, and changing the address
+# ===========================================================================
+
+
+class RecoverRequest(BaseModel):
+    email: EmailStr
+    recovery_code: str = Field(min_length=6, max_length=64)
+    new_password: str = Field(min_length=16, max_length=256)
+
+
+@router.post("/recover", response_model=MessageResponse)
+@limiter.limit(settings.rate_limit_mfa_verify)
+async def recover(
+    request: Request, body: RecoverRequest, response: Response, db: AsyncSession = Depends(get_db)
+):
+    """Set a new password with a two-factor recovery code, for someone who
+    has lost both the password and access to the mailbox.
+
+    The recovery code is the proof: it was shown once, when two-factor was
+    turned on, and only its hash is stored. Like a reset, it ends every
+    session. The old address is still told, in case it wasn't them.
+    """
+    failed = HTTPException(
+        status.HTTP_401_UNAUTHORIZED, "That email and recovery code don't match."
+    )
+    user = (
+        await db.execute(select(User).where(User.email == body.email.lower()))
+    ).scalar_one_or_none()
+    if user is None or not user.is_active or not user.totp_enabled:
+        await record_failure(db, "recover", request, body.email)
+        raise failed
+    if not await consume_recovery_code(db, user, body.recovery_code):
+        await record_failure(db, "recover", request, user_id=user.id)
+        raise failed
+
+    user.hashed_password = hash_password(body.new_password)
+    user.password_changed_at = utcnow()
+    await record_security_event(db, user.id, "password_recovered", request)
+    await revoke_all_sessions(db, user)
+    await db.commit()
+    await finish_revoke_all(user.id)
+    clear_auth_cookies(response)
+    await send_password_changed_email(user.email)
+    return MessageResponse(detail="Password updated with a recovery code. Sign in again.")
+
+
+class ChangeEmailRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    new_email: EmailStr
+
+
+@router.post("/change-email", response_model=MessageResponse)
+@limiter.limit(settings.rate_limit_password_email)
+async def change_email(
+    request: Request,
+    body: ChangeEmailRequest,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Start moving the account to a new address. Nothing changes until the
+    link sent to the new address is opened, so a typo can't lock anyone out.
+
+    Needs the password, not just a session: this is how a stolen session
+    would try to take the account for good.
+    """
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Password is incorrect")
+    new = body.new_email.lower()
+    if new == user.email:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That's already your address")
+    taken = (await db.execute(select(User.id).where(User.email == new))).scalar_one_or_none()
+    # Same answer whether or not the address is in use, so this can't be used
+    # to find out who has an account. If it is taken, no link is sent.
+    generic = MessageResponse(
+        detail=f"If {new} can be used, a confirmation link is on its way there."
+    )
+    if taken:
+        return generic
+    user.pending_email = new
+    raw = await issue_one_time_token(
+        db, user, TokenPurpose.EMAIL_CHANGE, timedelta(hours=settings.email_change_token_hours)
+    )
+    await record_security_event(db, user.id, "email_change_requested", request, {"to": new})
+    await db.commit()
+    await send_email_change_email(new, raw)
+    return generic
+
+
+@router.post("/confirm-email-change", response_model=MessageResponse)
+async def confirm_email_change(body: TokenOnlyRequest, db: AsyncSession = Depends(get_db)):
+    user = await consume_one_time_token(db, body.token, TokenPurpose.EMAIL_CHANGE)
+    new = user.pending_email
+    if not new:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired token")
+    if (await db.execute(select(User.id).where(User.email == new))).scalar_one_or_none():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That address is now in use by another account"
+        )
+    old = user.email
+    user.email = new
+    user.pending_email = None
+    # Opening the link proves the new address.
+    user.is_verified = True
+    user.verified_at = utcnow()
+    await record_security_event(db, user.id, "email_changed", meta={"from": old, "to": new})
+    await db.commit()
+    await finish_revoke_all(user.id)
+    await send_email_changed_notice(old, new)
+    return MessageResponse(detail="Your email address is updated.")

@@ -42,6 +42,9 @@ class User(Base):
     password_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set while a change of address waits for the link sent to the new one.
+    # The account keeps signing in with the old address until then.
+    pending_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
     # --- TOTP two-factor -----------------------------------------------------
     # Fernet ciphertext, not the raw Base32 secret - see app/auth/security.py's
@@ -94,6 +97,7 @@ class RefreshToken(Base):
 class TokenPurpose(StrEnum):
     EMAIL_VERIFY = "email_verify"
     PASSWORD_RESET = "password_reset"
+    EMAIL_CHANGE = "email_change"
 
 
 class OneTimeToken(Base):

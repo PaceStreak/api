@@ -19,6 +19,11 @@ LABELS = {
     "deletion_scheduled": "Account deletion scheduled",
     "deletion_cancelled": "Account deletion cancelled",
     "data_exported": "Data exported",
+    "signup": "Account created",
+    "password_recovered": "Password set with a recovery code",
+    "email_change_requested": "Email change requested",
+    "email_changed": "Email address changed",
+    "terms_accepted": "Terms accepted",
     "passkey_added": "Passkey added",
     "passkey_removed": "Passkey removed",
 }

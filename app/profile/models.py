@@ -83,6 +83,8 @@ class Profile(Base):
     # date of birth anyone could use for anything else.
     birth_year: Mapped[int | None] = mapped_column(Integer)
     accepted_terms_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Which wording was accepted (settings.terms_version at the time).
+    accepted_terms_version: Mapped[str | None] = mapped_column(String(20))
     onboarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Privacy. "followers" by default: nothing is public until someone says so.

@@ -142,3 +142,32 @@ class Report(Base):
     resolved_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(String(200))
+
+
+class BuddyPair(Base):
+    """Two people keeping a streak together: a week counts only when both
+    keep their own. Stored once per pair with user_a < user_b, so a pair can
+    never exist twice in two orders.
+
+    Accepting is consent to show each other your weekly progress (days
+    against target, and whether the week was kept or paused - never why).
+    """
+
+    __tablename__ = "buddy_pairs"
+    __table_args__ = (
+        UniqueConstraint("user_a", "user_b", name="uq_buddy_pair"),
+        CheckConstraint("user_a < user_b", name="ck_buddy_order"),
+        CheckConstraint("status IN ('pending', 'active', 'ended')", name="ck_buddy_status"),
+    )
+
+    user_a: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_b: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    requested_by: Mapped[UUID] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(8), default="pending", nullable=False)
+    # When the pair became active. The shared streak reaches back no further.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

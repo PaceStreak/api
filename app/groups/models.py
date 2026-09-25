@@ -34,6 +34,12 @@ class Group(Base):
     invite_code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
     avatar_hue: Mapped[int] = mapped_column(SmallInteger, default=200, nullable=False)
     hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Share of members (%) who must keep their week for the group's week to
+    # count. 75 by default: a crew streak should survive one person's bad
+    # week without being meaningless.
+    streak_threshold: Mapped[int] = mapped_column(
+        SmallInteger, default=75, server_default="75", nullable=False
+    )
 
 
 class GroupMember(Base):

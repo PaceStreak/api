@@ -40,7 +40,7 @@ from app.notifications.models import NotificationPreference
 from app.notifications.service import deliver, notify
 from app.profile.router import profile_out
 from app.profile.service import get_chains, get_profile
-from app.social.models import Block, Comment, Follow
+from app.social.models import Block, BuddyPair, Comment, Follow
 from app.training.library import CUSTOM_PREFIX, DISCIPLINE_IDS, EXERCISE_BY_ID
 from app.training.models import (
     BodyMetric,
@@ -143,6 +143,25 @@ async def build_export(db: AsyncSession, user: User) -> dict:
             select(NotificationPreference.channels).where(NotificationPreference.user_id == uid)
         )
     ).scalar_one_or_none()
+    buddy_pairs = (
+        (
+            await db.execute(
+                select(BuddyPair).where(or_(BuddyPair.user_a == uid, BuddyPair.user_b == uid))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    buddy_handles = {
+        p.user_id: p.handle
+        for p in (
+            await db.execute(
+                select(Profile).where(
+                    Profile.user_id.in_([x for b in buddy_pairs for x in (b.user_a, b.user_b)])
+                )
+            )
+        ).scalars()
+    }
 
     return {
         "format": "pacestreak-export",
@@ -301,6 +320,15 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 if f.followee_id == uid and f.status == "accepted"
             ],
             "blocked": len(await all_of(Block, Block.blocker_id == uid)),
+            "buddies": [
+                {
+                    "handle": buddy_handles.get(p.user_b if p.user_a == uid else p.user_a),
+                    "status": p.status,
+                    "started_at": _iso(p.started_at),
+                    "ended_at": _iso(p.ended_at),
+                }
+                for p in buddy_pairs
+            ],
             "comments": [
                 {
                     "id": str(c.id),

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -20,7 +20,7 @@ from app.groups.models import Challenge, Group
 from app.notifications.service import deliver, notify
 from app.profile.models import Profile
 from app.profile.service import get_profile
-from app.social.models import ActivityEvent, Block, Comment, Follow, Kudos, Report
+from app.social.models import ActivityEvent, Block, BuddyPair, Comment, Follow, Kudos, Report
 from app.social.service import (
     can_see,
     can_see_clause,
@@ -462,6 +462,13 @@ async def block(
                 and_(Follow.follower_id == target.user_id, Follow.followee_id == user.id),
             )
         )
+    )
+    # ...and ends a buddy streak between them.
+    a, b = sorted((user.id, target.user_id))
+    await db.execute(
+        update(BuddyPair)
+        .where(BuddyPair.user_a == a, BuddyPair.user_b == b, BuddyPair.status != "ended")
+        .values(status="ended", ended_at=utcnow())
     )
     await db.commit()
 

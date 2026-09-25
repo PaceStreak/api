@@ -53,6 +53,12 @@ class UserStats(Base):
     season_prs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_prs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_active: Mapped[date | None] = mapped_column(Date)
+    # The main chain's last 26 week verdicts, oldest first, current week last:
+    # ["kept", "frozen", "paused", "missed", "open"]. Buddy and group streaks
+    # are judged from these, so they need no replay of anyone's history.
+    recent_weeks: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
 
 
 class UserAchievement(Base):

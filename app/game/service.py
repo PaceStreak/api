@@ -604,6 +604,7 @@ async def recompute(
         "consistency": main.consistency,
         "this_week_days": main.this_week_days,
         "this_week_target": main.this_week_target,
+        "recent_weeks": [c.status for c in main.weeks[-26:]],
         "sessions": snap.sessions,
         "active_days": len(snap.days),
         "season_prs": sum(

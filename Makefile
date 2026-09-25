@@ -1,4 +1,4 @@
-.PHONY: keys vapid dev up down logs ps clean install migrate migrate-local migration current history downgrade run worker test lint create-admin set-password backup restore-check prod-up prod-config
+.PHONY: keys vapid dev up down logs ps clean install migrate migrate-local migration current history downgrade run worker test lint create-admin set-password recompute-all backup restore-check prod-up prod-config
 
 # Generates the RS256 keypair access tokens are signed with. Not committed -
 # see .gitignore - so every environment (including CI, if it ever runs the
@@ -80,6 +80,11 @@ create-admin:
 
 set-password:
 	docker compose exec api python -m app.cli set-password $(email)
+
+# Rebuild every stats projection from the log (run once after a release that
+# adds a projected field; the worker keeps them current afterwards).
+recompute-all:
+	docker compose exec api python -m app.cli recompute-all
 
 # Dump Postgres into ./backups (BACKUP_DIR), then prove the dump restores.
 backup:

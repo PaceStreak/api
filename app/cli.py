@@ -3,6 +3,12 @@
     python -m app.cli create-admin admin@pacestreak.com
     python -m app.cli set-password admin@pacestreak.com
     python -m app.cli set-role someone@example.com moderator
+    python -m app.cli recompute-all
+
+`recompute-all` rebuilds every stats projection from the log. Run it once
+after a deploy that adds a projected field (as the release adding buddy and
+group streaks did with user_stats.recent_weeks); the worker keeps them fresh
+from then on.
 
 Passwords are read with getpass (or from PACESTREAK_PASSWORD, for automation),
 never from argv, where they would land in shell history and `ps` output.
@@ -97,6 +103,27 @@ async def set_role(email: str, role: str) -> None:
     print(f"{email} is now {role}.")
 
 
+async def recompute_all() -> None:
+    """Rebuild every onboarded user's stats projection, one short transaction
+    each, so a long run never holds locks and can be interrupted safely."""
+    from app.game.service import recompute
+    from app.profile.models import Profile
+
+    async with AsyncSessionLocal() as db:
+        ids = list(
+            (await db.execute(select(Profile.user_id).where(Profile.onboarded_at.is_not(None))))
+            .scalars()
+            .all()
+        )
+    for n, user_id in enumerate(ids, 1):
+        async with AsyncSessionLocal() as db:
+            await recompute(db, user_id, notify=False)
+            await db.commit()
+        if n % 100 == 0:
+            print(f"{n}/{len(ids)}")
+    print(f"Recomputed {len(ids)} accounts.")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -105,12 +132,15 @@ def main(argv: list[str] | None = None) -> None:
     role = commands.add_parser("set-role")
     role.add_argument("email")
     role.add_argument("role", choices=[r.value for r in UserRole])
+    commands.add_parser("recompute-all")
     args = parser.parse_args(argv)
 
     if args.command == "create-admin":
         asyncio.run(create_admin(args.email))
     elif args.command == "set-password":
         asyncio.run(set_password(args.email))
+    elif args.command == "recompute-all":
+        asyncio.run(recompute_all())
     else:
         asyncio.run(set_role(args.email, args.role))
 

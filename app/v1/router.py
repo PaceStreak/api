@@ -16,6 +16,7 @@ from app.game.router import router as stats_router
 from app.groups.router import router as groups_router
 from app.notifications.router import router as notifications_router
 from app.profile.router import router as profile_router
+from app.social.buddies import router as buddies_router
 from app.social.router import router as social_router
 from app.training.gear import router as gear_router
 from app.training.plans import router as plans_router
@@ -32,6 +33,7 @@ router.include_router(training_router)
 router.include_router(gear_router)
 router.include_router(plans_router)
 router.include_router(social_router)
+router.include_router(buddies_router)
 router.include_router(groups_router)
 router.include_router(leaderboards_router)
 router.include_router(notifications_router)

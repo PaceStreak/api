@@ -19,8 +19,9 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.common.codes import invite_code
 from app.common.limits import enforce
-from app.common.time import local_today, utcnow, week_start
+from app.common.time import local_date, local_today, utcnow, week_start
 from app.database import get_db
+from app.game.joint import joint_streak
 from app.game.models import UserStats
 from app.game.service import snapshot
 from app.groups.models import Challenge, ChallengeParticipant, Group, GroupMember
@@ -63,6 +64,8 @@ class GroupPatch(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=60)
     description: str | None = Field(default=None, max_length=280)
     avatar_hue: int | None = Field(default=None, ge=0, le=359)
+    # 50-100%: below half, a "shared" week would mean most of the crew missed.
+    streak_threshold: int | None = Field(default=None, ge=50, le=100)
 
     @field_validator("name", "description")
     @classmethod
@@ -102,6 +105,7 @@ def _group_out(g: Group, member: GroupMember | None, count: int) -> dict:
         "my_role": member.role if member else None,
         "shares_with_coach": member.shares_with_coach if member else False,
         "muted": member.muted if member else False,
+        "streak_threshold": g.streak_threshold,
         "invite_code": g.invite_code if manager else None,
     }
 
@@ -224,7 +228,41 @@ async def get_group(
         for m, p, s in rows
     ]
     members.sort(key=lambda m: (-(m.get("current_streak") or 0), m["handle"] or ""))
-    return _group_out(group, me, len(rows)) | {"members": members}
+    return _group_out(group, me, len(rows)) | {
+        "members": members,
+        "streak": await group_streak(db, group),
+    }
+
+
+async def group_streak(db: AsyncSession, group: Group) -> dict:
+    """The crew's shared streak: a week counts when at least the group's
+    threshold of members kept their own (see app/game/joint.py). Judged over
+    every member allowed social features, regardless of who is looking, so
+    everyone in the group sees the same number. Each member counts only from
+    the week they joined."""
+    rows = (
+        await db.execute(
+            select(GroupMember.created_at, Profile, UserStats.recent_weeks)
+            .join(Profile, Profile.user_id == GroupMember.user_id)
+            .join(UserStats, UserStats.user_id == GroupMember.user_id)
+            .where(GroupMember.group_id == group.id, social_ok_clause())
+        )
+    ).all()
+    histories = []
+    for joined, profile, weeks in rows:
+        since = week_start(local_date(joined, profile.timezone), profile.week_starts_on)
+        now = week_start(local_today(profile.timezone), profile.week_starts_on)
+        span = (now - since).days // 7 + 1
+        histories.append(list(weeks)[-span:])
+    result = joint_streak(histories, threshold=group.streak_threshold / 100)
+    this_week = result.weeks[-1] if result.weeks else None
+    return {
+        "current": result.current,
+        "longest": result.longest,
+        "threshold": group.streak_threshold,
+        "weeks": [w.status for w in result.weeks[-12:]],
+        "this_week": {"kept": this_week.kept, "counted": this_week.counted} if this_week else None,
+    }
 
 
 @router.patch("/groups/{group_id}")

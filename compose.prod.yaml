@@ -1,0 +1,120 @@
+# Production overlay. Host-agnostic: any machine with Docker and a reverse
+# proxy in front (Caddy, nginx, a platform load balancer, Cloudflare Tunnel).
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# Differences from the base file, and why:
+#
+# - Every secret is REQUIRED (${VAR:?}). The base file's inline defaults exist
+#   so a laptop runs with no .env; in production a default password is a
+#   vulnerability, so a missing one stops `up` with the variable's name.
+# - The API listens on 127.0.0.1 only. TLS terminates at the reverse proxy;
+#   nothing here is reachable from the internet directly.
+# - Migrations run once, in their own container, before the API starts -
+#   never from every API replica at boot (RUN_MIGRATIONS stays 0).
+# - Containers get a read-only root filesystem, no new privileges, memory
+#   limits and rotated logs, so one bad day cannot fill the disk.
+#
+# Keys: pass PEM contents in JWT_PRIVATE_KEY_PEM, JWT_PUBLIC_KEY_PEM and
+# VAPID_PRIVATE_KEY_PEM (e.g. from the host's secret store into .env with
+# mode 0600). No key file has to be made readable by the container user.
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+x-prod-env: &prod-env
+  APP_MODE: prod
+  ENVIRONMENT: production
+  DEBUG: "False"
+  RUN_MIGRATIONS: "0"
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pacestreak}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pacestreak}
+  REDIS_URL: redis://redis:6379/0
+  JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM:?set JWT_PRIVATE_KEY_PEM}
+  JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:?set JWT_PUBLIC_KEY_PEM}
+  VAPID_PRIVATE_KEY_PEM: ${VAPID_PRIVATE_KEY_PEM:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:hello@pacestreak.com}
+  TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?set TOTP_ENCRYPTION_KEY}
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-pacestreak.com}
+  COOKIE_SECURE: "True"
+  COOKIE_SAMESITE: lax
+  CORS_ORIGINS: ${CORS_ORIGINS:-https://app.pacestreak.com}
+  FRONTEND_URL: ${FRONTEND_URL:-https://app.pacestreak.com}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-https://api.pacestreak.com}
+  REQUIRE_VERIFIED_EMAIL: "True"
+  EMAIL_BACKEND: smtp
+  EMAIL_FROM: ${EMAIL_FROM:-no-reply@pacestreak.com}
+  SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-True}
+  SMTP_SSL: ${SMTP_SSL:-False}
+  WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-120}
+  # The reverse proxy's address as seen from this network; required for
+  # correct client IPs in rate limits and the security history.
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?set FORWARDED_ALLOW_IPS to the proxy address}
+  WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+
+services:
+  migrate:
+    build: { context: ., dockerfile: Dockerfile }
+    <<: *hardening
+    command: ["alembic", "upgrade", "head"]
+    environment: *prod-env
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [backend]
+
+  api:
+    <<: *hardening
+    environment: *prod-env
+    # Replaced, not merged: no key directory is mounted in production.
+    volumes: !reset []
+    ports: !override
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 768m }
+
+  worker:
+    <<: *hardening
+    environment: *prod-env
+    volumes: !reset []
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  postgres:
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pacestreak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-pacestreak}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    deploy:
+      resources:
+        limits: { memory: 1g }
+
+  redis:
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    deploy:
+      resources:
+        limits: { memory: 256m }

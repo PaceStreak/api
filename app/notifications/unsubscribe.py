@@ -33,3 +33,21 @@ def unsubscribe_link(user_id: UUID, category: str) -> str:
     return (
         f"{settings.frontend_url}/unsubscribe?u={user_id}&c={category}&s={sign(user_id, category)}"
     )
+
+
+def one_click_url(user_id: UUID, category: str) -> str:
+    """The RFC 8058 target a mail client POSTs to, with no page in between."""
+    return (
+        f"{settings.public_api_url.rstrip('/')}/v1/notifications/unsubscribe/one-click"
+        f"?u={user_id}&c={category}&s={sign(user_id, category)}"
+    )
+
+
+def list_headers(user_id: UUID, category: str) -> dict[str, str]:
+    """List-Unsubscribe headers for one category's email. Gmail and Yahoo
+    require these (with the one-click Post header) for bulk senders."""
+    return {
+        "List-Unsubscribe": f"<{one_click_url(user_id, category)}>, "
+        f"<{unsubscribe_link(user_id, category)}>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }

@@ -1,4 +1,4 @@
-.PHONY: keys vapid dev up down logs ps clean install migrate migrate-local migration current history downgrade run worker test
+.PHONY: keys vapid dev up down logs ps clean install migrate migrate-local migration current history downgrade run worker test lint create-admin set-password backup restore-check prod-up prod-config
 
 # Generates the RS256 keypair access tokens are signed with. Not committed -
 # see .gitignore - so every environment (including CI, if it ever runs the
@@ -67,3 +67,34 @@ worker:
 
 test:
 	docker compose exec api pytest
+
+
+lint:
+	uv run ruff check app tests
+	uv run ruff format --check app tests
+
+# Operator commands. Passwords are prompted for, never passed as arguments.
+#   make create-admin email=you@example.com
+create-admin:
+	docker compose exec api python -m app.cli create-admin $(email)
+
+set-password:
+	docker compose exec api python -m app.cli set-password $(email)
+
+# Dump Postgres into ./backups (BACKUP_DIR), then prove the dump restores.
+backup:
+	scripts/backup.sh
+	scripts/restore-check.sh
+
+restore-check:
+	scripts/restore-check.sh $(file)
+
+# Production, on any Docker host with a reverse proxy in front. Needs a .env
+# with the required secrets; `make prod-config` names any that are missing.
+PROD = docker compose -f compose.yaml -f compose.prod.yaml
+
+prod-config:
+	$(PROD) config -q && echo "compose.prod.yaml: configuration OK"
+
+prod-up:
+	$(PROD) up -d --build --wait

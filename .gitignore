@@ -220,3 +220,6 @@ __marimo__/
 # RS256 signing keypair (`make keys`). Never committed - a leaked private key
 # forges valid access tokens for any user.
 keys/*.pem
+
+# Database dumps. Never commit them: they are every user's data.
+backups/

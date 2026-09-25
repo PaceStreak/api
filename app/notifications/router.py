@@ -235,6 +235,16 @@ class EmailUnsubscribeIn(BaseModel):
     s: str = Field(max_length=64)
 
 
+@router.post("/unsubscribe/one-click", include_in_schema=False)
+async def one_click_unsubscribe(
+    u: UUID, c: str, s: str = Query(max_length=64), db: AsyncSession = Depends(get_db)
+):
+    """RFC 8058: the mail client POSTs `List-Unsubscribe=One-Click` here
+    directly, with the parameters in the URL from the List-Unsubscribe
+    header. The body carries nothing we need, so it is not read."""
+    return await email_unsubscribe(EmailUnsubscribeIn(u=u, c=c, s=s), db)
+
+
 @router.post("/unsubscribe")
 async def email_unsubscribe(body: EmailUnsubscribeIn, db: AsyncSession = Depends(get_db)):
     """Unauthenticated on purpose - it is clicked from a mail client. The

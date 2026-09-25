@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -53,6 +54,15 @@ def _check_production_config() -> None:
     if settings.reset_db_on_startup:
         problems.append("RESET_DB_ON_STARTUP must be False in production")
 
+    if settings.email_backend != "smtp":
+        problems.append(
+            "EMAIL_BACKEND must be 'smtp' in production - on 'console', verification "
+            "and password-reset links are only ever written to the log"
+        )
+    elif not (settings.smtp_ssl or settings.smtp_starttls):
+        problems.append("SMTP_SSL or SMTP_STARTTLS must be on in production")
+    if settings.jwt_private_key_pem is None and not os.path.isfile(settings.jwt_private_key_path):
+        problems.append("No JWT private key: set JWT_PRIVATE_KEY_PEM or JWT_PRIVATE_KEY_PATH")
     if not settings.public_api_url.startswith("https://"):
         problems.append("PUBLIC_API_URL must be an https:// URL in production")
     if problems:

@@ -91,6 +91,19 @@ async def notify(
 
 @lru_cache(maxsize=1)
 def vapid_key() -> str | None:
+    """Path to the VAPID private key. pywebpush wants a file, so a key injected
+    as VAPID_PRIVATE_KEY_PEM is written once to a 0600 file in a private
+    temporary directory."""
+    if settings.vapid_private_key_pem:
+        import os
+        import tempfile
+
+        directory = tempfile.mkdtemp(prefix="pacestreak-vapid-")
+        target = Path(directory) / "vapid_private.pem"
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(settings.vapid_private_key_pem.replace("\\n", "\n").strip() + "\n")
+        return str(target)
     path = Path(settings.vapid_private_key_path)
     return str(path) if path.is_file() else None
 
@@ -235,7 +248,12 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
             and user.is_active
             and (user.is_verified or note.category == "security")
         ):
-            await send_email(user.email, note.title, _email_body(note))
+            from app.notifications.unsubscribe import list_headers
+
+            headers = (
+                list_headers(note.user_id, note.category) if note.category != "security" else None
+            )
+            await send_email(user.email, note.title, _email_body(note), headers)
 
 
 def _email_body(note: Notification) -> str:

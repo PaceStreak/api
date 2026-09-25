@@ -28,6 +28,12 @@ class Settings(BaseSettings):
 
     jwt_private_key_path: str = Field(default="./keys/private.pem")
     jwt_public_key_path: str = Field(default="./keys/public.pem")
+    # PEM contents, for platforms that inject secrets as environment variables
+    # rather than files. When set they win over the *_PATH settings, and no
+    # key file needs to exist - so no key file needs its permissions widened
+    # to be readable by the container user.
+    jwt_private_key_pem: str | None = Field(default=None, repr=False)
+    jwt_public_key_pem: str | None = Field(default=None, repr=False)
 
     # --- cookies ------------------------------------------------------------
     # Domain=pacestreak.com is load-bearing: it is what lets app.pacestreak.com
@@ -67,6 +73,14 @@ class Settings(BaseSettings):
     smtp_user: str | None = Field(default=None)
     smtp_password: str | None = Field(default=None)
     smtp_starttls: bool = Field(default=True)
+    # Implicit TLS (port 465). Mutually exclusive with STARTTLS; one of the two
+    # must be on in production, or credentials cross the network in clear.
+    smtp_ssl: bool = Field(default=False)
+    smtp_timeout_seconds: float = Field(default=10.0)
+    smtp_attempts: int = Field(default=3)
+    # Display name on outgoing mail: "PaceStreak <no-reply@pacestreak.com>".
+    email_from_name: str = Field(default="PaceStreak")
+    email_reply_to: str | None = Field(default="hello@pacestreak.com")
 
     # --- two-factor authentication -------------------------------------------
     mfa_challenge_minutes: int = Field(default=5)
@@ -85,6 +99,7 @@ class Settings(BaseSettings):
     # offers it. The subject must be a mailto: or https: URL the push services
     # can contact about abuse.
     vapid_private_key_path: str = Field(default="./keys/vapid_private.pem")
+    vapid_private_key_pem: str | None = Field(default=None, repr=False)
     vapid_subject: str = Field(default="mailto:hello@pacestreak.com")
 
     # --- worker ---------------------------------------------------------------
@@ -126,17 +141,26 @@ class Settings(BaseSettings):
 
     @property
     def jwt_private_key(self) -> str:
-        with open(self.jwt_private_key_path) as f:
-            return f.read()
+        return _read_key(self.jwt_private_key_pem, self.jwt_private_key_path)
 
     @property
     def jwt_public_key(self) -> str:
-        with open(self.jwt_public_key_path) as f:
-            return f.read()
+        return _read_key(self.jwt_public_key_pem, self.jwt_public_key_path)
 
     @property
     def totp_issuer(self) -> str:
         return self.app_name
+
+
+@lru_cache(maxsize=8)
+def _read_key(pem: str | None, path: str) -> str:
+    """Key material, read once per process rather than on every token signed.
+    Literal "\\n" sequences are unescaped, because many secret stores flatten
+    a multi-line PEM into one line."""
+    if pem:
+        return pem.replace("\\n", "\n").strip() + "\n"
+    with open(path) as f:
+        return f.read()
 
 
 @lru_cache

@@ -144,33 +144,39 @@ def _summary(plan: TrainingPlan) -> dict:
 
 
 async def _logged(
-    db: AsyncSession, user_id: UUID, start: date, end: date
+    db: AsyncSession, user_id: UUID, start: date, end: date, app_only: bool = False
 ) -> dict[date, list[tuple[date, str]]]:
-    rows = (
-        await db.execute(
-            select(Workout.local_date, Workout.discipline).where(
-                Workout.user_id == user_id,
-                Workout.deleted_at.is_(None),
-                Workout.local_date >= start,
-                Workout.local_date <= end,
-            )
-        )
-    ).all()
+    stmt = select(Workout.local_date, Workout.discipline).where(
+        Workout.user_id == user_id,
+        Workout.deleted_at.is_(None),
+        Workout.local_date >= start,
+        Workout.local_date <= end,
+    )
+    if app_only:
+        # Challenges never count imported history, like every other challenge.
+        stmt = stmt.where(Workout.source == "app")
+    rows = (await db.execute(stmt)).all()
     by_week: dict[date, list[tuple[date, str]]] = defaultdict(list)
     for d, disc in rows:
         by_week[start + timedelta(weeks=(d - start).days // 7)].append((d, disc))
     return by_week
 
 
-async def plan_view(db: AsyncSession, plan: TrainingPlan, profile: Profile) -> dict:
+async def plan_view(
+    db: AsyncSession, plan: TrainingPlan, profile: Profile, app_only: bool = False
+) -> dict:
     """The whole plan with a status on every session that has come due."""
     today = local_today(profile.timezone)
-    out = _summary(plan) | {"weeks": plan.weeks}
+    out = _summary(plan) | {
+        "weeks": plan.weeks,
+        "challenge_id": str(plan.challenge_id) if plan.challenge_id else None,
+        "assigned_by": str(plan.assigned_by) if plan.assigned_by else None,
+    }
     if plan.started_on is None:
         return out | {"current_week": None, "today": [], "progress": None}
     weeks = plan.weeks or []
     end = plan.started_on + timedelta(weeks=len(weeks)) - timedelta(days=1)
-    logged = await _logged(db, plan.user_id, plan.started_on, min(end, today))
+    logged = await _logged(db, plan.user_id, plan.started_on, min(end, today), app_only)
     detailed = []
     done = total_due = 0
     for i, sessions in enumerate(weeks):
@@ -381,22 +387,18 @@ async def create_plan(
 PLAN_FORMAT = "pacestreak-plan"
 
 
-@router.get("/{plan_id}/export")
-async def export_plan(
-    plan_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
-):
-    """A plan as a file to share. Routines belong to an account, so each
-    one a session uses is embedded by value; the recipient gets their own
+async def shareable(db: AsyncSession, plan: TrainingPlan) -> dict:
+    """A plan in the shareable format. Routines belong to an account, so each
+    one a session uses is embedded by value and the recipient gets their own
     copy. Custom exercises are someone else's too, so routine items naming
     them are left out rather than exported as ids that mean nothing."""
-    plan = await _own(db, user, plan_id)
     ids = {s.get("routine_id") for w in plan.weeks or [] for s in w if s.get("routine_id")}
     routines = (
         {
             str(r.id): r
             for r in (
                 await db.execute(
-                    select(Routine).where(Routine.user_id == user.id, Routine.id.in_(ids))
+                    select(Routine).where(Routine.user_id == plan.user_id, Routine.id.in_(ids))
                 )
             ).scalars()
         }
@@ -427,6 +429,13 @@ async def export_plan(
     }
 
 
+@router.get("/{plan_id}/export")
+async def export_plan(
+    plan_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    return await shareable(db, await _own(db, user, plan_id))
+
+
 class SharedRoutine(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     discipline: str = "strength"
@@ -446,29 +455,60 @@ class SharedPlan(BaseModel):
     weeks: list[list[SharedSession]] = Field(min_length=1, max_length=MAX_WEEKS)
 
 
-@router.post("/import", status_code=201)
-async def import_plan(
-    body: SharedPlan, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
-):
-    """Bring in a shared plan. Embedded routines become the importer's own,
-    reusing one with the same name; items naming exercises this library
-    doesn't have are dropped."""
-    if any(len(w) > MAX_PER_WEEK for w in body.weeks):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, f"at most {MAX_PER_WEEK} sessions a week"
-        )
+def template_shared(template: dict) -> SharedPlan:
+    """A built-in template in the shareable format, its routine templates
+    embedded by value like any shared routine."""
+    weeks = []
+    for week in template["weeks"]:
+        out = []
+        for s in week:
+            s = dict(s)
+            tpl = TEMPLATE_BY_ID.get(s.pop("routine_template", None) or "")
+            if tpl:
+                s["routine"] = {
+                    "name": tpl["name"],
+                    "discipline": tpl["discipline"],
+                    "notes": tpl["summary"],
+                    "items": tpl["items"],
+                }
+            out.append(s)
+        weeks.append(out)
+    return SharedPlan.model_validate(
+        {
+            "format": PLAN_FORMAT,
+            "version": 1,
+            "name": template["name"],
+            "description": template["summary"],
+            "weeks": weeks,
+        }
+    )
+
+
+async def check_plan_room(db: AsyncSession, user_id: UUID) -> None:
     count = (
         await db.execute(
-            select(func.count()).select_from(TrainingPlan).where(TrainingPlan.user_id == user.id)
+            select(func.count()).select_from(TrainingPlan).where(TrainingPlan.user_id == user_id)
         )
     ).scalar_one()
     if count >= MAX_PLANS:
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"{MAX_PLANS} plans is the limit. Delete an old one first."
         )
+
+
+async def materialize(
+    db: AsyncSession, user_id: UUID, shared: SharedPlan, **fields
+) -> TrainingPlan:
+    """Turn a shareable plan into one of `user_id`'s plans. Embedded routines
+    become their own, reusing one with the same name; items naming
+    exercises this library doesn't have are dropped. Caller commits."""
+    if any(len(w) > MAX_PER_WEEK for w in shared.weeks):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"at most {MAX_PER_WEEK} sessions a week"
+        )
     made: dict[str, UUID] = {}
     weeks: list[list[dict]] = []
-    for week in body.weeks:
+    for week in shared.weeks:
         out_week = []
         for s in sorted(week, key=lambda x: x.day):
             data = s.model_dump(mode="json", exclude={"routine", "routine_id"})
@@ -478,13 +518,13 @@ async def import_plan(
                     existing = (
                         await db.execute(
                             select(Routine).where(
-                                Routine.user_id == user.id, func.lower(Routine.name) == key
+                                Routine.user_id == user_id, func.lower(Routine.name) == key
                             )
                         )
                     ).scalar_one_or_none()
                     if existing is None:
                         existing = Routine(
-                            user_id=user.id,
+                            user_id=user_id,
                             name=s.routine.name,
                             discipline=s.routine.discipline
                             if s.routine.discipline in DISCIPLINE_IDS
@@ -503,12 +543,46 @@ async def import_plan(
             out_week.append(data)
         weeks.append(out_week)
     plan = TrainingPlan(
-        user_id=user.id,
-        name=body.name.strip(),
-        description=(body.description or "").strip() or None,
+        user_id=user_id,
+        name=shared.name.strip(),
+        description=(shared.description or "").strip() or None,
         weeks=weeks,
+        **fields,
     )
     db.add(plan)
+    await db.flush()
+    return plan
+
+
+async def run_only(db: AsyncSession, plan: TrainingPlan, starts: date) -> None:
+    """Start `plan` from the week of `starts`, stopping any other running
+    plan: one plan at a time keeps "today" unambiguous. Caller commits."""
+    others = (
+        (
+            await db.execute(
+                select(TrainingPlan).where(
+                    TrainingPlan.user_id == plan.user_id,
+                    TrainingPlan.id != plan.id,
+                    TrainingPlan.started_on.is_not(None),
+                    TrainingPlan.finished_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for other in others:
+        other.started_on = None
+    plan.started_on = starts
+    plan.finished_at = None
+
+
+@router.post("/import", status_code=201)
+async def import_plan(
+    body: SharedPlan, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    await check_plan_room(db, user.id)
+    plan = await materialize(db, user.id, body)
     await db.commit()
     await db.refresh(plan)
     return await plan_view(db, plan, await get_profile(db, user.id))
@@ -557,24 +631,9 @@ async def start_plan(
     plan = await _own(db, user, plan_id)
     profile = await get_profile(db, user.id)
     this_week = week_start(local_today(profile.timezone), profile.week_starts_on)
-    others = (
-        (
-            await db.execute(
-                select(TrainingPlan).where(
-                    TrainingPlan.user_id == user.id,
-                    TrainingPlan.id != plan.id,
-                    TrainingPlan.started_on.is_not(None),
-                    TrainingPlan.finished_at.is_(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
+    await run_only(
+        db, plan, this_week + (timedelta(weeks=1) if body.when == "next" else timedelta())
     )
-    for other in others:
-        other.started_on = None
-    plan.started_on = this_week + (timedelta(weeks=1) if body.when == "next" else timedelta())
-    plan.finished_at = None
     await db.commit()
     return await plan_view(db, plan, profile)
 

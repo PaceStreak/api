@@ -351,6 +351,13 @@ class TrainingPlan(Base):
     weeks: Mapped[list[list[dict]]] = mapped_column(JSONB, default=list, nullable=False)
     # The week-start date of week one, while the plan is running.
     started_on: Mapped[date | None] = mapped_column(Date)
+    # Set on a copy made for a plan challenge; the challenge scores it.
+    challenge_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("challenges.id", ondelete="SET NULL"), index=True
+    )
+    # Set when a coach suggested this plan. It is the member's plan: they
+    # choose whether to start it, and can edit or delete it like any other.
+    assigned_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

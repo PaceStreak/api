@@ -232,6 +232,69 @@ async def weekly_digest() -> list[UUID]:
     return note_ids
 
 
+BUDDY_NUDGE_HOUR = 17
+
+
+async def buddy_nudges() -> list[UUID]:
+    """At 5pm local for the helper: if their buddy is still short this week
+    with at most two days left, and it's still reachable, suggest sending
+    some encouragement. Never about a paused buddy, never twice in one of
+    the buddy's weeks, and it says nothing about why they're short."""
+    from app.game.models import UserStats
+    from app.social.models import BuddyPair
+
+    note_ids: list[UUID] = []
+    async with AsyncSessionLocal() as db:
+        pairs = (
+            (await db.execute(select(BuddyPair).where(BuddyPair.status == "active")))
+            .scalars()
+            .all()
+        )
+        if not pairs:
+            return []
+        ids = {x for p in pairs for x in (p.user_a, p.user_b)}
+        profiles = {
+            p.user_id: p
+            for p in (await db.execute(select(Profile).where(Profile.user_id.in_(ids)))).scalars()
+        }
+        stats = {
+            s.user_id: s
+            for s in (
+                await db.execute(select(UserStats).where(UserStats.user_id.in_(ids)))
+            ).scalars()
+        }
+        for pair in pairs:
+            for helper, buddy in ((pair.user_a, pair.user_b), (pair.user_b, pair.user_a)):
+                hp, bp, bs = profiles.get(helper), profiles.get(buddy), stats.get(buddy)
+                if hp is None or bp is None or bs is None or not bs.recent_weeks:
+                    continue
+                if local_now(hp.timezone).hour != BUDDY_NUDGE_HOUR:
+                    continue
+                if bs.recent_weeks[-1] != "open":
+                    continue  # kept already, or paused: nothing to say
+                today = local_today(bp.timezone)
+                week = week_start(today, bp.week_starts_on)
+                days_left = (week + timedelta(days=6) - today).days + 1
+                needed = bs.this_week_target - bs.this_week_days
+                if not 0 < needed <= days_left <= 2:
+                    continue
+                nid = await notify(
+                    db,
+                    helper,
+                    kind="buddy_at_risk",
+                    category="social",
+                    title=f"@{bp.handle} needs {needed} more this week",
+                    body="Your buddy streak rides on it. "
+                    "A quick word of encouragement goes a long way.",
+                    url="/buddies",
+                    actor_id=buddy,
+                    dedupe_key=f"buddy-risk:{pair.id}:{buddy}:{week.isoformat()}",
+                )
+                note_ids += [nid] if nid else []
+        await db.commit()
+    return note_ids
+
+
 async def monthly_backup() -> list[UUID]:
     """09:00 local on the 1st: remind the people who opted in to download a
     copy of their data. Nothing is created for anyone who has not opted in,
@@ -326,6 +389,7 @@ async def tick() -> None:
         ("digest", weekly_digest),
         ("challenges", resolve_challenges),
         ("backup", monthly_backup),
+        ("buddies", buddy_nudges),
         ("purge", purge_deleted_accounts),
         ("housekeeping", housekeeping),
     )

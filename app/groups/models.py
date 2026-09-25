@@ -76,7 +76,9 @@ class Challenge(Base):
 
     __tablename__ = "challenges"
     __table_args__ = (
-        CheckConstraint("kind IN ('active_days', 'weekly_target')", name="ck_challenge_kind"),
+        CheckConstraint(
+            "kind IN ('active_days', 'weekly_target', 'plan_sessions')", name="ck_challenge_kind"
+        ),
         CheckConstraint("ends_on >= starts_on", name="ck_challenge_window"),
     )
 
@@ -101,6 +103,10 @@ class Challenge(Base):
     invite_code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # For plan_sessions: the plan everyone follows, in the shareable format
+    # (routines embedded by value), copied into each participant's plans on
+    # joining. Score = sessions of their copy completed in the window.
+    plan: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class ChallengeParticipant(Base):
@@ -119,3 +125,20 @@ class ChallengeParticipant(Base):
     final_rank: Mapped[int | None] = mapped_column(Integer)
     completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GroupAnnouncement(Base):
+    """A note from a group's owner or admins to its members. Members can't
+    post, so there is nothing to moderate between members; announcements
+    are plain text, rendered as text."""
+
+    __tablename__ = "group_announcements"
+
+    group_id: Mapped[UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    author_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

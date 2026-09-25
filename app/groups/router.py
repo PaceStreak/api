@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -24,7 +24,13 @@ from app.database import get_db
 from app.game.joint import joint_streak
 from app.game.models import UserStats
 from app.game.service import snapshot
-from app.groups.models import Challenge, ChallengeParticipant, Group, GroupMember
+from app.groups.models import (
+    Challenge,
+    ChallengeParticipant,
+    Group,
+    GroupAnnouncement,
+    GroupMember,
+)
 from app.notifications.service import deliver, notify
 from app.profile.models import Profile
 from app.profile.service import get_profile
@@ -32,7 +38,17 @@ from app.social.models import ActivityEvent, Kudos
 from app.social.router import clean_text, person, require_social
 from app.social.service import not_blocked_clause, social_ok_clause
 from app.training.library import DISCIPLINE_IDS
-from app.training.models import Workout
+from app.training.models import TrainingPlan, Workout
+from app.training.plan_templates import PLAN_TEMPLATE_BY_ID
+from app.training.plans import (
+    SharedPlan,
+    check_plan_room,
+    materialize,
+    plan_view,
+    run_only,
+    shareable,
+    template_shared,
+)
 
 router = APIRouter(tags=["groups"])
 
@@ -419,6 +435,26 @@ async def coach_view(
     for m, p in members:
         snap = await snapshot(db, m.user_id)
         main = snap.chains[0].result
+        running = (
+            await db.execute(
+                select(TrainingPlan).where(
+                    TrainingPlan.user_id == m.user_id,
+                    TrainingPlan.started_on.is_not(None),
+                    TrainingPlan.finished_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        plan_progress = None
+        if running is not None:
+            view = await plan_view(db, running, snap.profile)
+            plan_progress = {
+                "name": running.name,
+                "week": (view["current_week"] or 0) + 1,
+                "weeks": view["weeks_count"],
+                "done": view["progress"]["done"] if view["progress"] else 0,
+                "due": view["progress"]["due"] if view["progress"] else 0,
+                "from_this_coach": running.assigned_by == user.id,
+            }
         recent = (
             (
                 await db.execute(
@@ -439,6 +475,7 @@ async def coach_view(
                 "this_week_target": main.this_week_target,
                 "at_risk": main.at_risk,
                 "consistency": main.consistency,
+                "plan": plan_progress,
                 "weeks": [
                     {
                         "week_start": c.week_start.isoformat(),
@@ -529,8 +566,12 @@ async def group_feed(
 class ChallengeIn(BaseModel):
     title: str = Field(min_length=3, max_length=60)
     description: str | None = Field(default=None, max_length=280)
-    kind: str = Field(default="active_days", pattern="^(active_days|weekly_target)$")
+    kind: str = Field(default="active_days", pattern="^(active_days|weekly_target|plan_sessions)$")
     target: int | None = Field(default=None, ge=1, le=366)
+    # plan_sessions: follow one plan together, from a template or one of the
+    # creator's own plans. The window is the plan's length.
+    plan_template_id: str | None = Field(default=None, max_length=40)
+    plan_id: UUID | None = None
     disciplines: list[str] = Field(default_factory=list, max_length=11)
     starts_on: date
     ends_on: date
@@ -587,6 +628,8 @@ async def _scores(db: AsyncSession, c: Challenge, today: date) -> list[dict]:
             if c.disciplines:
                 stmt = stmt.where(Workout.discipline.in_(c.disciplines))
             score = (await db.execute(stmt)).scalar_one()
+        elif c.kind == "plan_sessions":
+            score = await _plan_score(db, c, part.user_id, profile)
         else:
             snap = await snapshot(db, part.user_id)
             wso = snap.profile.week_starts_on
@@ -613,6 +656,45 @@ async def _scores(db: AsyncSession, c: Challenge, today: date) -> list[dict]:
             }
         )
     return ranked
+
+
+async def _plan_score(db: AsyncSession, c: Challenge, user_id: UUID, profile: Profile) -> int:
+    """Sessions of this participant's copy of the challenge plan that are
+    done, app-logged only (imports never count for a challenge). The copy
+    exists only for this challenge and runs exactly its weeks, so every
+    completed session counts - including one done on another day of its
+    week, the same forgiveness plans always give. A deleted copy scores 0."""
+    plan = (
+        await db.execute(
+            select(TrainingPlan).where(
+                TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id
+            )
+        )
+    ).scalar_one_or_none()
+    if plan is None or plan.started_on is None:
+        return 0
+    view = await plan_view(db, plan, profile, app_only=True)
+    return view["progress"]["done"] if view["progress"] else 0
+
+
+async def _join_plan(db: AsyncSession, c: Challenge, user_id: UUID) -> None:
+    """Give a participant their own copy of the challenge plan and run it
+    from the challenge's first week, in their own week. Rejoining reuses
+    the copy they had. Caller commits."""
+    if c.kind != "plan_sessions" or not c.plan:
+        return
+    profile = await get_profile(db, user_id)
+    plan = (
+        await db.execute(
+            select(TrainingPlan).where(
+                TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id
+            )
+        )
+    ).scalar_one_or_none()
+    if plan is None:
+        await check_plan_room(db, user_id)
+        plan = await materialize(db, user_id, SharedPlan.model_validate(c.plan), challenge_id=c.id)
+    await run_only(db, plan, week_start(c.starts_on, profile.week_starts_on))
 
 
 async def _visible_challenge(db: AsyncSession, challenge_id: UUID, user: User) -> Challenge:
@@ -645,6 +727,7 @@ def _challenge_out(
         "starts_on": c.starts_on.isoformat(),
         "ends_on": c.ends_on.isoformat(),
         "group_id": str(c.group_id) if c.group_id else None,
+        "plan_name": (c.plan or {}).get("name") if c.kind == "plan_sessions" else None,
         "status": _challenge_status(c, today),
         "joined": me_joined,
         "is_creator": is_creator,
@@ -705,10 +788,35 @@ async def create_challenge(
         member = await _membership(db, body.group_id, user.id)
         if member is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    challenge = Challenge(creator_id=user.id, invite_code=invite_code(), **body.model_dump())
+    fields = body.model_dump(exclude={"plan_template_id", "plan_id"})
+    if body.kind == "plan_sessions":
+        if body.plan_template_id:
+            template = PLAN_TEMPLATE_BY_ID.get(body.plan_template_id)
+            if template is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "No such template")
+            shared = template_shared(template)
+        elif body.plan_id:
+            source = await db.get(TrainingPlan, body.plan_id)
+            if source is None or source.user_id != user.id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "No such plan")
+            shared = SharedPlan.model_validate(await shareable(db, source))
+        else:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Choose the plan everyone will follow"
+            )
+        # The window is the plan: whole weeks from the first day.
+        fields["ends_on"] = body.starts_on + timedelta(weeks=len(shared.weeks)) - timedelta(days=1)
+        if (fields["ends_on"] - body.starts_on).days + 1 > MAX_CHALLENGE_DAYS:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Plan challenges last up to 13 weeks"
+            )
+        fields["plan"] = shared.model_dump(mode="json")
+        fields["target"] = fields.get("target") or sum(len(w) for w in shared.weeks)
+    challenge = Challenge(creator_id=user.id, invite_code=invite_code(), **fields)
     db.add(challenge)
     await db.flush()
     db.add(ChallengeParticipant(challenge_id=challenge.id, user_id=user.id))
+    await _join_plan(db, challenge, user.id)
     await db.commit()
     return _challenge_out(challenge, today, True, True, 1)
 
@@ -762,6 +870,7 @@ async def _join(db: AsyncSession, c: Challenge, user: User) -> None:
         db.add(ChallengeParticipant(challenge_id=c.id, user_id=user.id))
     else:
         part.left_at = None
+    await _join_plan(db, c, user.id)
 
 
 @router.post("/challenges/join")
@@ -808,6 +917,13 @@ async def leave_challenge(
     ).scalar_one_or_none()
     if part is not None:
         part.left_at = utcnow()
+        # Their copy of a challenge plan stays theirs, stopped; they can
+        # restart it on their own.
+        await db.execute(
+            update(TrainingPlan)
+            .where(TrainingPlan.user_id == user.id, TrainingPlan.challenge_id == challenge_id)
+            .values(started_on=None)
+        )
         await db.commit()
 
 
@@ -858,7 +974,11 @@ async def resolve_finished(db: AsyncSession, today: date) -> list[UUID]:
             part.completed = bool(c.target and row["score"] >= c.target) or (
                 not c.target and row["score"] > 0
             )
-            unit = "active days" if c.kind == "active_days" else "weeks kept"
+            unit = {
+                "active_days": "active days",
+                "weekly_target": "weeks kept",
+                "plan_sessions": "plan sessions done",
+            }[c.kind]
             nid = await notify(
                 db,
                 part.user_id,
@@ -883,3 +1003,178 @@ async def resolve_finished(db: AsyncSession, today: date) -> list[UUID]:
                 )
         c.resolved_at = utcnow()
     return note_ids
+
+
+# --- coaching: suggest a plan ------------------------------------------------------
+
+
+class AssignIn(BaseModel):
+    plan_template_id: str | None = Field(default=None, max_length=40)
+    plan_id: UUID | None = None
+    note: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/groups/{group_id}/members/{member_id}/plan", status_code=201)
+async def assign_plan(
+    group_id: UUID,
+    member_id: UUID,
+    body: AssignIn,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A coach suggests a plan to a member who shares their training with
+    them. It lands in the member's plans, not started: starting it, editing
+    it or deleting it is the member's call. Consent is the same switch that
+    lets the coach see their sessions, and turning it off stops this too."""
+    group, me = await _group_for_member(db, group_id, user)
+    if group.kind != "coaching" or me.role not in ("owner", "admin", "coach"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Coaches only")
+    member = await _membership(db, group_id, member_id)
+    if member is None or not member.shares_with_coach or member_id == user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only members who share their training with you"
+        )
+    await enforce("assign-plan", user.id, 20, 86_400)
+    if body.plan_template_id:
+        template = PLAN_TEMPLATE_BY_ID.get(body.plan_template_id)
+        if template is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No such template")
+        shared = template_shared(template)
+    elif body.plan_id:
+        source = await db.get(TrainingPlan, body.plan_id)
+        if source is None or source.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No such plan")
+        shared = SharedPlan.model_validate(await shareable(db, source))
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Choose a plan to suggest")
+    await check_plan_room(db, member_id)
+    plan = await materialize(db, member_id, shared, assigned_by=user.id)
+    coach = await get_profile(db, user.id)
+    nid = await notify(
+        db,
+        member_id,
+        kind="plan_assigned",
+        category="groups",
+        title=f"@{coach.handle} suggested a plan: {plan.name}",
+        body=clean_text(body.note)
+        or "It's in your plans. Start it when you're ready, or not at all.",
+        url=f"/plans/{plan.id}",
+        actor_id=user.id,
+        data={"group_id": str(group.id)},
+    )
+    await db.commit()
+    background.add_task(deliver, [nid] if nid else [])
+    return {"id": str(plan.id)}
+
+
+# --- announcements -----------------------------------------------------------------
+
+
+class AnnouncementIn(BaseModel):
+    body: str = Field(min_length=1, max_length=500)
+    pinned: bool = False
+
+
+def _announcement_out(a: GroupAnnouncement, author: Profile | None) -> dict:
+    return {
+        "id": str(a.id),
+        "body": a.body,
+        "pinned": a.pinned,
+        "created_at": a.created_at.isoformat(),
+        "author": person(author) if author else None,
+    }
+
+
+@router.get("/groups/{group_id}/announcements")
+async def list_announcements(
+    group_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    await _group_for_member(db, group_id, user)
+    rows = (
+        await db.execute(
+            select(GroupAnnouncement, Profile)
+            .outerjoin(Profile, Profile.user_id == GroupAnnouncement.author_id)
+            .where(GroupAnnouncement.group_id == group_id)
+            .order_by(GroupAnnouncement.pinned.desc(), GroupAnnouncement.created_at.desc())
+            .limit(30)
+        )
+    ).all()
+    return [_announcement_out(a, p) for a, p in rows]
+
+
+@router.post("/groups/{group_id}/announcements", status_code=201)
+async def post_announcement(
+    group_id: UUID,
+    body: AnnouncementIn,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owners and admins only, so members never message each other through
+    the group and there is nothing between members to moderate. Everyone
+    else in the group gets a notification (muted groups: inbox only)."""
+    group, me = await _group_for_member(db, group_id, user)
+    if me.role not in ("owner", "admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner or an admin can post")
+    await enforce("announce", group.id, 5, 86_400)
+    text = clean_text(body.body)
+    if not text:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Say something")
+    if body.pinned:
+        await db.execute(
+            update(GroupAnnouncement)
+            .where(GroupAnnouncement.group_id == group.id)
+            .values(pinned=False)
+        )
+    item = GroupAnnouncement(group_id=group.id, author_id=user.id, body=text, pinned=body.pinned)
+    db.add(item)
+    await db.flush()
+    members = (
+        (
+            await db.execute(
+                select(GroupMember.user_id).where(
+                    GroupMember.group_id == group.id, GroupMember.user_id != user.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    note_ids = []
+    for member_id in members:
+        nid = await notify(
+            db,
+            member_id,
+            kind="group_announcement",
+            category="groups",
+            title=f"{group.name}: {text[:80]}",
+            body=text if len(text) > 80 else None,
+            url=f"/groups/{group.id}",
+            actor_id=user.id,
+            data={"group_id": str(group.id)},
+            dedupe_key=f"announce:{item.id}",
+        )
+        if nid:
+            note_ids.append(nid)
+    await db.commit()
+    background.add_task(deliver, note_ids)
+    author = await get_profile(db, user.id)
+    return _announcement_out(item, author)
+
+
+@router.delete("/groups/{group_id}/announcements/{announcement_id}", status_code=204)
+async def delete_announcement(
+    group_id: UUID,
+    announcement_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    group, me = await _group_for_member(db, group_id, user)
+    if me.role not in ("owner", "admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner or an admin can remove it")
+    item = await db.get(GroupAnnouncement, announcement_id)
+    if item is None or item.group_id != group.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    await db.delete(item)
+    await db.commit()

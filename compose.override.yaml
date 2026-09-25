@@ -18,6 +18,10 @@ services:
     # remove.
     volumes:
       - ./app:/srv/app:ro
+      # Migrations too: without this the container only sees the revisions
+      # baked in at build time, and `make migrate` silently stops short of
+      # head while the models already expect the new tables.
+      - ./alembic:/srv/alembic:ro
 
     # The image's dependencies are frozen at build time. After changing
     # pyproject.toml or uv.lock, rebuild - the mount only covers source:

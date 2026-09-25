@@ -44,10 +44,12 @@ from app.training.models import (
     BodyMetric,
     CustomExercise,
     StreakChain,
+    StreakPause,
     StreakRepair,
     Workout,
     WorkoutSet,
 )
+from app.training.pauses import Span, paused_days
 
 HEATMAP_DAYS = 371  # 53 weeks: a full year with the partial weeks at each end
 
@@ -74,6 +76,8 @@ class Snapshot:
     last_active: date | None
     repair_used_this_month: bool
     exercise_names: dict[str, str] = field(default_factory=dict)
+    pauses: list[StreakPause] = field(default_factory=list)
+    paused_today: bool = False
 
 
 def exercise_meta(exercise_id: str, customs: dict[str, CustomExercise]) -> tuple[str, str, str]:
@@ -158,6 +162,17 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         .all()
     )
     repair_used = any(r.month == month_key(today) for r in repairs)
+    pauses = list(
+        (
+            await db.execute(
+                select(StreakPause)
+                .where(StreakPause.user_id == user_id)
+                .order_by(StreakPause.starts_on)
+            )
+        ).scalars()
+    )
+    spans = [Span(p.starts_on, p.ends_on) for p in pauses]
+    sheltered = paused_days(spans)
 
     # --- streaks ---------------------------------------------------------
     views: list[ChainView] = []
@@ -171,6 +186,7 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
             target_resolver(chain.target_history),
             repaired=[r.week_start for r in repairs if r.chain_id == chain.id],
             repair_available=not repair_used,
+            paused_days=sheltered,
         )
         views.append(ChainView(chain, result))
     main = views[0]
@@ -400,6 +416,8 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         last_active=active_dates[-1] if active_dates else None,
         repair_used_this_month=repair_used,
         exercise_names=names,
+        pauses=pauses,
+        paused_today=any(sp.is_active(today) for sp in spans),
     )
 
 
@@ -731,6 +749,7 @@ def chain_payload(view: ChainView, weeks: int = 26) -> dict:
         "repairable_week": r.repairable_week.isoformat() if r.repairable_week else None,
         "run_started": r.run_started.isoformat() if r.run_started else None,
         "consistency": r.consistency,
+        "paused_now": r.paused_now,
         "weeks": [
             {
                 "week_start": c.week_start.isoformat(),
@@ -741,6 +760,20 @@ def chain_payload(view: ChainView, weeks: int = 26) -> dict:
             }
             for c in r.weeks[-weeks:]
         ],
+    }
+
+
+def pause_payload(pause: StreakPause, today: date) -> dict:
+    span = Span(pause.starts_on, pause.ends_on)
+    return {
+        "id": str(pause.id),
+        "starts_on": pause.starts_on.isoformat(),
+        "ends_on": pause.ends_on.isoformat() if pause.ends_on else None,
+        "effective_end": span.effective_end().isoformat(),
+        "reason": pause.reason,
+        "note": pause.note,
+        "active": span.is_active(today),
+        "upcoming": pause.starts_on > today,
     }
 
 

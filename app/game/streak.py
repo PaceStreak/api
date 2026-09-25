@@ -14,6 +14,13 @@ Three things forgive a bad week, in this order:
    two) and spent automatically on a missed week - but only when there is a
    streak to protect, so a freeze is never wasted on a week with no run.
 
+A declared pause (injury, illness, life) sits outside that ladder. A week the
+pause covers for at least PAUSE_MIN_DAYS days, and which was not kept anyway,
+is "paused": it neither breaks the run nor extends it, spends no freeze, earns
+no freeze, pays no XP and is left out of the consistency score. It exists so
+nobody trains hurt to protect a number, which is the whole reason the unit is
+a week in the first place.
+
 Everything is recomputed from history on every read. There is no cron that
 "closes" a week, so there is no stored state that can drift from the logs.
 """
@@ -29,6 +36,9 @@ FREEZE_CAP = 2
 LOOKBACK_WEEKS = 260
 REPAIR_WINDOW_WEEKS = 2
 MILESTONES = (4, 8, 12, 26, 52, 104, 156)
+# A pause must cover most of a week to shelter it, so a one-day pause dropped
+# into every week cannot turn a three-day target into a two-day one.
+PAUSE_MIN_DAYS = 4
 
 
 @dataclass
@@ -36,7 +46,7 @@ class WeekCell:
     week_start: date
     days: int
     target: int
-    # kept | frozen | repaired | missed | open (current, not yet met)
+    # kept | frozen | repaired | paused | missed | open (current, not yet met)
     status: str
     run: int = 0
 
@@ -66,6 +76,7 @@ class ChainResult:
     run_started: date | None
     consistency: int
     milestones_hit: list[tuple[int, date]] = field(default_factory=list)
+    paused_now: bool = False
 
 
 def target_resolver(history: list[dict], default: int = 3) -> Callable[[date], int]:
@@ -98,10 +109,17 @@ def compute_chain(
     target_for: Callable[[date], int],
     repaired: Iterable[date] = (),
     repair_available: bool = False,
+    paused_days: Iterable[date] = (),
 ) -> ChainResult:
     days = set(active_days)
     repaired_weeks = set(repaired)
     current_week = week_start(today, week_starts_on)
+
+    paused_per_week: dict[date, int] = {}
+    for d in set(paused_days):
+        w = week_start(d, week_starts_on)
+        paused_per_week[w] = paused_per_week.get(w, 0) + 1
+    paused_weeks = {w for w, n in paused_per_week.items() if n >= PAUSE_MIN_DAYS}
 
     per_week: dict[date, int] = {}
     for d in days:
@@ -126,10 +144,12 @@ def compute_chain(
     while w <= current_week:
         count = per_week.get(w, 0)
         target = max(1, target_for(w))
-        if w == current_week:
-            status = "kept" if count >= target else "open"
-        elif count >= target:
+        if count >= target:
             status = "kept"
+        elif w in paused_weeks:
+            status = "paused"
+        elif w == current_week:
+            status = "open"
         elif w in repaired_weeks:
             status = "repaired"
         elif freezes > 0 and run > 0:
@@ -161,7 +181,8 @@ def compute_chain(
     week_end = current_week + timedelta(days=6)
     trained_today = today in days
     days_left = (week_end - today).days + (0 if trained_today else 1)
-    needed = max(0, this_week.target - this_week.days)
+    this_week_paused = this_week.status == "paused"
+    needed = 0 if this_week_paused else max(0, this_week.target - this_week.days)
     at_risk = needed > 0 and needed >= days_left
     will_freeze = needed > days_left and freezes > 0 and run > 0
 
@@ -173,7 +194,7 @@ def compute_chain(
                 repairable = cell.week_start
                 break
 
-    closed_cells = cells[:-1][-4:]
+    closed_cells = [c for c in cells[:-1] if c.status != "paused"][-4:]
     consistency = (
         round(sum(c.score for c in closed_cells) / len(closed_cells)) if closed_cells else 0
     )
@@ -193,4 +214,5 @@ def compute_chain(
         run_started=run_started,
         consistency=consistency,
         milestones_hit=milestones,
+        paused_now=this_week_paused,
     )

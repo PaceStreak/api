@@ -6,6 +6,7 @@ thing at API_V1_PREFIX - it does not know or care what lives underneath.
 
 from fastapi import APIRouter
 
+from app.account.calendar import router as calendar_router
 from app.account.router import router as account_router
 from app.admin.router import router as admin_router
 from app.auth.router import router as auth_router
@@ -22,6 +23,7 @@ router.include_router(auth_router)
 router.include_router(profile_router)
 router.include_router(stats_router)
 router.include_router(account_router)
+router.include_router(calendar_router)
 router.include_router(training_router)
 router.include_router(social_router)
 router.include_router(groups_router)

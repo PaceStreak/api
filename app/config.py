@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # --- email verification & password reset --------------------------------
     # Public URL of app.pacestreak.com, which handles the links emailed out.
     frontend_url: str = Field(default="http://localhost:5173")
+    # Public URL of this API. Only used to build links that leave the app and
+    # are fetched by something else - today, the private calendar feed URL
+    # that a calendar app polls.
+    public_api_url: str = Field(default="http://localhost:8000")
     require_verified_email: bool = Field(default=False)
     email_verify_token_hours: int = Field(default=24)
     password_reset_token_minutes: int = Field(default=30)

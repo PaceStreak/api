@@ -2,9 +2,9 @@
 and the weekly aggregates behind the progress charts."""
 
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,8 @@ from app.common.time import season_bounds, season_id, week_start
 from app.database import get_db
 from app.game import achievements as ach
 from app.game.models import PersonalRecord, UserAchievement
-from app.game.service import chain_payload, record_label, snapshot
+from app.game.recap import build_recap, last_closed_week
+from app.game.service import chain_payload, pause_payload, record_label, snapshot
 from app.game.xp import compute_xp
 from app.profile.models import Profile
 from app.training.library import EXERCISE_BY_ID, MUSCLES
@@ -39,6 +40,9 @@ async def stats(user: User = Depends(get_current_user), db: AsyncSession = Depen
         "season": {"id": sid, "starts_on": start.isoformat(), "ends_on": end.isoformat()},
         "chains": [chain_payload(v) for v in snap.chains],
         "repair_available": not snap.repair_used_this_month,
+        "paused_today": snap.paused_today,
+        "pauses": [pause_payload(p, snap.today) for p in snap.pauses[-12:]],
+        "training_days": snap.profile.training_days,
         "heatmap": snap.heatmap,
         "totals": {
             "sessions": ctx.sessions,
@@ -52,6 +56,24 @@ async def stats(user: User = Depends(get_current_user), db: AsyncSession = Depen
         },
         "last_active": snap.last_active.isoformat() if snap.last_active else None,
     }
+
+
+@router.get("/recap")
+async def recap(
+    week: date | None = Query(default=None, description="Any day in the week; default last week"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One closed (or the current) week, summed up. Attendance only."""
+    snap = await snapshot(db, user.id)
+    target = week or last_closed_week(snap)
+    if target > snap.today:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That week has not started")
+    result = await build_recap(db, snap, target)
+    await db.commit()
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nothing to recap for that week")
+    return result
 
 
 @router.get("/xp")

@@ -1,9 +1,20 @@
 """Workouts, the exercise library, routines, body metrics and streak chains."""
 
-from datetime import date, datetime, timedelta
-from uuid import UUID
+from datetime import UTC, date, datetime, timedelta
+from uuid import UUID, uuid5
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,12 +23,13 @@ from app.auth.models import User
 from app.common.limits import enforce
 from app.common.time import local_date, local_today, month_key, utcnow, week_start
 from app.database import get_db
-from app.game.service import chain_payload, recompute, snapshot
+from app.game.service import chain_payload, pause_payload, recompute, snapshot
 from app.notifications.service import deliver
 from app.profile.models import Profile
 from app.profile.service import get_chains, get_profile, set_chain_target
 from app.social.models import ActivityEvent
 from app.social.service import emit_event
+from app.training.importers import MAX_BYTES, ImportFormatError, check, parse
 from app.training.library import (
     CUSTOM_PREFIX,
     DISCIPLINES,
@@ -30,10 +42,19 @@ from app.training.models import (
     CustomExercise,
     Routine,
     StreakChain,
+    StreakPause,
     StreakRepair,
     Workout,
     WorkoutSet,
     sync_seq,
+)
+from app.training.pauses import (
+    PAUSE_BUDGET_DAYS,
+    PauseError,
+    Span,
+    days_used,
+    end_date_for,
+    validate,
 )
 from app.training.schemas import (
     BatchIn,
@@ -41,6 +62,7 @@ from app.training.schemas import (
     ChainIn,
     ChainPatch,
     CustomExerciseIn,
+    PauseIn,
     RepairIn,
     RoutineIn,
     WorkoutIn,
@@ -867,3 +889,210 @@ async def repair_week(
     outcome = await recompute(db, user.id, notify=False)
     await db.commit()
     return {"outcome": outcome.public()}
+
+
+# --- file import -------------------------------------------------------------------------
+
+# Imported sessions get a deterministic id from who, when and what, so
+# uploading the same file twice - or the same run as a GPX and then as a FIT
+# - lands on the same row instead of doubling a week's count.
+IMPORT_NAMESPACE = UUID("6f1c2a52-6b8e-4c0e-9d7e-3a1f5b8c9e01")
+DUPLICATE_WINDOW = timedelta(minutes=3)
+
+
+@router.post("/workouts/import")
+async def import_file(
+    file: UploadFile = File(...),
+    discipline: str | None = Form(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import sessions from a GPX, FIT or CSV file.
+
+    Imported sessions count for the personal streak and history but are
+    marked `source="import"`: they never count for challenges, never post to
+    the feed, and records inside them earn nothing - backfilling a year of
+    history must not be a way to top a board."""
+    await enforce("import_file", user.id, 30, 3600)
+    if discipline is not None and discipline not in DISCIPLINE_BY_ID:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown discipline")
+    data = await file.read(MAX_BYTES + 1)
+    profile = await get_profile(db, user.id)
+    try:
+        parsed = parse(file.filename or "", data, profile.timezone, discipline)
+    except ImportFormatError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+
+    now = utcnow()
+    problems = list(parsed.problems)
+    imported = duplicates = 0
+    for session in sorted(parsed.sessions, key=lambda s: s.started_at):
+        reason = check(session, now)
+        if reason:
+            problems.append(f"Session on {session.started_at.date().isoformat()} {reason}.")
+            continue
+        workout_id = uuid5(
+            IMPORT_NAMESPACE,
+            f"{user.id}:{session.discipline}:{session.started_at.astimezone(UTC).isoformat()}",
+        )
+        clash = (
+            await db.execute(
+                select(Workout.id).where(
+                    Workout.user_id == user.id,
+                    Workout.deleted_at.is_(None),
+                    Workout.started_at.between(
+                        session.started_at - DUPLICATE_WINDOW,
+                        session.started_at + DUPLICATE_WINDOW,
+                    ),
+                )
+            )
+        ).first()
+        existing = await db.get(Workout, workout_id)
+        if clash is not None or (existing is not None and existing.deleted_at is None):
+            duplicates += 1
+            continue
+        workout = existing or Workout(id=workout_id, user_id=user.id)
+        if existing is None:
+            db.add(workout)
+        else:
+            workout.seq = sync_seq.next_value()
+        workout.discipline = session.discipline
+        workout.title = session.title
+        workout.notes = session.notes
+        workout.started_at = session.started_at
+        workout.local_date = local_date(session.started_at, profile.timezone)
+        workout.duration_sec = session.duration_sec
+        workout.distance_m = session.distance_m
+        workout.elevation_m = session.elevation_m
+        workout.effort = session.effort
+        workout.feel = session.feel
+        workout.source = "import"
+        workout.client_updated_at = now
+        workout.deleted_at = None
+        workout.sets = []
+        await db.flush()
+        imported += 1
+
+    if imported:
+        await recompute(db, user.id, notify=False)
+    await db.commit()
+    return {
+        "format": parsed.format,
+        "found": len(parsed.sessions),
+        "imported": imported,
+        "duplicates": duplicates,
+        "problems": problems[:50],
+        "more_problems": max(0, len(problems) - 50),
+    }
+
+
+# --- pauses ------------------------------------------------------------------------------
+
+
+async def _pauses(db: AsyncSession, user_id: UUID) -> list[StreakPause]:
+    return list(
+        (
+            await db.execute(
+                select(StreakPause)
+                .where(StreakPause.user_id == user_id)
+                .order_by(StreakPause.starts_on)
+            )
+        ).scalars()
+    )
+
+
+async def _pause_state(db: AsyncSession, user: User) -> dict:
+    profile = await get_profile(db, user.id)
+    today = local_today(profile.timezone)
+    pauses = await _pauses(db, user.id)
+    used = days_used([Span(p.starts_on, p.ends_on) for p in pauses], today)
+    return {
+        "pauses": [pause_payload(p, today) for p in pauses],
+        "budget": {"days_used": used, "days_allowed": PAUSE_BUDGET_DAYS},
+    }
+
+
+@router.get("/pauses")
+async def list_pauses(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    state = await _pause_state(db, user)
+    await db.commit()
+    return state
+
+
+@router.post("/pauses", status_code=201)
+async def create_pause(
+    body: PauseIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Declare a break. Weeks it covers for four days or more no longer break
+    the streak, and reminders stop while it runs."""
+    await enforce("pause", user.id, 20, 86400)
+    profile = await get_profile(db, user.id)
+    today = local_today(profile.timezone)
+    existing = [Span(p.starts_on, p.ends_on) for p in await _pauses(db, user.id)]
+    try:
+        validate(Span(body.starts_on, body.ends_on), existing, today)
+    except PauseError as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    pause = StreakPause(
+        user_id=user.id,
+        starts_on=body.starts_on,
+        ends_on=body.ends_on,
+        reason=body.reason,
+        note=(body.note or "").strip() or None,
+    )
+    db.add(pause)
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()
+    return pause_payload(pause, today)
+
+
+async def _own_pause(db: AsyncSession, user: User, pause_id: UUID) -> StreakPause:
+    pause = await db.get(StreakPause, pause_id)
+    if pause is None or pause.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    return pause
+
+
+@router.post("/pauses/{pause_id}/end")
+async def end_pause(
+    pause_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Back today. Today is the first day that counts again; a pause that has
+    not started yet is simply removed."""
+    pause = await _own_pause(db, user, pause_id)
+    profile = await get_profile(db, user.id)
+    today = local_today(profile.timezone)
+    span = Span(pause.starts_on, pause.ends_on)
+    if span.effective_end() < today:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That pause has already ended")
+    end = end_date_for(span, today)
+    if end is None:
+        await db.delete(pause)
+    else:
+        pause.ends_on = end
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()
+    return await _pause_state(db, user)
+
+
+@router.delete("/pauses/{pause_id}", status_code=204)
+async def delete_pause(
+    pause_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Remove a pause that has not started, or undo one declared by mistake
+    within a day. A pause that has already sheltered weeks is ended, not
+    deleted - deleting it would silently break a streak it has been holding."""
+    pause = await _own_pause(db, user, pause_id)
+    profile = await get_profile(db, user.id)
+    today = local_today(profile.timezone)
+    recent = pause.created_at >= utcnow() - timedelta(hours=24)
+    if pause.starts_on <= today and not recent:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A pause that has started can be ended, not deleted"
+        )
+    await db.delete(pause)
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()

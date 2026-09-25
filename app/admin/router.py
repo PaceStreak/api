@@ -27,6 +27,7 @@ from app.game.models import UserStats
 from app.groups.models import Challenge, Group
 from app.notifications.service import deliver, notify
 from app.profile.models import Profile
+from app.profile.router import _check_handle, _handle_taken, is_reserved, mentions_brand
 from app.social.models import ActivityEvent, Comment, Report
 from app.training.models import Workout
 
@@ -253,6 +254,7 @@ async def users(
             "is_verified": u.is_verified,
             "created_at": u.created_at.isoformat(),
             "social_suspended": bool(p and p.social_suspended_at),
+            "official": bool(p and p.is_official),
             "deletion_scheduled_at": p.deletion_scheduled_at.isoformat()
             if p and p.deletion_scheduled_at
             else None,
@@ -304,6 +306,59 @@ async def update_user(
     await db.commit()
     await finish_revoke_all(user_id)
     return {"ok": True, **changes}
+
+
+class OfficialIn(BaseModel):
+    official: bool
+    # Granting: the handle the official account should hold (reserved handles
+    # such as "pacestreak" are allowed here and nowhere else). Revoking while
+    # holding a reserved handle: the ordinary handle to move it to.
+    handle: str | None = Field(default=None, max_length=31)
+
+
+@router.post("/users/{user_id}/official")
+async def set_official(
+    user_id: UUID,
+    body: OfficialIn,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark an account as PaceStreak's own. This is the only path by which a
+    reserved handle can be assigned, so the reservation itself never has to be
+    loosened, and every use of it is in the audit log."""
+    profile = (
+        await db.execute(select(Profile).where(Profile.user_id == user_id))
+    ).scalar_one_or_none()
+    if profile is None or profile.onboarded_at is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+    handle = None
+    if body.handle is not None:
+        handle = _check_handle(body.handle, allow_reserved=body.official)
+        if await _handle_taken(db, handle, user_id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "That handle is taken")
+    if not body.official and handle is None and profile.handle and is_reserved(profile.handle):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This account holds a reserved handle; give it an ordinary one to revoke",
+        )
+
+    before = {"official": profile.is_official, "handle": profile.handle}
+    profile.is_official = body.official
+    if handle is not None:
+        profile.handle = handle
+    if not body.official and profile.display_name and mentions_brand(profile.display_name):
+        profile.display_name = None
+    await audit(
+        db,
+        admin,
+        "user.official",
+        "user",
+        str(user_id),
+        {"before": before, "after": {"official": profile.is_official, "handle": profile.handle}},
+    )
+    await db.commit()
+    return {"official": profile.is_official, "handle": profile.handle}
 
 
 @router.get("/audit")

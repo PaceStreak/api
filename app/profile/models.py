@@ -51,6 +51,19 @@ class Profile(Base):
     # person has no public presence at all.
     handle: Mapped[str | None] = mapped_column(String(30), unique=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(50))
+    # Set only by an admin (POST /v1/admin/users/{id}/official). It is what
+    # lets the brand hold a reserved handle such as @pacestreak without the
+    # reservation being loosened for anyone else, and what the app shows a
+    # verified mark for.
+    is_official: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+
+    # Private calendar feed. Only a SHA-256 of the token is stored, so a
+    # database leak does not hand out working feed URLs; the token itself is
+    # shown once, when it is created.
+    calendar_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    calendar_token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bio: Mapped[str | None] = mapped_column(String(160))
     # Avatars are a generated colour plus initials. There are no uploaded
     # images anywhere under pacestreak.com - nothing untrusted is hosted there.

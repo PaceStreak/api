@@ -29,12 +29,12 @@ from app.common.time import local_now, local_today, utcnow, week_start
 from app.config import get_settings
 from app.database import AsyncSessionLocal, engine
 from app.game.models import UserStats
+from app.game.recap import build_recap, digest_lines
 from app.game.service import recompute, snapshot
 from app.groups.router import resolve_finished
 from app.notifications.models import Notification
 from app.notifications.service import deliver, notify
 from app.profile.models import Profile
-from app.training.models import Workout
 
 logger = logging.getLogger("app.worker")
 settings = get_settings()
@@ -101,6 +101,9 @@ async def streak_nudges() -> list[UUID]:
         async with AsyncSessionLocal() as db:
             snap = await snapshot(db, profile.user_id)
             today = snap.today
+            if snap.paused_today:
+                # Nobody on a declared injury break gets told to train.
+                continue
             sent_risk = False
             for view in snap.chains:
                 r = view.result
@@ -191,47 +194,18 @@ async def weekly_digest() -> list[UUID]:
         last_week = week_start(now.date(), profile.week_starts_on) - timedelta(days=7)
         async with AsyncSessionLocal() as db:
             snap = await snapshot(db, profile.user_id)
-            main = snap.chains[0]
-            cell = next((c for c in main.result.weeks if c.week_start == last_week), None)
-            sessions = (
-                await db.execute(
-                    select(func.count()).where(
-                        Workout.user_id == profile.user_id,
-                        Workout.deleted_at.is_(None),
-                        Workout.local_date >= last_week,
-                        Workout.local_date < last_week + timedelta(days=7),
-                    )
-                )
-            ).scalar_one()
-            if cell is None and sessions == 0:
+            recap = await build_recap(db, snap, last_week)
+            if recap is None:
                 continue
-            records = sum(
-                1
-                for e in snap.events
-                if e.rewarded and last_week <= e.day < last_week + timedelta(days=7)
-            )
-            verdict = {
-                "kept": "Week kept.",
-                "frozen": "A freeze covered it.",
-                "repaired": "Repaired.",
-                "missed": "Missed - it happens. This week is a fresh one.",
-            }.get(cell.status if cell else "missed", "")
-            lines = [
-                f"{sessions} session{'s' if sessions != 1 else ''} on "
-                f"{cell.days if cell else 0} day{'s' if not cell or cell.days != 1 else ''} "
-                f"against a target of {cell.target if cell else main.chain.target}. {verdict}",
-                f"Streak: {main.result.current} week{'s' if main.result.current != 1 else ''}.",
-            ]
-            if records:
-                lines.append(f"{records} new personal record{'s' if records != 1 else ''}.")
+            title, body = digest_lines(recap)
             nid = await notify(
                 db,
                 profile.user_id,
                 kind="weekly_digest",
                 category="digest",
-                title=f"Your week: {verdict.split(' -')[0].rstrip('.')}",
-                body="\n".join(lines),
-                url="/progress",
+                title=title,
+                body=body,
+                url=f"/recap?week={last_week.isoformat()}",
                 dedupe_key=f"digest:{last_week.isoformat()}",
             )
             await db.commit()

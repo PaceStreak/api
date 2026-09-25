@@ -211,3 +211,11 @@ class ChainPatch(BaseModel):
 
 class RepairIn(BaseModel):
     week_start: date
+
+
+class PauseIn(BaseModel):
+    starts_on: date
+    # Inclusive. Omit for "until I'm back", which runs to the maximum length.
+    ends_on: date | None = None
+    reason: Literal["injury", "illness", "life", "other"] = "injury"
+    note: str | None = Field(default=None, max_length=280)

@@ -53,6 +53,8 @@ def _check_production_config() -> None:
     if settings.reset_db_on_startup:
         problems.append("RESET_DB_ON_STARTUP must be False in production")
 
+    if not settings.public_api_url.startswith("https://"):
+        problems.append("PUBLIC_API_URL must be an https:// URL in production")
     if problems:
         for problem in problems:
             print(f"refusing to start: {problem}", file=sys.stderr)

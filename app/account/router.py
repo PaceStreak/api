@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import zipfile
-from datetime import UTC, timedelta
+from datetime import date, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -23,6 +23,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.account import service as security
+from app.account.calendar import build_calendar
 from app.account.models import SecurityEvent
 from app.auth.dependencies import get_current_db_user, get_current_user
 from app.auth.models import User
@@ -45,10 +46,12 @@ from app.training.models import (
     BodyMetric,
     CustomExercise,
     Routine,
+    StreakPause,
     StreakRepair,
     Workout,
     WorkoutSet,
 )
+from app.training.pauses import REASONS, Span
 
 router = APIRouter(prefix="/me", tags=["account"])
 settings = get_settings()
@@ -162,6 +165,15 @@ async def build_export(db: AsyncSession, user: User) -> dict:
         "repairs": [
             {"chain_id": str(r.chain_id), "week_start": r.week_start.isoformat(), "month": r.month}
             for r in await all_of(StreakRepair, StreakRepair.user_id == uid)
+        ],
+        "pauses": [
+            {
+                "starts_on": p.starts_on.isoformat(),
+                "ends_on": p.ends_on.isoformat() if p.ends_on else None,
+                "reason": p.reason,
+                "note": p.note,
+            }
+            for p in await all_of(StreakPause, StreakPause.user_id == uid)
         ],
         "custom_exercises": [
             {
@@ -325,30 +337,13 @@ async def export(
     await db.commit()
 
     if format == "ics":
-        lines = [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "PRODID:-//PaceStreak//Export//EN",
-            "CALSCALE:GREGORIAN",
-        ]
-        for w in workouts:
-            start = w.started_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-            summary = (w.title or w.discipline.title()).replace(",", r"\,").replace(";", r"\;")
-            if w.distance_m:
-                summary += f" · {w.distance_m / 1000:.1f} km"
-            lines += [
-                "BEGIN:VEVENT",
-                f"UID:{w.id}@pacestreak.com",
-                f"DTSTAMP:{start}",
-                f"DTSTART:{start}",
-                f"DURATION:PT{max(1, (w.duration_sec or 1800) // 60)}M",
-                f"SUMMARY:{summary}",
-                "END:VEVENT",
-            ]
-        lines.append("END:VCALENDAR")
+        pauses = list(
+            (await db.execute(select(StreakPause).where(StreakPause.user_id == user.id))).scalars()
+        )
+        body = build_calendar("PaceStreak training", list(workouts), pauses)
         return Response(
-            "\r\n".join(lines) + "\r\n",
-            media_type="text/calendar",
+            body,
+            media_type="text/calendar; charset=utf-8",
             headers={
                 "Content-Disposition": f'attachment; filename="pacestreak-{stamp}.ics"',
                 "Cache-Control": "private, no-store",
@@ -576,6 +571,38 @@ async def import_data(
         imported += 1
         if imported % 500 == 0:
             await db.flush()
+
+    # Pauses come back as they were, bypassing the backdating rule (they are
+    # history, not a new declaration) but never overlapping one already here.
+    held = [
+        Span(p.starts_on, p.ends_on)
+        for p in (
+            await db.execute(select(StreakPause).where(StreakPause.user_id == user.id))
+        ).scalars()
+    ]
+    for p in data.get("pauses") or []:
+        try:
+            span = Span(
+                date.fromisoformat(p["starts_on"]),
+                date.fromisoformat(p["ends_on"]) if p.get("ends_on") else None,
+            )
+            reason = p.get("reason") if p.get("reason") in REASONS else "other"
+        except KeyError, TypeError, ValueError:
+            continue
+        if span.ends_on is not None and span.ends_on < span.starts_on:
+            continue
+        if any(span.overlaps(h) for h in held):
+            continue
+        held.append(span)
+        db.add(
+            StreakPause(
+                user_id=user.id,
+                starts_on=span.starts_on,
+                ends_on=span.ends_on or span.effective_end(),
+                reason=reason,
+                note=(str(p.get("note") or "")[:280]) or None,
+            )
+        )
 
     for m in data.get("body_metrics") or []:
         try:

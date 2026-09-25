@@ -56,6 +56,7 @@ def person(p: Profile, stats: UserStats | None = None, **extra) -> dict:
         "display_name": p.display_name,
         "avatar_hue": p.avatar_hue,
         "visibility": p.visibility,
+        "official": p.is_official,
     }
     if stats is not None and p.gamification_enabled:
         data |= {"level": stats.level, "current_streak": stats.current_streak}

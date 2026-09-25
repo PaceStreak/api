@@ -20,6 +20,8 @@ dependencies = [
     "pyotp>=2.10.0",
     "slowapi>=0.1.9",
     "pywebpush>=2.5.0",
+    "fitdecode>=0.11.0",
+    "defusedxml>=0.7.1",
 ]
 
 [dependency-groups]

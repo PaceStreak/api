@@ -54,10 +54,35 @@ RESERVED = frozenset(
 )
 
 
+BRAND = "pacestreak"
+# Look-alike characters folded back before the brand check, so "Pace5treak",
+# "pace_streak" and "PACE.STREAK" read as what they are.
+_CONFUSABLES = str.maketrans(
+    {"0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "$": "s", "@": "a", "|": "l"}
+)
+
+
+def mentions_brand(text: str) -> bool:
+    folded = text.lower().translate(_CONFUSABLES)
+    return BRAND in "".join(ch for ch in folded if ch.isalpha())
+
+
+def is_reserved(handle: str) -> bool:
+    """Handles only an official account may hold: the reserved words, and
+    anything that spells the brand however it is dressed up."""
+    return handle in RESERVED or mentions_brand(handle)
+
+
+def check_display_name(name: str | None, profile: Profile) -> None:
+    if name and not profile.is_official and mentions_brand(name):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Display names can't use the PaceStreak name")
+
+
 def profile_out(p: Profile) -> dict:
     return {
         "handle": p.handle,
         "display_name": p.display_name,
+        "official": p.is_official,
         "bio": p.bio,
         "avatar_hue": p.avatar_hue,
         "timezone": p.timezone,
@@ -81,14 +106,14 @@ def profile_out(p: Profile) -> dict:
     }
 
 
-def _check_handle(handle: str) -> str:
+def _check_handle(handle: str, allow_reserved: bool = False) -> str:
     handle = handle.strip().lower().lstrip("@")
     if not HANDLE_RE.match(handle):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Handles are 3-30 characters: lowercase letters, numbers and underscores.",
         )
-    if handle in RESERVED or handle.startswith("pacestreak"):
+    if not allow_reserved and is_reserved(handle):
         raise HTTPException(status.HTTP_409_CONFLICT, "That handle is reserved")
     return handle
 
@@ -168,6 +193,7 @@ async def onboarding(
         raise HTTPException(status.HTTP_409_CONFLICT, "That handle is taken")
 
     profile = await get_profile(db, user.id)
+    check_display_name(body.display_name, profile)
     profile.handle = handle
     profile.display_name = (body.display_name or "").strip() or None
     profile.birth_year = body.birth_year
@@ -241,6 +267,9 @@ async def patch_profile(
         # Opting out of the game layer takes you off the boards too.
         profile.leaderboard_opt_in = False
         data.pop("leaderboard_opt_in", None)
+
+    if "display_name" in data:
+        check_display_name(data["display_name"], profile)
 
     target = data.pop("weekly_target", None)
     for key, value in data.items():

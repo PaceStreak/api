@@ -240,3 +240,30 @@ class StreakRepair(Base):
     )
     week_start: Mapped[date] = mapped_column(Date, nullable=False)
     month: Mapped[str] = mapped_column(String(7), nullable=False)
+
+
+class StreakPause(Base):
+    """A declared break - injury, illness, or life - that shelters the streak.
+
+    It applies to every chain at once: an injury does not care which discipline
+    a streak counts. `ends_on` is inclusive and NULL while the pause is open;
+    an open pause is treated as running to today, and never past
+    PAUSE_MAX_DAYS from its start (see app/training/pauses.py), so forgetting
+    to end one cannot shelter a streak indefinitely.
+    """
+
+    __tablename__ = "streak_pauses"
+    __table_args__ = (
+        CheckConstraint("reason IN ('injury', 'illness', 'life', 'other')", name="ck_pause_reason"),
+        CheckConstraint("ends_on IS NULL OR ends_on >= starts_on", name="ck_pause_range"),
+        Index("ix_streak_pauses_user_start", "user_id", "starts_on"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    starts_on: Mapped[date] = mapped_column(Date, nullable=False)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(String(10), default="injury", nullable=False)
+    # Private, like workout notes: never shown to anyone but its author.
+    note: Mapped[str | None] = mapped_column(String(280))

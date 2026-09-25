@@ -71,6 +71,16 @@ class Workout(Base):
     feel: Mapped[int | None] = mapped_column(SmallInteger)
 
     routine_id: Mapped[UUID | None] = mapped_column()
+    # Private, like notes: free-form labels ("hills", "with-sam", "race") for
+    # finding sessions again. Normalised to lowercase slugs on the way in.
+    tags: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
+    # Shoes, bike, board... NULLed if the gear is deleted, so removing a pair
+    # of shoes never touches the training log itself.
+    gear_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("gear.id", ondelete="SET NULL"), index=True
+    )
     # "app" or "import". Imported history counts for the personal streak but
     # never for challenges, where backfilling would be cheating.
     source: Mapped[str] = mapped_column(String(10), default="app", nullable=False)
@@ -280,3 +290,32 @@ class StreakPause(Base):
     reason: Mapped[str] = mapped_column(String(10), default="injury", nullable=False)
     # Private, like workout notes: never shown to anyone but its author.
     note: Mapped[str | None] = mapped_column(String(280))
+
+
+class Gear(Base):
+    """Something that wears out: shoes, a bike, a board. Private - never shown
+    to anyone else, never ranked. Mileage is summed from the workouts that
+    name it, so it can never drift from the log.
+    """
+
+    __tablename__ = "gear"
+    __table_args__ = (
+        CheckConstraint("kind IN ('shoes', 'bike', 'other')", name="ck_gear_kind"),
+        CheckConstraint("limit_m IS NULL OR limit_m > 0", name="ck_gear_limit"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), default="shoes", nullable=False)
+    # New sessions in these disciplines get this gear picked by default.
+    default_for: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    # Distance before replacement is due - e.g. 700 km for running shoes. A
+    # reminder, never a rule.
+    limit_m: Mapped[float | None] = mapped_column(Float)
+    # Distance it had before it was added here, so a half-worn pair starts
+    # at the right number.
+    initial_m: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(String(200))

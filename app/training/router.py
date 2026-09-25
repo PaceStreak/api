@@ -45,6 +45,7 @@ from app.training.library import (
 from app.training.models import (
     BodyMetric,
     CustomExercise,
+    Gear,
     Routine,
     StreakChain,
     StreakPause,
@@ -171,6 +172,13 @@ async def _apply_put(
             status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown exercise: {sorted(unknown)[0]}"
         )
 
+    # Gear from another account, or deleted on another device while this
+    # edit sat in an offline queue: drop the link rather than reject the
+    # session - the log matters more than the shoe. Resolved before the
+    # workout is touched, so the lookup cannot autoflush a half-built row.
+    gear = await db.get(Gear, body.gear_id) if body.gear_id is not None else None
+    gear_id = gear.id if gear is not None and gear.user_id == user.id else None
+
     workout = await db.get(Workout, workout_id)
     created = workout is None
     if workout is not None and workout.user_id != user.id:
@@ -198,6 +206,8 @@ async def _apply_put(
     workout.effort = body.effort
     workout.feel = body.feel
     workout.routine_id = body.routine_id
+    workout.tags = body.tags
+    workout.gear_id = gear_id
     workout.client_updated_at = body.client_updated_at
     workout.deleted_at = None
     workout.sets = [WorkoutSet(user_id=user.id, **s.model_dump()) for s in body.sets]

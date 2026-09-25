@@ -45,6 +45,7 @@ from app.training.library import CUSTOM_PREFIX, DISCIPLINE_IDS, EXERCISE_BY_ID
 from app.training.models import (
     BodyMetric,
     CustomExercise,
+    Gear,
     Routine,
     StreakPause,
     StreakRepair,
@@ -56,7 +57,7 @@ from app.training.pauses import REASONS, Span
 router = APIRouter(prefix="/me", tags=["account"])
 settings = get_settings()
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_IMPORT_WORKOUTS = 25_000
 
@@ -159,6 +160,7 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "name": c.name,
                 "disciplines": c.disciplines,
                 "target_history": c.target_history,
+                "requirements_history": c.requirements_history,
             }
             for c in chains
         ],
@@ -205,6 +207,8 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "effort": w.effort,
                 "feel": w.feel,
                 "routine_id": str(w.routine_id) if w.routine_id else None,
+                "tags": w.tags,
+                "gear_id": str(w.gear_id) if w.gear_id else None,
                 "source": w.source,
                 "sets": [
                     {
@@ -223,6 +227,19 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 ],
             }
             for w in workouts
+        ],
+        "gear": [
+            {
+                "id": str(g.id),
+                "name": g.name,
+                "kind": g.kind,
+                "default_for": g.default_for,
+                "limit_km": g.limit_m / 1000 if g.limit_m else None,
+                "initial_km": g.initial_m / 1000,
+                "retired_at": _iso(g.retired_at),
+                "note": g.note,
+            }
+            for g in await all_of(Gear, Gear.user_id == uid)
         ],
         "routines": [
             {
@@ -374,6 +391,7 @@ async def export(
                 "effort",
                 "feel",
                 "notes",
+                "tags",
                 "source",
             ],
             (
@@ -389,6 +407,7 @@ async def export(
                     w.effort,
                     w.feel,
                     w.notes,
+                    " ".join(w.tags),
                     w.source,
                 ]
                 for w in workouts
@@ -495,7 +514,7 @@ async def import_data(
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Too many sessions in one file")
 
     profile = await get_profile(db, user.id)
-    from app.training.schemas import CustomExerciseIn, SetIn
+    from app.training.schemas import CustomExerciseIn, GearIn, SetIn, clean_tags
 
     # Custom exercises first, remembering how their ids map.
     id_map: dict[str, str] = {}
@@ -517,6 +536,35 @@ async def import_data(
             await db.flush()
             existing[spec.name.lower()] = match
         id_map[str(item.get("id"))] = match.exercise_id
+
+    # Gear next, matched by name like custom exercises, so importing twice
+    # does not duplicate a pair of shoes.
+    gear_map: dict[str, UUID] = {}
+    owned_gear = {
+        g.name.lower(): g
+        for g in (await db.execute(select(Gear).where(Gear.user_id == user.id))).scalars()
+    }
+    for item in data.get("gear") or []:
+        try:
+            spec = GearIn.model_validate(item)
+        except Exception:
+            continue
+        match = owned_gear.get(spec.name.lower())
+        if match is None:
+            match = Gear(
+                user_id=user.id,
+                name=spec.name,
+                kind=spec.kind,
+                default_for=[],
+                limit_m=spec.limit_km * 1000 if spec.limit_km else None,
+                initial_m=spec.initial_km * 1000,
+                note=spec.note,
+                retired_at=utcnow() if item.get("retired_at") else None,
+            )
+            db.add(match)
+            await db.flush()
+            owned_gear[spec.name.lower()] = match
+        gear_map[str(item.get("id"))] = match.id
 
     imported = skipped = 0
     for item in workouts:
@@ -563,6 +611,8 @@ async def import_data(
                 elevation_m=item.get("elevation_m"),
                 effort=item.get("effort"),
                 feel=item.get("feel"),
+                tags=clean_tags([t for t in item.get("tags") or [] if isinstance(t, str)]),
+                gear_id=gear_map.get(str(item.get("gear_id"))),
                 source="import",
                 client_updated_at=utcnow(),
                 sets=[WorkoutSet(user_id=user.id, **s.model_dump()) for s in sets],

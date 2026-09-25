@@ -393,3 +393,86 @@ def test_chain_requirements_validate_and_report_progress(client):
         headers=bearer(token),
     )
     assert runs_only.status_code == 422  # strength never counts on a runs-only chain
+
+
+def test_tags_are_normalised_and_private(client):
+    token = person(client, "tags@example.com", "tagger")
+    saved = log_session(client, token, tags=["#Hill Reps", "hill-reps", "With Sam!", "  "])
+    assert saved["workout"]["tags"] == ["hill-reps", "with-sam"]
+    listed = client.get("/v1/workouts", headers=bearer(token)).json()
+    assert listed[0]["tags"] == ["hill-reps", "with-sam"]
+
+
+def test_gear_mileage_follows_the_log(client):
+    token = person(client, "gear@example.com", "gearhead")
+    shoes = client.post(
+        "/v1/gear",
+        json={
+            "name": "Trail shoes",
+            "kind": "shoes",
+            "default_for": ["run"],
+            "limit_km": 700,
+            "initial_km": 100,
+        },
+        headers=bearer(token),
+    )
+    assert shoes.status_code == 201, shoes.text
+    gid = shoes.json()["id"]
+
+    first = log_session(client, token, gear_id=gid, distance_m=10_000)
+    log_session(client, token, gear_id=gid, distance_m=5_000)
+    gear = client.get("/v1/gear", headers=bearer(token)).json()[0]
+    assert gear["distance_m"] == 115_000  # 100 km before + 15 km logged
+    assert gear["sessions"] == 2
+    assert gear["worn"] == round(115 / 700, 3)
+
+    # Deleting a session corrects the mileage; nothing is stored to drift.
+    client.delete(f"/v1/workouts/{first['workout']['id']}", headers=bearer(token))
+    assert client.get("/v1/gear", headers=bearer(token)).json()[0]["distance_m"] == 105_000
+
+    # A second pair taking over as the running default releases the first.
+    road = client.post(
+        "/v1/gear", json={"name": "Road shoes", "default_for": ["run"]}, headers=bearer(token)
+    ).json()
+    items = {g["id"]: g for g in client.get("/v1/gear", headers=bearer(token)).json()}
+    assert items[gid]["default_for"] == [] and items[road["id"]]["default_for"] == ["run"]
+
+    # Retiring clears defaults; deleting keeps the sessions.
+    client.patch(f"/v1/gear/{road['id']}", json={"retired": True}, headers=bearer(token))
+    assert client.delete(f"/v1/gear/{gid}", headers=bearer(token)).status_code == 204
+    remaining = client.get("/v1/workouts", headers=bearer(token)).json()
+    assert len(remaining) == 1 and remaining[0]["gear_id"] is None
+
+
+def test_someone_elses_gear_is_dropped_not_linked(client):
+    a = person(client, "gear-a@example.com", "geara")
+    b = person(client, "gear-b@example.com", "gearb")
+    theirs = client.post("/v1/gear", json={"name": "Not yours"}, headers=bearer(a)).json()
+    saved = log_session(client, b, gear_id=theirs["id"])
+    assert saved["workout"]["gear_id"] is None
+    assert (
+        client.patch(f"/v1/gear/{theirs['id']}", json={"name": "x"}, headers=bearer(b)).status_code
+        == 404
+    )
+
+
+def test_export_carries_tags_and_gear_and_import_restores_them(client):
+    token = person(client, "carry@example.com", "carrier")
+    shoes = client.post(
+        "/v1/gear", json={"name": "Racers", "limit_km": 400}, headers=bearer(token)
+    ).json()
+    log_session(client, token, tags=["race"], gear_id=shoes["id"])
+    exported = client.get("/v1/me/export?format=json", headers=bearer(token)).json()
+    assert exported["version"] == 2
+    assert exported["gear"][0]["name"] == "Racers"
+    assert exported["workouts"][0]["tags"] == ["race"]
+
+    other = person(client, "carry2@example.com", "carrier2")
+    files = {"file": ("export.json", json.dumps(exported), "application/json")}
+    assert client.post("/v1/me/import", files=files, headers=bearer(other)).json()["imported"] == 1
+    gear = client.get("/v1/gear", headers=bearer(other)).json()
+    assert [g["name"] for g in gear] == ["Racers"]
+    assert gear[0]["distance_m"] == 5000
+    # Importing twice never duplicates the gear.
+    client.post("/v1/me/import", files=files, headers=bearer(other))
+    assert len(client.get("/v1/gear", headers=bearer(other)).json()) == 1

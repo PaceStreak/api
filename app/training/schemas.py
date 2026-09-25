@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
@@ -20,6 +21,19 @@ class SetIn(BaseModel):
     completed: bool = True
 
 
+TAG_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def clean_tags(values: list[str]) -> list[str]:
+    """Lowercase slugs, deduplicated in order: "#Hill Reps" -> "hill-reps"."""
+    out: list[str] = []
+    for raw in values:
+        tag = TAG_RE.sub("-", raw.strip().lstrip("#").lower()).strip("-")[:24]
+        if tag and tag not in out:
+            out.append(tag)
+    return out[:8]
+
+
 class WorkoutIn(BaseModel):
     discipline: str
     title: str | None = Field(default=None, max_length=80)
@@ -31,8 +45,15 @@ class WorkoutIn(BaseModel):
     effort: int | None = Field(default=None, ge=1, le=10)
     feel: int | None = Field(default=None, ge=1, le=5)
     routine_id: UUID | None = None
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    gear_id: UUID | None = None
     client_updated_at: datetime
     sets: list[SetIn] = Field(default_factory=list, max_length=400)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, v: list[str]) -> list[str]:
+        return clean_tags([t for t in v if isinstance(t, str)])
 
     @field_validator("discipline")
     @classmethod
@@ -83,6 +104,8 @@ class WorkoutOut(BaseModel):
     effort: int | None
     feel: int | None
     routine_id: UUID | None
+    tags: list[str] = []
+    gear_id: UUID | None = None
     source: str
     client_updated_at: datetime
     deleted_at: datetime | None
@@ -247,3 +270,42 @@ class PauseIn(BaseModel):
     ends_on: date | None = None
     reason: Literal["injury", "illness", "travel", "life", "other"] = "injury"
     note: str | None = Field(default=None, max_length=280)
+
+
+def _known_disciplines(v: list[str]) -> list[str]:
+    bad = [d for d in v if d not in DISCIPLINE_IDS]
+    if bad:
+        raise ValueError(f"unknown disciplines: {', '.join(bad)}")
+    return list(dict.fromkeys(v))
+
+
+class GearIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: Literal["shoes", "bike", "other"] = "shoes"
+    default_for: list[str] = Field(default_factory=list, max_length=11)
+    limit_km: float | None = Field(default=None, gt=0, le=100_000)
+    initial_km: float = Field(default=0, ge=0, le=100_000)
+    note: str | None = Field(default=None, max_length=200)
+
+    @field_validator("default_for")
+    @classmethod
+    def _default_for(cls, v: list[str]) -> list[str]:
+        return _known_disciplines(v)
+
+
+class GearPatch(BaseModel):
+    """Every field optional; `limit_km` and `note` can be cleared with null,
+    so only fields actually sent are applied (model_fields_set)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    kind: Literal["shoes", "bike", "other"] | None = None
+    default_for: list[str] | None = Field(default=None, max_length=11)
+    limit_km: float | None = Field(default=None, gt=0, le=100_000)
+    initial_km: float | None = Field(default=None, ge=0, le=100_000)
+    note: str | None = Field(default=None, max_length=200)
+    retired: bool | None = None
+
+    @field_validator("default_for")
+    @classmethod
+    def _default_for(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else _known_disciplines(v)

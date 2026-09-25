@@ -25,7 +25,7 @@ PAUSE_BACKDATE_DAYS = 14
 PAUSE_LEAD_DAYS = 30
 PAUSE_BUDGET_DAYS = 120
 PAUSE_BUDGET_WINDOW = 365
-REASONS = ("injury", "illness", "life", "other")
+REASONS = ("injury", "illness", "travel", "life", "other")
 
 
 class PauseError(ValueError):

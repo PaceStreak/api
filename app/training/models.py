@@ -214,12 +214,23 @@ class StreakChain(Base):
     disciplines: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     # [{"from": "2026-09-21", "target": 4}, ...], ascending by "from".
     target_history: Mapped[list[dict]] = mapped_column(JSONB, default=list, nullable=False)
+    # [{"from": "2026-09-21", "requirements": [{"disciplines": ["run"], "days": 2}]}]
+    # - a history, like the target, so adding a rule never re-judges old weeks.
+    requirements_history: Mapped[list[dict]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     @property
     def target(self) -> int:
         return int(self.target_history[-1]["target"]) if self.target_history else 3
+
+    @property
+    def requirements(self) -> list[dict]:
+        return (
+            list(self.requirements_history[-1]["requirements"]) if self.requirements_history else []
+        )
 
 
 class StreakRepair(Base):
@@ -243,7 +254,7 @@ class StreakRepair(Base):
 
 
 class StreakPause(Base):
-    """A declared break - injury, illness, or life - that shelters the streak.
+    """A declared break - injury, illness, travel or life - that shelters the streak.
 
     It applies to every chain at once: an injury does not care which discipline
     a streak counts. `ends_on` is inclusive and NULL while the pause is open;
@@ -254,7 +265,9 @@ class StreakPause(Base):
 
     __tablename__ = "streak_pauses"
     __table_args__ = (
-        CheckConstraint("reason IN ('injury', 'illness', 'life', 'other')", name="ck_pause_reason"),
+        CheckConstraint(
+            "reason IN ('injury', 'illness', 'travel', 'life', 'other')", name="ck_pause_reason"
+        ),
         CheckConstraint("ends_on IS NULL OR ends_on >= starts_on", name="ck_pause_range"),
         Index("ix_streak_pauses_user_start", "user_id", "starts_on"),
     )

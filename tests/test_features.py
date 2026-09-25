@@ -3,6 +3,7 @@ accounts: the engine rules as pure functions, then each through the API."""
 
 import io
 from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 
@@ -353,3 +354,48 @@ def test_only_an_admin_can_grant_official_status(client):
     assert revoke.json() == {"official": False, "handle": "brandteam"}
     audit = client.get("/v1/admin/audit", headers=bearer(admin)).json()
     assert any(a["action"] == "user.official" for a in audit)
+
+
+def test_year_review_and_record_history(client):
+    token = person(client, "review@example.com", "reviewer")
+    today = datetime.now(UTC)
+    for days_ago, kg in ((20, 60), (10, 65), (1, 70)):
+        when = today - timedelta(days=days_ago)
+        body = {
+            "discipline": "strength",
+            "started_at": when.isoformat(),
+            "client_updated_at": today.isoformat(),
+            "sets": [
+                {
+                    "exercise_id": "back-squat",
+                    "position": 0,
+                    "set_index": 0,
+                    "weight_kg": kg,
+                    "reps": 5,
+                }
+            ],
+        }
+        assert (
+            client.put(f"/v1/workouts/{uuid4()}", json=body, headers=bearer(token)).status_code
+            == 200
+        )
+
+    review = client.get("/v1/me/review", headers=bearer(token))
+    assert review.status_code == 200, review.text
+    r = review.json()
+    assert r["sessions"] == 3 and r["days_trained"] == 3
+    # Attendance, never volume.
+    assert not {"tonnage", "distance", "calories", "volume"} & set(r)
+
+    history = client.get(
+        "/v1/me/records/history", params={"key": "e1rm:back-squat"}, headers=bearer(token)
+    )
+    assert history.status_code == 200, history.text
+    points = history.json()["points"]
+    assert points[0]["kind"] == "first"
+    assert [round(p["value"]) for p in points] == sorted(round(p["value"]) for p in points)
+    assert len(points) == 3
+
+    assert (
+        client.get("/v1/me/review", params={"year": 2001}, headers=bearer(token)).status_code == 404
+    )

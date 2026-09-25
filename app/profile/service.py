@@ -59,3 +59,13 @@ def set_chain_target(chain: StreakChain, target: int, effective_week: str) -> No
     history = [h for h in chain.target_history if h["from"] < effective_week]
     history.append({"from": effective_week, "target": target})
     chain.target_history = history
+
+
+def set_chain_requirements(
+    chain: StreakChain, requirements: list[dict], effective_week: str
+) -> None:
+    """Same discipline as targets: effective from `effective_week`, earlier
+    weeks keep the rules they were played under."""
+    history = [h for h in chain.requirements_history if h["from"] < effective_week]
+    history.append({"from": effective_week, "requirements": requirements})
+    chain.requirements_history = history

@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 from app.game.levels import level_for_xp, xp_for_level, xp_to_reach
 from app.game.records import Observation, detect, e1rm
-from app.game.streak import compute_chain, target_resolver
+from app.game.streak import compute_chain, requirements_resolver, target_resolver
 from app.game.xp import DAY_XP, EXTRA_DAY_XP, DayActivity, compute_xp
 
 MON = date(2026, 9, 7)  # a Monday
@@ -157,3 +157,96 @@ def test_level_curve_is_monotonic_and_consistent():
     for level in range(1, 30):
         assert level_for_xp(xp_to_reach(level)) == level
         assert xp_for_level(level + 1) > xp_for_level(level)
+
+
+# --- requirements (compound weekly goals) ----------------------------------------
+
+
+def _mixed(spec: dict[int, str]) -> tuple[list[date], dict[date, set[str]]]:
+    """{offset: discipline} -> active days and the discipline map."""
+    return days(*spec), {MON + timedelta(days=o): {d} for o, d in spec.items()}
+
+
+def _reqs(from_week: date, *pairs: tuple[list[str], int]):
+    return requirements_resolver(
+        [
+            {
+                "from": from_week.isoformat(),
+                "requirements": [{"disciplines": ds, "days": n} for ds, n in pairs],
+            }
+        ]
+    )
+
+
+def test_a_week_needs_every_requirement_not_just_the_total():
+    # Four runs hit a target of four, but the rule was two strength days.
+    active, kinds = _mixed({0: "run", 1: "run", 2: "run", 3: "run"})
+    r = compute_chain(
+        active,
+        MON + timedelta(days=8),
+        0,
+        fixed(4),
+        requirements_for=_reqs(MON, (["strength"], 2)),
+        day_disciplines=kinds,
+    )
+    assert r.weeks[0].status == "missed"
+    # Adherence is the weakest part of the week: 0 of 2 strength days.
+    assert r.weeks[0].score == 0
+
+
+def test_requirements_met_keep_the_week():
+    active, kinds = _mixed({0: "run", 2: "strength", 4: "run", 5: "strength"})
+    r = compute_chain(
+        active,
+        MON + timedelta(days=8),
+        0,
+        fixed(4),
+        requirements_for=_reqs(MON, (["run"], 2), (["strength"], 2)),
+        day_disciplines=kinds,
+    )
+    assert r.weeks[0].status == "kept"
+
+
+def test_requirements_never_rejudge_weeks_before_they_existed():
+    # Week one: three runs, kept under the old rules. The strength rule
+    # arrives in week two and must not reach back.
+    active, kinds = _mixed({0: "run", 2: "run", 4: "run", 7: "strength", 9: "run", 11: "strength"})
+    r = compute_chain(
+        active,
+        MON + timedelta(days=15),
+        0,
+        fixed(3),
+        requirements_for=_reqs(MON + timedelta(weeks=1), (["strength"], 2)),
+        day_disciplines=kinds,
+    )
+    assert [w.status for w in r.weeks[:2]] == ["kept", "kept"]
+    assert r.current == 2
+
+
+def test_needed_counts_the_requirement_shortfall():
+    # Target 3, one run done; still owed: 1 run and 1 strength (2 days), even
+    # though the total alone would also say 2. Make the rule bigger than the
+    # total to see the difference: 2 strength + 1 run owed = 3.
+    active, kinds = _mixed({0: "run"})
+    r = compute_chain(
+        active,
+        MON + timedelta(days=1),
+        0,
+        fixed(3),
+        requirements_for=_reqs(MON, (["run"], 1), (["strength"], 2)),
+        day_disciplines=kinds,
+    )
+    assert r.needed == 2
+    assert [(sorted(q.disciplines), done) for q, done in r.requirements_progress] == [
+        (["run"], 1),
+        (["strength"], 0),
+    ]
+
+
+def test_long_window_consistency_ignores_the_open_week():
+    # Twelve closed weeks at 2 of 4 days, then today in week thirteen.
+    active = [MON + timedelta(weeks=w, days=d) for w in range(12) for d in (0, 1)]
+    r = compute_chain(active, MON + timedelta(weeks=12, days=1), 0, fixed(4))
+    assert r.consistency == 50
+    assert r.consistency_12 == 50
+    assert r.consistency_52 == 50

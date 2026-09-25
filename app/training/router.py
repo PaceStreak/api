@@ -26,7 +26,12 @@ from app.database import get_db
 from app.game.service import chain_payload, pause_payload, recompute, snapshot
 from app.notifications.service import deliver
 from app.profile.models import Profile
-from app.profile.service import get_chains, get_profile, set_chain_target
+from app.profile.service import (
+    get_chains,
+    get_profile,
+    set_chain_requirements,
+    set_chain_target,
+)
 from app.social.models import ActivityEvent
 from app.social.service import emit_event
 from app.training.importers import MAX_BYTES, ImportFormatError, check, parse
@@ -64,9 +69,11 @@ from app.training.schemas import (
     CustomExerciseIn,
     PauseIn,
     RepairIn,
+    RequirementIn,
     RoutineIn,
     WorkoutIn,
     WorkoutOut,
+    check_requirements,
 )
 
 router = APIRouter(tags=["training"])
@@ -805,11 +812,26 @@ async def create_chain(
     chains = await get_chains(db, profile)
     if len(chains) >= 6:
         raise HTTPException(status.HTTP_409_CONFLICT, "Six chains is the limit")
+    try:
+        check_requirements(body.requirements, body.target, body.disciplines)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(err)) from err
+    this_week = week_start(local_today(profile.timezone), profile.week_starts_on)
     chain = StreakChain(
         user_id=user.id,
         name=body.name,
         disciplines=body.disciplines,
         target_history=[{"from": "2000-01-03", "target": body.target}],
+        requirements_history=(
+            [
+                {
+                    "from": this_week.isoformat(),
+                    "requirements": [r.model_dump() for r in body.requirements],
+                }
+            ]
+            if body.requirements
+            else []
+        ),
         position=max(c.position for c in chains) + 1,
     )
     db.add(chain)
@@ -839,11 +861,26 @@ async def update_chain(
         chain.disciplines = body.disciplines
     if body.position is not None:
         chain.position = body.position
+    this_week = week_start(local_today(profile.timezone), profile.week_starts_on)
+    target = body.target if body.target is not None else chain.target
+    if body.requirements is not None or body.target is not None or body.disciplines is not None:
+        reqs = (
+            body.requirements
+            if body.requirements is not None
+            else [RequirementIn(**r) for r in chain.requirements]
+        )
+        try:
+            check_requirements(reqs, target, chain.disciplines)
+        except ValueError as err:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(err)) from err
     if body.target is not None and body.target != chain.target:
         # Effective from the current week: this week is judged by the new
         # number, every closed week keeps the one it was judged by.
-        this_week = week_start(local_today(profile.timezone), profile.week_starts_on)
         set_chain_target(chain, body.target, this_week.isoformat())
+    if body.requirements is not None:
+        new = [r.model_dump() for r in body.requirements]
+        if new != chain.requirements:
+            set_chain_requirements(chain, new, this_week.isoformat())
     await db.flush()
     await recompute(db, user.id, notify=False)
     await db.commit()

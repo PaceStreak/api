@@ -15,6 +15,7 @@ from app.database import get_db
 from app.game import achievements as ach
 from app.game.models import PersonalRecord, UserAchievement
 from app.game.recap import build_recap, last_closed_week
+from app.game.review import build_year, record_history
 from app.game.service import chain_payload, pause_payload, record_label, snapshot
 from app.game.xp import compute_xp
 from app.profile.models import Profile
@@ -73,6 +74,40 @@ async def recap(
     await db.commit()
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nothing to recap for that week")
+    return result
+
+
+@router.get("/review")
+async def year_review(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A calendar year, summed up. Attendance only, like the weekly recap.
+    Defaults to the current year; last year until the first week of this one
+    has anything to say."""
+    snap = await snapshot(db, user.id)
+    await db.commit()
+    wanted = year or snap.today.year
+    result = await build_year(db, snap, wanted)
+    if result is None and year is None:
+        result = await build_year(db, snap, wanted - 1)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nothing logged that year")
+    return result
+
+
+@router.get("/records/history")
+async def records_history(
+    key: str = Query(max_length=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    snap = await snapshot(db, user.id)
+    await db.commit()
+    result = record_history(snap, key)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such record")
     return result
 
 

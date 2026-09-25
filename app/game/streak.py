@@ -21,6 +21,11 @@ no freeze, pays no XP and is left out of the consistency score. It exists so
 nobody trains hurt to protect a number, which is the whole reason the unit is
 a week in the first place.
 
+A chain can also carry requirements ("at least two of those days are runs"):
+a week is kept only when the total target *and* every requirement are met.
+Requirements have a history like targets do, and apply only from the week
+they were set, so adding one never breaks weeks that were already kept.
+
 Everything is recomputed from history on every read. There is no cron that
 "closes" a week, so there is no stored state that can drift from the logs.
 """
@@ -41,6 +46,14 @@ MILESTONES = (4, 8, 12, 26, 52, 104, 156)
 PAUSE_MIN_DAYS = 4
 
 
+@dataclass(frozen=True)
+class Requirement:
+    """At least `days` distinct days this week on one of `disciplines`."""
+
+    disciplines: frozenset[str]
+    days: int
+
+
 @dataclass
 class WeekCell:
     week_start: date
@@ -49,6 +62,8 @@ class WeekCell:
     # kept | frozen | repaired | paused | missed | open (current, not yet met)
     status: str
     run: int = 0
+    # The weakest requirement's completion, 0-1. 1 when there are none.
+    requirement_ratio: float = 1.0
 
     @property
     def counts(self) -> bool:
@@ -56,8 +71,11 @@ class WeekCell:
 
     @property
     def score(self) -> int:
-        """0-100 adherence, capped: training beyond the target never raises it."""
-        return min(100, round(self.days / self.target * 100)) if self.target else 100
+        """0-100 adherence, capped: training beyond the target never raises it.
+        With requirements, the weakest part of the week decides - four runs
+        do not make up for the strength session that was the point."""
+        base = min(1.0, self.days / self.target) if self.target else 1.0
+        return round(min(base, self.requirement_ratio) * 100)
 
 
 @dataclass
@@ -77,6 +95,12 @@ class ChainResult:
     consistency: int
     milestones_hit: list[tuple[int, date]] = field(default_factory=list)
     paused_now: bool = False
+    # Mean score over the last 12 and 52 closed, unpaused weeks: the gentle
+    # number that survives a broken streak.
+    consistency_12: int = 0
+    consistency_52: int = 0
+    # This week, per requirement: (requirement, distinct days done so far).
+    requirements_progress: list[tuple[Requirement, int]] = field(default_factory=list)
 
 
 def target_resolver(history: list[dict], default: int = 3) -> Callable[[date], int]:
@@ -102,6 +126,41 @@ def target_resolver(history: list[dict], default: int = 3) -> Callable[[date], i
     return resolve
 
 
+def requirements_resolver(history: list[dict]) -> Callable[[date], list[Requirement]]:
+    """Requirements in force for a week. `history` is
+    [{"from": iso, "requirements": [{"disciplines": [...], "days": n}]}],
+    ascending. Unlike targets, weeks before the first entry have none: a
+    requirement is a new rule, and old weeks were never played under it."""
+    points = sorted(
+        (
+            (
+                date.fromisoformat(h["from"]),
+                [
+                    Requirement(frozenset(r["disciplines"]), int(r["days"]))
+                    for r in h.get("requirements", [])
+                ],
+            )
+            for h in history
+        ),
+        key=lambda p: p[0],
+    )
+
+    def resolve(week: date) -> list[Requirement]:
+        current: list[Requirement] = []
+        for start, reqs in points:
+            if start <= week:
+                current = reqs
+            else:
+                break
+        return current
+
+    return resolve
+
+
+def _mean_score(cells: list[WeekCell]) -> int:
+    return round(sum(c.score for c in cells) / len(cells)) if cells else 0
+
+
 def compute_chain(
     active_days: Iterable[date],
     today: date,
@@ -110,8 +169,20 @@ def compute_chain(
     repaired: Iterable[date] = (),
     repair_available: bool = False,
     paused_days: Iterable[date] = (),
+    requirements_for: Callable[[date], list[Requirement]] | None = None,
+    day_disciplines: dict[date, set[str]] | None = None,
 ) -> ChainResult:
     days = set(active_days)
+    day_disciplines = day_disciplines or {}
+
+    def requirement_days(week: date, req: Requirement) -> int:
+        return sum(
+            1
+            for i in range(7)
+            if (d := week + timedelta(days=i)) <= today
+            and day_disciplines.get(d, set()) & req.disciplines
+        )
+
     repaired_weeks = set(repaired)
     current_week = week_start(today, week_starts_on)
 
@@ -144,7 +215,12 @@ def compute_chain(
     while w <= current_week:
         count = per_week.get(w, 0)
         target = max(1, target_for(w))
-        if count >= target:
+        reqs = requirements_for(w) if requirements_for else []
+        ratio = min(
+            (min(1.0, requirement_days(w, r) / r.days) for r in reqs if r.days > 0),
+            default=1.0,
+        )
+        if count >= target and ratio >= 1.0:
             status = "kept"
         elif w in paused_weeks:
             status = "paused"
@@ -174,7 +250,7 @@ def compute_chain(
             run = 0
             run_started = None
         longest = max(longest, run)
-        cells.append(WeekCell(w, count, target, status, run))
+        cells.append(WeekCell(w, count, target, status, run, ratio))
         w += timedelta(weeks=1)
 
     this_week = cells[-1]
@@ -182,7 +258,18 @@ def compute_chain(
     trained_today = today in days
     days_left = (week_end - today).days + (0 if trained_today else 1)
     this_week_paused = this_week.status == "paused"
-    needed = 0 if this_week_paused else max(0, this_week.target - this_week.days)
+    progress = [
+        (r, requirement_days(current_week, r))
+        for r in (requirements_for(current_week) if requirements_for else [])
+    ]
+    # Days still owed: the total shortfall, or the requirements' combined
+    # shortfall if that is larger (two runs and a lift still to do is three
+    # days, even if only one more day reaches the total).
+    shortfall = max(
+        this_week.target - this_week.days,
+        sum(max(0, r.days - done) for r, done in progress),
+    )
+    needed = 0 if this_week_paused or this_week.status == "kept" else max(0, shortfall)
     at_risk = needed > 0 and needed >= days_left
     will_freeze = needed > days_left and freezes > 0 and run > 0
 
@@ -194,10 +281,8 @@ def compute_chain(
                 repairable = cell.week_start
                 break
 
-    closed_cells = [c for c in cells[:-1] if c.status != "paused"][-4:]
-    consistency = (
-        round(sum(c.score for c in closed_cells) / len(closed_cells)) if closed_cells else 0
-    )
+    closed_cells = [c for c in cells[:-1] if c.status != "paused"]
+    consistency = _mean_score(closed_cells[-4:])
 
     return ChainResult(
         current=run,
@@ -215,4 +300,7 @@ def compute_chain(
         consistency=consistency,
         milestones_hit=milestones,
         paused_now=this_week_paused,
+        consistency_12=_mean_score(closed_cells[-12:]),
+        consistency_52=_mean_score(closed_cells[-52:]),
+        requirements_progress=progress,
     )

@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from tests.conftest import bearer, csrf_headers, login, person, register
+from tests.test_social import log_session
 
 
 def now() -> datetime:
@@ -341,3 +342,54 @@ def test_unused_csrf_helper_still_works(client):
     register(client, "x@example.com")
     login(client, "x@example.com")
     assert csrf_headers(client)["X-CSRF-Token"]
+
+
+def test_chain_requirements_validate_and_report_progress(client):
+    token = person(client, "reqs@example.com", "reqs")
+    main = client.get("/v1/chains", headers=bearer(token)).json()["chains"][0]
+
+    too_many = client.patch(
+        f"/v1/chains/{main['id']}",
+        json={
+            "requirements": [
+                {"disciplines": ["run"], "days": 2},
+                {"disciplines": ["strength"], "days": 2},
+            ]
+        },
+        headers=bearer(token),
+    )
+    assert too_many.status_code == 422  # four required days, target three
+    assert "weekly target" in too_many.json()["detail"]
+
+    ok = client.patch(
+        f"/v1/chains/{main['id']}",
+        json={
+            "target": 4,
+            "requirements": [
+                {"disciplines": ["run"], "days": 2},
+                {"disciplines": ["strength"], "days": 2},
+            ],
+        },
+        headers=bearer(token),
+    )
+    assert ok.status_code == 200, ok.text
+
+    log_session(client, token)  # one run, today
+    chain = client.get("/v1/chains", headers=bearer(token)).json()["chains"][0]
+    assert chain["requirements"] == [
+        {"disciplines": ["run"], "days": 2, "done": 1},
+        {"disciplines": ["strength"], "days": 2, "done": 0},
+    ]
+    assert "consistency_12" in chain and "consistency_52" in chain
+
+    runs_only = client.post(
+        "/v1/chains",
+        json={
+            "name": "Runs",
+            "disciplines": ["run"],
+            "target": 3,
+            "requirements": [{"disciplines": ["strength"], "days": 1}],
+        },
+        headers=bearer(token),
+    )
+    assert runs_only.status_code == 422  # strength never counts on a runs-only chain

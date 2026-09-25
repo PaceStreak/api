@@ -27,7 +27,7 @@ from app.game import achievements as ach
 from app.game.levels import level_progress
 from app.game.models import PersonalRecord, UserAchievement, UserStats
 from app.game.records import RUN_BANDS, Observation, PrEvent, detect, e1rm
-from app.game.streak import ChainResult, compute_chain, target_resolver
+from app.game.streak import ChainResult, compute_chain, requirements_resolver, target_resolver
 from app.game.xp import DayActivity, compute_xp, summarise
 from app.groups.models import ChallengeParticipant, GroupMember
 from app.profile.models import Profile
@@ -179,6 +179,11 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
     for chain in chains:
         allowed = set(chain.disciplines)
         active = {w.local_date for w in workouts if not allowed or w.discipline in allowed}
+        day_disciplines: dict[date, set[str]] = defaultdict(set)
+        if chain.requirements_history:
+            for w in workouts:
+                if not allowed or w.discipline in allowed:
+                    day_disciplines[w.local_date].add(w.discipline)
         result = compute_chain(
             active,
             today,
@@ -187,6 +192,8 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
             repaired=[r.week_start for r in repairs if r.chain_id == chain.id],
             repair_available=not repair_used,
             paused_days=sheltered,
+            requirements_for=requirements_resolver(chain.requirements_history),
+            day_disciplines=day_disciplines,
         )
         views.append(ChainView(chain, result))
     main = views[0]
@@ -749,7 +756,13 @@ def chain_payload(view: ChainView, weeks: int = 26) -> dict:
         "repairable_week": r.repairable_week.isoformat() if r.repairable_week else None,
         "run_started": r.run_started.isoformat() if r.run_started else None,
         "consistency": r.consistency,
+        "consistency_12": r.consistency_12,
+        "consistency_52": r.consistency_52,
         "paused_now": r.paused_now,
+        "requirements": [
+            {"disciplines": sorted(req.disciplines), "days": req.days, "done": done}
+            for req, done in r.requirements_progress
+        ],
         "weeks": [
             {
                 "week_start": c.week_start.isoformat(),

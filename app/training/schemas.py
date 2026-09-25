@@ -178,10 +178,37 @@ class BodyMetricIn(BaseModel):
     note: str | None = Field(default=None, max_length=200)
 
 
+class RequirementIn(BaseModel):
+    disciplines: list[str] = Field(min_length=1, max_length=11)
+    days: int = Field(ge=1, le=7)
+
+    @field_validator("disciplines")
+    @classmethod
+    def _known(cls, v: list[str]) -> list[str]:
+        bad = [d for d in v if d not in DISCIPLINE_IDS]
+        if bad:
+            raise ValueError(f"unknown disciplines: {', '.join(bad)}")
+        return sorted(dict.fromkeys(v))
+
+
+def check_requirements(reqs: list[RequirementIn], target: int, disciplines: list[str]) -> None:
+    """Raise ValueError when requirements can't be met inside the chain."""
+    if sum(r.days for r in reqs) > target:
+        raise ValueError(
+            "The requirements add up to more days than the weekly target. "
+            "Raise the target or ask for fewer days."
+        )
+    if disciplines:
+        outside = sorted({d for r in reqs for d in r.disciplines} - set(disciplines))
+        if outside:
+            raise ValueError(f"not counted by this streak: {', '.join(outside)}")
+
+
 class ChainIn(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     disciplines: list[str] = Field(default_factory=list, max_length=11)
     target: int = Field(default=3, ge=1, le=7)
+    requirements: list[RequirementIn] = Field(default_factory=list, max_length=3)
 
     @field_validator("disciplines")
     @classmethod
@@ -196,6 +223,7 @@ class ChainPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=40)
     disciplines: list[str] | None = Field(default=None, max_length=11)
     target: int | None = Field(default=None, ge=1, le=7)
+    requirements: list[RequirementIn] | None = Field(default=None, max_length=3)
     position: int | None = None
 
     @field_validator("disciplines")
@@ -217,5 +245,5 @@ class PauseIn(BaseModel):
     starts_on: date
     # Inclusive. Omit for "until I'm back", which runs to the maximum length.
     ends_on: date | None = None
-    reason: Literal["injury", "illness", "life", "other"] = "injury"
+    reason: Literal["injury", "illness", "travel", "life", "other"] = "injury"
     note: str | None = Field(default=None, max_length=280)

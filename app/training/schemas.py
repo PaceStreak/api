@@ -189,6 +189,8 @@ class RoutineItem(BaseModel):
     # Kilograms, like every stored weight. A starting point for someone with
     # no history on the movement; once they have some, last time leads.
     weight_kg: float | None = Field(default=None, ge=0, le=1000)
+    # The jump progression suggests once every set tops the rep range.
+    increment_kg: float | None = Field(default=None, gt=0, le=50)
     note: str | None = Field(default=None, max_length=140)
 
 

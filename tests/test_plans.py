@@ -197,6 +197,16 @@ def test_routine_items_keep_a_starting_weight(client):
     made = client.post("/v1/routines", json=body, headers=bearer(token))
     assert made.status_code == 201, made.text
     assert made.json()["items"][0]["weight_kg"] == 60
+    for step in (0, 51):
+        bad_step = {"name": "x", "items": [item | {"increment_kg": step}]}
+        assert client.post("/v1/routines", json=bad_step, headers=bearer(token)).status_code == 422
+    ok = {"name": "Pull", "items": [item | {"increment_kg": 5}]}
+    assert (
+        client.post("/v1/routines", json=ok, headers=bearer(token)).json()["items"][0][
+            "increment_kg"
+        ]
+        == 5
+    )
     bad = client.post(
         "/v1/routines",
         json={"name": "x", "items": [item | {"weight_kg": -1}]},

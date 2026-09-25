@@ -19,7 +19,7 @@ their users. That is the point of AGPL over GPL for a hosted service.
 | Stack | FastAPI, PostgreSQL, Redis, on Docker Compose |
 | Hostname | `api.pacestreak.com` (no DNS record yet, deliberately) |
 | Consumers | `PaceStreak/app` (the product frontend, built, not deployed) |
-| Tests | 87, `make test`, nothing mocked |
+| Tests | 92, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
 | Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
 
 ## Quick start
@@ -233,6 +233,66 @@ from an empty database and a flushed Redis.
   `SMTP_HOST`. Deciding on a provider is a separate, deliberate choice per
   CLAUDE.md's "no third-party services on the free tier" stance — SMTP itself
   is a protocol, not a vendor, so this doesn't force that decision.
+
+## Production
+
+Host-agnostic: any machine with Docker and a TLS-terminating reverse proxy
+(Caddy, nginx, a platform load balancer, Cloudflare Tunnel) in front of
+`127.0.0.1:8000`. Where it runs is still undecided; nothing here assumes one.
+
+```bash
+cp .env.example .env && chmod 600 .env   # then fill in the required values
+make prod-config                          # names any required variable still missing
+make prod-up                              # migrate once, then api + worker
+```
+
+`compose.prod.yaml` refuses to start without `POSTGRES_PASSWORD`,
+`JWT_PRIVATE_KEY_PEM`, `JWT_PUBLIC_KEY_PEM`, `TOTP_ENCRYPTION_KEY`,
+`SMTP_HOST` and `FORWARDED_ALLOW_IPS`. The app itself then refuses to start
+unless email is `smtp` with TLS, cookies are secure, `DEBUG` is off and
+`PUBLIC_API_URL` is https. Keys are passed as PEM contents in environment
+variables; a flattened one-line PEM with literal `\n` works. Keys are read
+once per process, so restart after rotating them.
+
+Containers run with a read-only root filesystem, `no-new-privileges`, memory
+limits and rotated logs. Migrations run once in a `migrate` container before
+the API starts, never from every replica.
+
+### Email
+
+`EMAIL_BACKEND=smtp` works with any provider: STARTTLS on 587 (default) or
+implicit TLS on 465 (`SMTP_SSL=True`, `SMTP_STARTTLS=False`). Transient
+failures retry three times with backoff. Notification mail carries RFC 8058
+`List-Unsubscribe` headers, and mail clients' one-click POST goes to
+`/v1/notifications/unsubscribe/one-click`. The provider is still to be
+chosen; set up SPF, DKIM and DMARC for the sending domain when it is.
+
+### Admin accounts
+
+```bash
+make create-admin email=you@example.com   # prompts for the password
+make set-password email=you@example.com   # also signs out every session
+docker compose exec api python -m app.cli set-role someone@example.com moderator
+```
+
+Passwords are prompted for (or read from `PACESTREAK_PASSWORD` for
+automation), never taken from argv.
+
+### Backups
+
+```bash
+make backup                      # scripts/backup.sh, then restore-check.sh
+scripts/restore-check.sh FILE    # restore into a scratch DB and verify
+scripts/restore.sh FILE          # restore OVER the live DB (asks first)
+```
+
+Dumps are custom-format, checksummed and mode 0600 in `./backups` (git-ignored),
+kept for `BACKUP_KEEP_DAYS` (default 14). The newest is never pruned. Every
+backup is immediately test-restored into a throwaway database and compared
+against the live schema revision; a backup that has never been restored is not
+trusted. Schedule `make backup` daily (cron or a systemd timer) and copy
+`./backups` off the host. For production, prefix both with
+`COMPOSE="docker compose -f compose.yaml -f compose.prod.yaml"`.
 
 ## Local development
 

@@ -7,6 +7,17 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `compose.prod.yaml`: host-agnostic production stack (required secrets,
+  loopback-only API, one-shot migrations, read-only containers, limits, log
+  rotation). JWT/VAPID keys can be injected as PEM environment variables.
+- Hardened SMTP (implicit TLS option, retries, standard headers) and RFC 8058
+  one-click unsubscribe. Production refuses the console email backend.
+- `python -m app.cli` with `create-admin`, `set-password` and `set-role`.
+- `scripts/backup.sh`, `restore-check.sh` and `restore.sh`.
+- Group mute (`PATCH /groups/{id}/me` `{"muted": true}`), migration
+  `d32eee1ab7f7`.
+- GitHub Actions CI.
+
 - Streak pauses (`/v1/pauses`): injury/illness/life breaks that shelter any
   week they cover for four days or more. Bounded (14 days back, 30 ahead, 12
   weeks each, 120 days a year, no overlap); reminders stop while one runs;
@@ -54,6 +65,10 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
   change the frontend needs before its first call to this service.
 
 ### Fixed
+
+- Dev containers run as the host user, so private keys stay 0600 instead of
+  being made world-readable.
+- The JWT key is no longer re-read from disk for every token.
 
 - The dev compose override now mounts `alembic/`, so the container sees every
   migration rather than the ones baked into the image at build time.

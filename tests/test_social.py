@@ -315,3 +315,19 @@ def test_notification_preferences_and_unsubscribe(client):
         "/v1/notifications/unsubscribe", json={"u": uid, "c": "social", "s": sign(uid, "social")}
     )
     assert good.status_code == 200
+
+
+def test_muting_a_group_keeps_its_notifications_in_the_inbox(client):
+    owner = person(client, "own@example.com", "owner")
+    joiner = person(client, "join@example.com", "joiner")
+    group = client.post("/v1/groups", json={"name": "Quiet"}, headers=bearer(owner)).json()
+    muted = client.patch(
+        f"/v1/groups/{group['id']}/me", json={"muted": True}, headers=bearer(owner)
+    )
+    assert muted.json()["muted"] is True
+    assert client.get(f"/v1/groups/{group['id']}", headers=bearer(owner)).json()["muted"] is True
+
+    client.post("/v1/groups/join", json={"code": group["invite_code"]}, headers=bearer(joiner))
+    inbox = client.get("/v1/notifications", headers=bearer(owner)).json()
+    items = inbox["items"] if isinstance(inbox, dict) else inbox
+    assert any(n["kind"] == "group_join" for n in items)

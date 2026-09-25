@@ -101,6 +101,7 @@ def _group_out(g: Group, member: GroupMember | None, count: int) -> dict:
         "member_count": count,
         "my_role": member.role if member else None,
         "shares_with_coach": member.shares_with_coach if member else False,
+        "muted": member.muted if member else False,
         "invite_code": g.invite_code if manager else None,
     }
 
@@ -184,6 +185,7 @@ async def join_group(
         title=f"{me.display_name or '@' + (me.handle or '')} joined {group.name}",
         url=f"/groups/{group.id}",
         actor_id=user.id,
+        data={"group_id": str(group.id)},
         dedupe_key=f"group_join:{group.id}:{user.id}",
     )
     await db.commit()
@@ -334,21 +336,26 @@ async def remove_member(
     await db.commit()
 
 
-class ConsentIn(BaseModel):
-    shares_with_coach: bool
+class MembershipPatch(BaseModel):
+    shares_with_coach: bool | None = None
+    muted: bool | None = None
 
 
 @router.patch("/groups/{group_id}/me")
 async def set_consent(
     group_id: UUID,
-    body: ConsentIn,
+    body: MembershipPatch,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Your own settings in one group: coach consent and mute."""
     _, me = await _group_for_member(db, group_id, user)
-    me.shares_with_coach = body.shares_with_coach
+    if body.shares_with_coach is not None:
+        me.shares_with_coach = body.shares_with_coach
+    if body.muted is not None:
+        me.muted = body.muted
     await db.commit()
-    return {"shares_with_coach": me.shares_with_coach}
+    return {"shares_with_coach": me.shares_with_coach, "muted": me.muted}
 
 
 @router.get("/groups/{group_id}/coach")
@@ -822,6 +829,7 @@ async def resolve_finished(db: AsyncSession, today: date) -> list[UUID]:
                 title=f"{c.title} is over - you placed #{row['rank']}",
                 body=f"{row['score']} {unit}.",
                 url=f"/challenges/{c.id}",
+                data={"group_id": str(c.group_id)} if c.group_id else None,
                 dedupe_key=f"challenge_done:{c.id}",
             )
             note_ids += [nid] if nid else []

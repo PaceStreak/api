@@ -196,6 +196,19 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
         )
     ).scalar_one_or_none()
     channels = channels_for(prefs, note.category)
+    group_id = (note.data or {}).get("group_id")
+    if group_id:
+        from app.groups.models import GroupMember
+
+        muted = (
+            await db.execute(
+                select(GroupMember.muted).where(
+                    GroupMember.group_id == UUID(group_id), GroupMember.user_id == note.user_id
+                )
+            )
+        ).scalar_one_or_none()
+        if muted:
+            return
     profile = (
         await db.execute(select(Profile).where(Profile.user_id == note.user_id))
     ).scalar_one_or_none()

@@ -53,6 +53,11 @@ class GroupMember(Base):
     # A coach sees a member's training only with this explicit, revocable
     # consent. Joining a coaching group does not imply it.
     shares_with_coach: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Mute this group: its notifications still land in the inbox, so nothing
+    # is lost, but they are never pushed or emailed.
+    muted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
 
 class Challenge(Base):

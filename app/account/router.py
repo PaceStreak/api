@@ -50,11 +50,14 @@ from app.training.models import (
     Gear,
     Gym,
     MonthlyGoal,
+    Readiness,
     RestDay,
     Routine,
     StreakPause,
     StreakRepair,
+    TrainingBlock,
     TrainingPlan,
+    WeekReflection,
     WeighIn,
     WeightGoal,
     Workout,
@@ -63,6 +66,28 @@ from app.training.models import (
 from app.training.pauses import REASONS, Span
 
 router = APIRouter(prefix="/me", tags=["account"])
+
+
+def _checked_extras(item: dict) -> dict:
+    """Heart rate and the after-session check-in from an export, kept only
+    when in range."""
+
+    def small(key: str, lo: int, hi: int) -> int | None:
+        v = item.get(key)
+        return v if isinstance(v, int) and lo <= v <= hi else None
+
+    zones = item.get("hr_zones")
+    return {
+        "soreness": small("soreness", 0, 3),
+        "pump": small("pump", 0, 2),
+        "avg_hr": small("avg_hr", 30, 240),
+        "max_hr": small("max_hr", 30, 240),
+        "hr_zones": [z for z in zones if isinstance(z, int) and z >= 0][:5]
+        if isinstance(zones, list)
+        else [],
+    }
+
+
 settings = get_settings()
 
 EXPORT_VERSION = 3
@@ -251,6 +276,11 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "splits": w.splits,
                 "gear_id": str(w.gear_id) if w.gear_id else None,
                 "gym_id": str(w.gym_id) if w.gym_id else None,
+                "soreness": w.soreness,
+                "pump": w.pump,
+                "avg_hr": w.avg_hr,
+                "max_hr": w.max_hr,
+                "hr_zones": w.hr_zones,
                 "source": w.source,
                 "sets": [
                     {
@@ -319,6 +349,30 @@ async def build_export(db: AsyncSession, user: User) -> dict:
             ),
             None,
         ),
+        "training_blocks": [
+            {
+                "name": b.name,
+                "starts_on": b.starts_on.isoformat(),
+                "weeks": b.weeks,
+                "rir_start": b.rir_start,
+                "rir_end": b.rir_end,
+                "ended_at": _iso(b.ended_at),
+            }
+            for b in await all_of(TrainingBlock, TrainingBlock.user_id == uid)
+        ],
+        "readiness": [
+            {
+                "date": r.day.isoformat(),
+                "sleep": r.sleep,
+                "energy": r.energy,
+                "soreness": r.soreness,
+            }
+            for r in await all_of(Readiness, Readiness.user_id == uid)
+        ],
+        "reflections": [
+            {"week_start": r.week_start.isoformat(), "went_well": r.went_well, "change": r.change}
+            for r in await all_of(WeekReflection, WeekReflection.user_id == uid)
+        ],
         "streak_wagers": [
             {"week_start": x.week_start.isoformat(), "days": x.days}
             for x in await all_of(StreakWager, StreakWager.user_id == uid)
@@ -758,6 +812,7 @@ async def import_data(
                 splits=_valid_splits(item.get("splits")),
                 gear_id=gear_map.get(str(item.get("gear_id"))),
                 gym_id=gym_map.get(str(item.get("gym_id"))),
+                **_checked_extras(item),
                 source="import",
                 client_updated_at=utcnow(),
                 sets=[WorkoutSet(user_id=user.id, **s.model_dump()) for s in sets],
@@ -799,7 +854,13 @@ async def import_data(
             )
         )
 
-    from app.training.schemas import BodyMetricIn, WeighInIn, WeightGoalIn
+    from app.training.schemas import (
+        BodyMetricIn,
+        ReadinessIn,
+        ReflectionIn,
+        WeighInIn,
+        WeightGoalIn,
+    )
 
     tz = ZoneInfo(profile.timezone)
     known_weigh_ins = {
@@ -905,8 +966,42 @@ async def import_data(
             )
         except Exception:
             pass
-    # Wagers are not imported: a freeze earned on another account's history
-    # would be one this account never earned.
+    # Readiness and reflections: fill gaps, never overwrite.
+    have_ready = {
+        d
+        for d in (
+            await db.execute(select(Readiness.day).where(Readiness.user_id == user.id))
+        ).scalars()
+    }
+    for r in data.get("readiness") or []:
+        try:
+            day = date.fromisoformat(r["date"])
+            spec = ReadinessIn.model_validate(r)
+        except Exception:
+            continue
+        if day not in have_ready:
+            have_ready.add(day)
+            db.add(Readiness(user_id=user.id, day=day, **spec.model_dump()))
+    have_notes = {
+        d
+        for d in (
+            await db.execute(
+                select(WeekReflection.week_start).where(WeekReflection.user_id == user.id)
+            )
+        ).scalars()
+    }
+    for r in data.get("reflections") or []:
+        try:
+            week = date.fromisoformat(r["week_start"])
+            spec = ReflectionIn.model_validate(r)
+        except Exception:
+            continue
+        if week not in have_notes and (spec.went_well or spec.change):
+            have_notes.add(week)
+            db.add(WeekReflection(user_id=user.id, week_start=week, **spec.model_dump()))
+    # Not imported: training blocks (a block plans the weeks ahead, and old
+    # ones would only clutter) and wagers (a freeze earned on another
+    # account's history would be one this account never earned).
 
     await db.flush()
     await recompute(db, user.id, notify=False)

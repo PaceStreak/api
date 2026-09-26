@@ -34,7 +34,7 @@ from app.profile.service import (
 )
 from app.social.models import ActivityEvent
 from app.social.service import emit_event
-from app.training.importers import MAX_BYTES, ImportFormatError, check, parse
+from app.training.importers import MAX_BYTES, ImportFormatError, check, parse, zone_seconds
 from app.training.library import (
     CUSTOM_PREFIX,
     DISCIPLINES,
@@ -213,6 +213,11 @@ async def _apply_put(
     workout.routine_id = body.routine_id
     workout.tags = body.tags
     workout.splits = [s.model_dump() for s in body.splits]
+    workout.soreness = body.soreness
+    workout.pump = body.pump
+    workout.avg_hr = body.avg_hr
+    workout.max_hr = body.max_hr
+    workout.hr_zones = [max(0, int(z)) for z in body.hr_zones][:5]
     workout.gear_id = gear_id
     workout.gym_id = gym_id
     workout.client_updated_at = body.client_updated_at
@@ -1053,6 +1058,11 @@ async def import_file(
     now = utcnow()
     problems = list(parsed.problems)
     imported = duplicates = 0
+    # Zones need a max heart rate: the person's own, or the common 220 - age
+    # estimate when only a birth year is known.
+    max_hr = profile.max_hr or (
+        220 - (now.year - profile.birth_year) if profile.birth_year else None
+    )
     for session in sorted(parsed.sessions, key=lambda s: s.started_at):
         reason = check(session, now)
         if reason:
@@ -1094,6 +1104,11 @@ async def import_file(
         workout.effort = session.effort
         workout.feel = session.feel
         workout.splits = session.splits
+        workout.avg_hr = session.avg_hr
+        workout.max_hr = session.max_hr
+        workout.hr_zones = (
+            zone_seconds(session.hr_samples, max_hr) if max_hr and session.hr_samples else []
+        )
         workout.source = "import"
         workout.client_updated_at = now
         workout.deleted_at = None

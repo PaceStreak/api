@@ -93,6 +93,8 @@ def profile_out(p: Profile) -> dict:
         "weight_unit": p.weight_unit,
         "distance_unit": p.distance_unit,
         "training_days": p.training_days,
+        "max_hr": p.max_hr,
+        "onboarded_at": p.onboarded_at.isoformat() if p.onboarded_at else None,
         "birth_year": p.birth_year,
         "onboarded": p.onboarded_at is not None,
         "visibility": p.visibility,
@@ -263,6 +265,7 @@ class ProfilePatch(BaseModel):
     weight_unit: str | None = Field(default=None, pattern="^(kg|lb)$")
     distance_unit: str | None = Field(default=None, pattern="^(km|mi)$")
     training_days: int | None = Field(default=None, ge=0, le=127)
+    max_hr: int | None = Field(default=None, ge=100, le=230)
     visibility: str | None = Field(default=None, pattern="^(private|followers|public)$")
     sharing_paused: bool | None = None
     gamification_enabled: bool | None = None

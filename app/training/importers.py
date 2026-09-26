@@ -109,6 +109,44 @@ class ParsedSession:
     # [{"m": 1000, "sec": 312}, ..., {"m": 420, "sec": 140}]: whole kilometres,
     # then the last partial one. Empty when the file has no timed track.
     splits: list[dict] = field(default_factory=list)
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    # (time, bpm) readings, for zones. Not stored; zones are.
+    hr_samples: list[tuple[datetime, int]] = field(default_factory=list)
+
+
+def hr_summary(samples: list[tuple[datetime, int]]) -> tuple[int | None, int | None]:
+    """Time-weighted average and maximum, ignoring impossible readings."""
+    good = sorted((t, b) for t, b in samples if 30 <= b <= 240)
+    if not good:
+        return None, None
+    if len(good) == 1:
+        return good[0][1], good[0][1]
+    total = weighted = 0.0
+    for (t1, b1), (t2, _) in zip(good, good[1:], strict=False):
+        dt = min(30.0, max(0.0, (t2 - t1).total_seconds()))
+        total += dt
+        weighted += b1 * dt
+    avg = round(weighted / total) if total else round(sum(b for _, b in good) / len(good))
+    return avg, max(b for _, b in good)
+
+
+# Zone floors as a share of max heart rate: 1 (50%) to 5 (90%).
+ZONE_FLOORS = (0.5, 0.6, 0.7, 0.8, 0.9)
+
+
+def zone_seconds(samples: list[tuple[datetime, int]], max_hr: int) -> list[int]:
+    """Seconds in each of five zones. Gaps longer than 30 s count as 30 s, so
+    a paused watch doesn't pour an hour into whatever zone it stopped in."""
+    out = [0, 0, 0, 0, 0]
+    good = sorted((t, b) for t, b in samples if 30 <= b <= 240)
+    for (t1, b1), (t2, _) in zip(good, good[1:], strict=False):
+        dt = min(30.0, max(0.0, (t2 - t1).total_seconds()))
+        share = b1 / max_hr
+        zone = sum(1 for f in ZONE_FLOORS if share >= f) - 1
+        if zone >= 0:
+            out[zone] += round(dt)
+    return out
 
 
 def km_splits(track: list[tuple[float, datetime]]) -> list[dict]:
@@ -251,6 +289,7 @@ def parse_gpx(data: bytes, discipline: str | None = None) -> ParseResult:
     problems: list[str] = []
     for index, track in enumerate(_children(root, "trk"), start=1):
         points = []
+        hr_samples: list[tuple[datetime, int]] = []
         for segment in _children(track, "trkseg"):
             for point in _children(segment, "trkpt"):
                 when = _text(point, "time")
@@ -258,9 +297,12 @@ def parse_gpx(data: bytes, discipline: str | None = None) -> ParseResult:
                     lat = float(point.get("lat"))
                     lon = float(point.get("lon"))
                     ele = _text(point, "ele")
-                    points.append(
-                        (lat, lon, float(ele) if ele else None, _iso(when) if when else None)
-                    )
+                    stamp = _iso(when) if when else None
+                    points.append((lat, lon, float(ele) if ele else None, stamp))
+                    # Garmin-style <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>.
+                    hr = next((n.text for n in point.iter() if _local(n.tag) == "hr"), None)
+                    if hr and stamp is not None:
+                        hr_samples.append((stamp, int(float(hr))))
                 except TypeError, ValueError:
                     continue
         timed = [p for p in points if p[3] is not None]
@@ -296,6 +338,9 @@ def parse_gpx(data: bytes, discipline: str | None = None) -> ParseResult:
                 elevation_m=round(climb, 1) if elevations else None,
                 title=(_text(track, "name") or "")[:80] or None,
                 splits=km_splits(track_points),
+                avg_hr=hr_summary(hr_samples)[0],
+                max_hr=hr_summary(hr_samples)[1],
+                hr_samples=hr_samples,
             )
         )
     if not sessions and not problems:
@@ -322,6 +367,7 @@ def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
     sessions: list[ParsedSession] = []
     problems: list[str] = []
     records: list[tuple[float, datetime]] = []
+    beats: list[tuple[datetime, int]] = []
     try:
         with fitdecode.FitReader(io.BytesIO(data)) as reader:
             for frame in reader:
@@ -330,6 +376,9 @@ def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
                 if frame.name == "record":
                     when = frame.get_value("timestamp", fallback=None)
                     dist = frame.get_value("distance", fallback=None)
+                    bpm = frame.get_value("heart_rate", fallback=None)
+                    if isinstance(when, datetime) and isinstance(bpm, int | float):
+                        beats.append((when if when.tzinfo else when.replace(tzinfo=UTC), int(bpm)))
                     if isinstance(when, datetime) and dist is not None:
                         records.append(
                             (float(dist), when if when.tzinfo else when.replace(tzinfo=UTC))
@@ -348,6 +397,11 @@ def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
                 )
                 distance = frame.get_value("total_distance", fallback=None)
                 ascent = frame.get_value("total_ascent", fallback=None)
+                window_end = start + timedelta(seconds=float(elapsed or 0) + 60)
+                mine = [b for b in beats if start <= b[0] <= window_end]
+                avg, peak = hr_summary(mine)
+                avg = frame.get_value("avg_heart_rate", fallback=None) or avg
+                peak = frame.get_value("max_heart_rate", fallback=None) or peak
                 sessions.append(
                     ParsedSession(
                         started_at=start,
@@ -359,6 +413,9 @@ def parse_fit(data: bytes, discipline: str | None = None) -> ParseResult:
                         duration_sec=int(elapsed) if elapsed else None,
                         distance_m=float(distance) if distance else None,
                         elevation_m=float(ascent) if ascent else None,
+                        avg_hr=int(avg) if avg else None,
+                        max_hr=int(peak) if peak else None,
+                        hr_samples=mine,
                         splits=km_splits(
                             [
                                 r

@@ -56,6 +56,12 @@ class WorkoutIn(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=20)
     gear_id: UUID | None = None
     gym_id: UUID | None = None
+    soreness: int | None = Field(default=None, ge=0, le=3)
+    pump: int | None = Field(default=None, ge=0, le=2)
+    avg_hr: int | None = Field(default=None, ge=30, le=240)
+    max_hr: int | None = Field(default=None, ge=30, le=240)
+    # Echoed back like splits, so editing an imported run keeps its zones.
+    hr_zones: list[int] = Field(default_factory=list, max_length=5)
     # Echoed back by the client so editing an imported run keeps its splits.
     splits: list[SplitIn] = Field(default_factory=list, max_length=500)
     client_updated_at: datetime
@@ -119,6 +125,11 @@ class WorkoutOut(BaseModel):
     tags: list[str] = []
     gear_id: UUID | None = None
     gym_id: UUID | None = None
+    soreness: int | None = None
+    pump: int | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    hr_zones: list[int] = []
     splits: list[dict] = []
     source: str
     client_updated_at: datetime
@@ -343,6 +354,25 @@ class GymIn(BaseModel):
 
 class ExerciseNoteIn(BaseModel):
     note: str = Field(max_length=500)
+
+
+class BlockIn(BaseModel):
+    name: str = Field(default="Training block", min_length=1, max_length=60)
+    weeks: int = Field(default=5, ge=3, le=8)
+    rir_start: int = Field(default=3, ge=0, le=5)
+    rir_end: int = Field(default=1, ge=0, le=5)
+    when: Literal["this", "next"] = "this"
+
+
+class ReadinessIn(BaseModel):
+    sleep: int = Field(ge=1, le=5)
+    energy: int = Field(ge=1, le=5)
+    soreness: int = Field(ge=1, le=5)
+
+
+class ReflectionIn(BaseModel):
+    went_well: str | None = Field(default=None, max_length=500)
+    change: str | None = Field(default=None, max_length=500)
 
 
 class WeightGoalIn(BaseModel):

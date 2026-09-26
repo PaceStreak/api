@@ -46,6 +46,10 @@ class Workout(Base):
         CheckConstraint("feel IS NULL OR feel BETWEEN 1 AND 5", name="ck_workouts_feel"),
         CheckConstraint("duration_sec IS NULL OR duration_sec >= 0", name="ck_workouts_duration"),
         CheckConstraint("distance_m IS NULL OR distance_m >= 0", name="ck_workouts_distance"),
+        CheckConstraint(
+            "soreness IS NULL OR soreness BETWEEN 0 AND 3", name="ck_workouts_soreness"
+        ),
+        CheckConstraint("pump IS NULL OR pump BETWEEN 0 AND 2", name="ck_workouts_pump"),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -70,6 +74,18 @@ class Workout(Base):
     # How it felt, 1-5. Tracked because a streak built on miserable sessions
     # is one that ends, and the trend is worth seeing.
     feel: Mapped[int | None] = mapped_column(SmallInteger)
+    # Optional after-session check-in, used only to suggest a set more or
+    # fewer next time. Soreness carried in from last time (0 none - 3 still
+    # very sore) and how the pump felt (0 low - 2 great).
+    soreness: Mapped[int | None] = mapped_column(SmallInteger)
+    pump: Mapped[int | None] = mapped_column(SmallInteger)
+    # Heart rate, from an imported file or typed in. Zones are seconds in
+    # each of five zones, worked out at import from the person's max HR.
+    avg_hr: Mapped[int | None] = mapped_column(SmallInteger)
+    max_hr: Mapped[int | None] = mapped_column(SmallInteger)
+    hr_zones: Mapped[list[int]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
 
     routine_id: Mapped[UUID | None] = mapped_column()
     # Private, like notes: free-form labels ("hills", "with-sam", "race") for
@@ -360,6 +376,68 @@ class Gear(Base):
     initial_m: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(String(200))
+
+
+class TrainingBlock(Base):
+    """A multi-week block: reps in reserve tighten week by week, then a
+    lighter week. RIR is how many more reps the set could have had; aiming
+    for it is what turns "train hard" into a number. One active at a time.
+    """
+
+    __tablename__ = "training_blocks"
+    __table_args__ = (
+        CheckConstraint("weeks BETWEEN 3 AND 8", name="ck_block_weeks"),
+        CheckConstraint(
+            "rir_start BETWEEN 0 AND 5 AND rir_end BETWEEN 0 AND 5", name="ck_block_rir"
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    # A week start. Weeks count from here; the last one is the lighter week.
+    starts_on: Mapped[date] = mapped_column(Date, nullable=False)
+    weeks: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    rir_start: Mapped[int] = mapped_column(SmallInteger, default=3, nullable=False)
+    rir_end: Mapped[int] = mapped_column(SmallInteger, default=1, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Readiness(Base):
+    """A morning check-in: sleep, energy and soreness, 1-5 each. Private.
+    It only changes what Today suggests; it never gates or scores anything."""
+
+    __tablename__ = "readiness"
+    __table_args__ = (
+        UniqueConstraint("user_id", "day", name="uq_readiness_day"),
+        CheckConstraint(
+            "sleep BETWEEN 1 AND 5 AND energy BETWEEN 1 AND 5 AND soreness BETWEEN 1 AND 5",
+            name="ck_readiness_range",
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    sleep: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    energy: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    soreness: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+
+class WeekReflection(Base):
+    """A line or two about a week, written on its recap. Private."""
+
+    __tablename__ = "week_reflections"
+    __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_reflection_week"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    went_well: Mapped[str | None] = mapped_column(String(500))
+    change: Mapped[str | None] = mapped_column(String(500))
 
 
 class Gym(Base):

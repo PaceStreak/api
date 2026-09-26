@@ -78,6 +78,8 @@ class Profile(Base):
     # Optional planned training days, as a bitmask (bit 0 = Monday). Only used
     # to aim reminders; the streak itself counts against the weekly target.
     training_days: Mapped[int | None] = mapped_column(SmallInteger)
+    # For heart-rate zones. Unset means estimated from the birth year.
+    max_hr: Mapped[int | None] = mapped_column(SmallInteger)
 
     # Consent and age. Birth *year* only - enough for the age gate, not a
     # date of birth anyone could use for anything else.

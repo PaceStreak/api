@@ -29,6 +29,7 @@ from app.profile.service import get_profile
 from app.training.library import DISCIPLINE_IDS, EXERCISE_BY_ID, TEMPLATE_BY_ID
 from app.training.models import Routine, TrainingPlan, Workout
 from app.training.plan_templates import PLAN_TEMPLATE_BY_ID, PLAN_TEMPLATES
+from app.training.race import RacePlanError, build_race_plan
 from app.training.schemas import RoutineItem
 
 router = APIRouter(prefix="/plans", tags=["training"])
@@ -400,6 +401,48 @@ async def create_plan(
     await db.commit()
     await db.refresh(plan)
     return await plan_view(db, plan, await get_profile(db, user.id))
+
+
+class RaceIn(BaseModel):
+    race: str = Field(pattern="^(5k|10k|half|marathon)$")
+    race_date: date
+    per_week: int = Field(default=3, ge=3, le=5)
+
+
+@router.post("/race", status_code=201)
+async def create_race_plan(
+    body: RaceIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Build a plan from this week to race day, plus a recovery week, and
+    start it. Any running plan is stopped, as with starting one by hand."""
+    await check_plan_room(db, user.id)
+    profile = await get_profile(db, user.id)
+    try:
+        first, weeks, name = build_race_plan(
+            body.race,
+            body.race_date,
+            local_today(profile.timezone),
+            profile.week_starts_on,
+            body.per_week,
+        )
+    except RacePlanError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    plan = TrainingPlan(
+        user_id=user.id,
+        name=name[:60],
+        description=(
+            "Easy running most days, one faster session once the base is built, a taper, "
+            "then a recovery week. A schedule of suggestions: rest when you need to."
+        ),
+        template_id=f"race-{body.race}",
+        weeks=weeks,
+    )
+    db.add(plan)
+    await db.flush()
+    await run_only(db, plan, first)
+    await db.commit()
+    await db.refresh(plan)
+    return await plan_view(db, plan, profile)
 
 
 PLAN_FORMAT = "pacestreak-plan"

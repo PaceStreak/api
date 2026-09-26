@@ -23,6 +23,7 @@ from app.social.router import router as social_router
 from app.training.gear import router as gear_router
 from app.training.habits import router as habits_router
 from app.training.personal import router as personal_router
+from app.training.photos import router as photos_router
 from app.training.plans import router as plans_router
 from app.training.router import router as training_router
 
@@ -36,6 +37,7 @@ router.include_router(calendar_router)
 router.include_router(training_router)
 router.include_router(gear_router)
 router.include_router(personal_router)
+router.include_router(photos_router)
 router.include_router(habits_api_router)
 router.include_router(habits_router)
 router.include_router(plans_router)

@@ -228,6 +228,14 @@ class BodyMetricIn(BaseModel):
     resting_hr: int | None = Field(default=None, ge=20, le=250)
     sleep_hours: float | None = Field(default=None, ge=0, le=24)
     note: str | None = Field(default=None, max_length=200)
+    neck_cm: float | None = Field(default=None, gt=0, le=400)
+    shoulders_cm: float | None = Field(default=None, gt=0, le=400)
+    chest_cm: float | None = Field(default=None, gt=0, le=400)
+    arm_cm: float | None = Field(default=None, gt=0, le=400)
+    forearm_cm: float | None = Field(default=None, gt=0, le=400)
+    hips_cm: float | None = Field(default=None, gt=0, le=400)
+    thigh_cm: float | None = Field(default=None, gt=0, le=400)
+    calf_cm: float | None = Field(default=None, gt=0, le=400)
 
 
 class WeighInIn(BaseModel):

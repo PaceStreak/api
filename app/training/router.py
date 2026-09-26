@@ -43,6 +43,7 @@ from app.training.library import (
     library_payload,
 )
 from app.training.models import (
+    METRIC_FIELDS,
     BodyMetric,
     CustomExercise,
     Gear,
@@ -748,14 +749,7 @@ async def delete_routine(
 
 
 def _metric_out(m: BodyMetric) -> dict:
-    return {
-        "date": m.measured_on.isoformat(),
-        "body_fat_pct": m.body_fat_pct,
-        "waist_cm": m.waist_cm,
-        "resting_hr": m.resting_hr,
-        "sleep_hours": m.sleep_hours,
-        "note": m.note,
-    }
+    return {"date": m.measured_on.isoformat(), **{f: getattr(m, f) for f in METRIC_FIELDS}}
 
 
 @router.get("/body-metrics")

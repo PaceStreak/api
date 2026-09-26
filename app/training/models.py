@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Sequence,
     SmallInteger,
     String,
@@ -228,6 +229,55 @@ class BodyMetric(Base):
     resting_hr: Mapped[int | None] = mapped_column(SmallInteger)
     sleep_hours: Mapped[float | None] = mapped_column(Float)
     note: Mapped[str | None] = mapped_column(String(200))
+    # Tape measurements, centimetres. One side for limbs: the same side each
+    # time is what makes them comparable, and the app says so.
+    neck_cm: Mapped[float | None] = mapped_column(Float)
+    shoulders_cm: Mapped[float | None] = mapped_column(Float)
+    chest_cm: Mapped[float | None] = mapped_column(Float)
+    arm_cm: Mapped[float | None] = mapped_column(Float)
+    forearm_cm: Mapped[float | None] = mapped_column(Float)
+    hips_cm: Mapped[float | None] = mapped_column(Float)
+    thigh_cm: Mapped[float | None] = mapped_column(Float)
+    calf_cm: Mapped[float | None] = mapped_column(Float)
+
+
+TAPE_FIELDS = (
+    "neck_cm",
+    "shoulders_cm",
+    "chest_cm",
+    "waist_cm",
+    "arm_cm",
+    "forearm_cm",
+    "hips_cm",
+    "thigh_cm",
+    "calf_cm",
+)
+# Every recorded field of a BodyMetric, in export order.
+METRIC_FIELDS = ("body_fat_pct", "resting_hr", "sleep_hours", *TAPE_FIELDS, "note")
+
+# Most progress photos one person keeps on the server, and the largest one.
+# The app re-encodes to a 1600 px JPEG first, which lands well under the cap.
+MAX_BODY_PHOTOS = 500
+MAX_BODY_PHOTO_BYTES = 2 * 1024 * 1024
+PHOTO_POSES = ("front", "side", "back")
+
+
+class BodyPhoto(Base):
+    """A progress photo backed up to the account, only when the person turns
+    backup on. Private like BodyMetric: served only to its owner, never
+    cached by a shared cache, never shown to anyone. The id is chosen by the
+    client, so a retried upload replaces rather than duplicates."""
+
+    __tablename__ = "body_photos"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    taken_on: Mapped[date] = mapped_column(Date, nullable=False)
+    pose: Mapped[str] = mapped_column(String(8), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 # When in the day a weigh-in was taken. Weight swings by a kilo or more across

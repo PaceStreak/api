@@ -70,6 +70,15 @@ def done_days(
     return out
 
 
+def first_week_target(weekly_target: int, started_on: date, week: date) -> int:
+    """A habit started mid-week can only be done on the days left in that
+    week, so its first week asks for no more than those. Without this a habit
+    begun on a Friday with a daily target fails its first week by design."""
+    if week <= started_on < week + timedelta(days=7):
+        return max(1, min(weekly_target, 7 - (started_on - week).days))
+    return weekly_target
+
+
 def strength(weeks: list[WeekCell]) -> int:
     """0-100. A slow average of how much of each week's target was met, so a
     missed week dents it and months of consistency hold it up. Paused weeks
@@ -105,7 +114,7 @@ def view_habit(
         done,
         today,
         week_starts_on,
-        lambda _week: weekly_target,
+        lambda week: first_week_target(weekly_target, started_on, week),
         paused_days=paused_days,
     )
     by_day = {entry.day: entry.amount for entry in logs}

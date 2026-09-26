@@ -22,6 +22,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.account import service as security
 from app.account.calendar import build_calendar
@@ -46,7 +47,9 @@ from app.profile.service import get_chains, get_profile
 from app.social.models import Block, BuddyPair, Comment, Follow
 from app.training.library import CUSTOM_PREFIX, DISCIPLINE_IDS, EXERCISE_BY_ID
 from app.training.models import (
+    METRIC_FIELDS,
     BodyMetric,
+    BodyPhoto,
     CustomExercise,
     ExerciseNote,
     Gear,
@@ -426,15 +429,14 @@ async def build_export(db: AsyncSession, user: User) -> dict:
             for r in await all_of(Routine, Routine.user_id == uid)
         ],
         "body_metrics": [
-            {
-                "date": m.measured_on.isoformat(),
-                "body_fat_pct": m.body_fat_pct,
-                "waist_cm": m.waist_cm,
-                "resting_hr": m.resting_hr,
-                "sleep_hours": m.sleep_hours,
-                "note": m.note,
-            }
+            {"date": m.measured_on.isoformat(), **{f: getattr(m, f) for f in METRIC_FIELDS}}
             for m in await all_of(BodyMetric, BodyMetric.user_id == uid)
+        ],
+        # Backed-up photos are listed here; the images themselves are in the
+        # CSV export's photos/ folder, which keeps this file readable.
+        "body_photos": [
+            {"id": str(p.id), "date": p.taken_on.isoformat(), "pose": p.pose, "size": p.size}
+            for p in await all_of(BodyPhoto, BodyPhoto.user_id == uid)
         ],
         "weigh_ins": [
             {
@@ -650,18 +652,8 @@ async def export(
         )
         sheet(
             "body_metrics.csv",
-            ["date", "body_fat_pct", "waist_cm", "resting_hr", "sleep_hours", "note"],
-            (
-                [
-                    m.measured_on,
-                    m.body_fat_pct,
-                    m.waist_cm,
-                    m.resting_hr,
-                    m.sleep_hours,
-                    m.note,
-                ]
-                for m in metrics
-            ),
+            ["date", *METRIC_FIELDS],
+            ([m.measured_on, *(getattr(m, f) for f in METRIC_FIELDS)] for m in metrics),
         )
         weigh_ins = (
             (
@@ -692,11 +684,23 @@ async def export(
             ["habit", "kind", "unit", "date", "amount", "note"],
             ([*row] for row in habit_rows),
         )
+        photos = (
+            await db.execute(
+                select(BodyPhoto)
+                .options(undefer(BodyPhoto.data))
+                .where(BodyPhoto.user_id == user.id)
+                .order_by(BodyPhoto.taken_on)
+            )
+        ).scalars()
+        for p in photos:
+            ext = {"image/png": "png", "image/webp": "webp"}.get(p.content_type, "jpg")
+            archive.writestr(f"photos/{p.taken_on}_{p.pose}_{p.id}.{ext}", p.data)
         archive.writestr(
             "README.txt",
             "PaceStreak export.\n\nWeights are always kilograms and distances always metres,\n"
             "whatever units the app displays. The JSON export contains everything,\n"
-            "including social data; these CSVs cover training.\n",
+            "including social data; these CSVs cover training, and photos/ holds any\n"
+            "progress photos you backed up.\n",
         )
     return Response(
         buffer.getvalue(),

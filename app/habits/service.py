@@ -1,7 +1,7 @@
 """Loading habits with their streaks, for the API and for the game engine."""
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -53,8 +53,9 @@ async def habit_views(
     ]
 
 
-def habit_summary(h: Habit, v: HabitView, today: date) -> dict:
+def habit_summary(h: Habit, v: HabitView, today: date, logs: list[HabitDay] = ()) -> dict:
     r = v.chain
+    by_day = {entry.day: entry.amount for entry in logs}
     return {
         "id": str(h.id),
         "name": h.name,
@@ -93,4 +94,9 @@ def habit_summary(h: Habit, v: HabitView, today: date) -> dict:
         "clean_run": v.clean_run,
         "best_clean_run": v.best_clean_run,
         "last_slip": v.last_slip.isoformat() if v.last_slip else None,
+        # The last seven days, oldest first, for the week strip on each row.
+        "recent": [
+            {"date": d.isoformat(), "amount": by_day.get(d, 0.0)}
+            for d in (today - timedelta(days=i) for i in range(6, -1, -1))
+        ],
     }

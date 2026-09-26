@@ -88,7 +88,7 @@ async def _one(db: AsyncSession, user: User, habit: Habit, days: int = 0) -> dic
     ):
         if h.id != habit.id:
             continue
-        out = habit_summary(h, v, today)
+        out = habit_summary(h, v, today, logs)
         if days:
             since = today - timedelta(days=days)
             out["days"] = [
@@ -117,7 +117,11 @@ async def list_habits(
     views = await habit_views(
         db, user.id, today, profile.week_starts_on, sheltered, include_archived=archived
     )
-    return [habit_summary(h, v, today) for h, v, _ in views if archived or h.archived_at is None]
+    return [
+        habit_summary(h, v, today, logs)
+        for h, v, logs in views
+        if archived or h.archived_at is None
+    ]
 
 
 @router.post("", status_code=201)

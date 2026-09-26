@@ -86,4 +86,26 @@ def test_habit_list_carries_the_last_seven_days(client):
     client.put(f"/v1/habits/{habit['id']}/days/{yesterday}", json={"amount": 3}, headers=h)
     recent = client.get("/v1/habits", headers=h).json()[0]["recent"]
     assert len(recent) == 7 and recent[-1]["date"] == today.isoformat()
-    assert recent[-2] == {"date": yesterday, "amount": 3.0}
+    assert recent[-2] == {"date": yesterday, "amount": 3.0, "note": None}
+
+
+def test_habit_day_notes_survive_a_tick_and_can_stand_alone(client):
+    h = bearer(person(client, "notes@example.com", "noter"))
+    habit = client.post("/v1/habits", json={"template_id": "journal"}, headers=h).json()
+    day = datetime.now(UTC).date().isoformat()
+    url = f"/v1/habits/{habit['id']}/days/{day}"
+
+    def note():
+        return client.get(f"/v1/habits/{habit['id']}", headers=h).json()["days"]
+
+    client.put(url, json={"amount": 1, "note": "wrote two pages"}, headers=h)
+    # A plain tick later, with no note sent, keeps it.
+    client.put(url, json={"amount": 1}, headers=h)
+    assert note() == [{"date": day, "amount": 1.0, "note": "wrote two pages"}]
+    # Unticking keeps a day that still has a note, as not done.
+    client.put(url, json={"amount": 0}, headers=h)
+    assert note()[0]["amount"] == 0 and note()[0]["note"] == "wrote two pages"
+    assert client.get("/v1/habits", headers=h).json()[0]["today"]["done"] is False
+    # Clearing both removes the day.
+    client.put(url, json={"amount": 0, "note": ""}, headers=h)
+    assert note() == []

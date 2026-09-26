@@ -92,7 +92,7 @@ async def _one(db: AsyncSession, user: User, habit: Habit, days: int = 0) -> dic
         if days:
             since = today - timedelta(days=days)
             out["days"] = [
-                {"date": entry.day.isoformat(), "amount": entry.amount}
+                {"date": entry.day.isoformat(), "amount": entry.amount, "note": entry.note}
                 for entry in sorted(logs, key=lambda e: e.day)
                 if entry.day >= since
             ]
@@ -308,17 +308,25 @@ async def set_day(
     _, today, _ = await _context(db, user)
     _check_day(day, today)
     row = await _day(db, user, habit, day)
-    if body.amount <= 0:
+    # A note left out keeps the one already there, so a plain tick never
+    # wipes it; an empty string clears it.
+    note = (body.note or "").strip() or None if "note" in body.model_fields_set else None
+    keep_note = "note" not in body.model_fields_set and row is not None and row.note
+    if body.amount <= 0 and not note and not keep_note:
         if row is not None:
             await db.delete(row)
     else:
+        # A day can hold just a note ("ill, rested"): amount 0 counts as not
+        # done, or as clean for a habit being broken.
         if row is None:
             row = HabitLog(habit_id=habit.id, user_id=user.id, day=day, amount=body.amount)
             db.add(row)
         row.amount = body.amount
-        row.note = (body.note or "").strip() or None
+        if "note" in body.model_fields_set:
+            row.note = note
         # Filling in a day before the habit began moves its start back.
-        habit.started_on = min(habit.started_on, day)
+        if body.amount > 0:
+            habit.started_on = min(habit.started_on, day)
     await db.flush()
     await recompute(db, user.id, notify=True)
     await db.commit()

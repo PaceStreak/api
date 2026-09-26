@@ -28,6 +28,7 @@ STRENGTH_ALPHA = 0.25
 class HabitDay:
     day: date
     amount: float
+    note: str | None = None
 
 
 @dataclass

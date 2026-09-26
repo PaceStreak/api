@@ -26,14 +26,14 @@ async def habit_views(
     if not habits:
         return []
     logs: dict[UUID, list[HabitDay]] = defaultdict(list)
-    for habit_id, day, amount in (
+    for habit_id, day, amount, note in (
         await db.execute(
-            select(HabitLog.habit_id, HabitLog.day, HabitLog.amount).where(
+            select(HabitLog.habit_id, HabitLog.day, HabitLog.amount, HabitLog.note).where(
                 HabitLog.user_id == user_id
             )
         )
     ).all():
-        logs[habit_id].append(HabitDay(day, amount))
+        logs[habit_id].append(HabitDay(day, amount, note))
     return [
         (
             h,
@@ -56,6 +56,7 @@ async def habit_views(
 def habit_summary(h: Habit, v: HabitView, today: date, logs: list[HabitDay] = ()) -> dict:
     r = v.chain
     by_day = {entry.day: entry.amount for entry in logs}
+    notes = {entry.day: entry.note for entry in logs if entry.note}
     return {
         "id": str(h.id),
         "name": h.name,
@@ -96,7 +97,7 @@ def habit_summary(h: Habit, v: HabitView, today: date, logs: list[HabitDay] = ()
         "last_slip": v.last_slip.isoformat() if v.last_slip else None,
         # The last seven days, oldest first, for the week strip on each row.
         "recent": [
-            {"date": d.isoformat(), "amount": by_day.get(d, 0.0)}
+            {"date": d.isoformat(), "amount": by_day.get(d, 0.0), "note": notes.get(d)}
             for d in (today - timedelta(days=i) for i in range(6, -1, -1))
         ],
     }

@@ -37,6 +37,8 @@ from app.database import get_db
 from app.game.models import PersonalRecord, StreakWager, UserAchievement
 from app.game.service import recompute
 from app.groups.models import Challenge, ChallengeParticipant, Group, GroupMember
+from app.habits.models import Habit, HabitLog
+from app.habits.router import HabitIn
 from app.notifications.models import NotificationPreference
 from app.notifications.service import deliver, notify
 from app.profile.router import profile_out
@@ -349,6 +351,31 @@ async def build_export(db: AsyncSession, user: User) -> dict:
             ),
             None,
         ),
+        "habits": [
+            {
+                "id": str(h.id),
+                "name": h.name,
+                "emoji": h.emoji,
+                "category": h.category,
+                "kind": h.kind,
+                "unit": h.unit,
+                "daily_goal": h.daily_goal,
+                "weekly_target": h.weekly_target,
+                "time_of_day": h.time_of_day,
+                "cue": h.cue,
+                "why": h.why,
+                "total_goal": h.total_goal,
+                "remind_hour": h.remind_hour,
+                "template_id": h.template_id,
+                "started_on": h.started_on.isoformat(),
+                "archived_at": _iso(h.archived_at),
+                "days": [
+                    {"date": log.day.isoformat(), "amount": log.amount, "note": log.note}
+                    for log in await all_of(HabitLog, HabitLog.habit_id == h.id)
+                ],
+            }
+            for h in await all_of(Habit, Habit.user_id == uid)
+        ],
         "training_blocks": [
             {
                 "name": b.name,
@@ -649,6 +676,21 @@ async def export(
             "weigh_ins.csv",
             ["weighed_at", "date", "moment", "weight_kg", "note"],
             ([w.weighed_at, w.local_date, w.moment, w.weight_kg, w.note] for w in weigh_ins),
+        )
+        habit_rows = (
+            await db.execute(
+                select(
+                    Habit.name, Habit.kind, Habit.unit, HabitLog.day, HabitLog.amount, HabitLog.note
+                )
+                .join(HabitLog, HabitLog.habit_id == Habit.id)
+                .where(Habit.user_id == user.id)
+                .order_by(Habit.name, HabitLog.day)
+            )
+        ).all()
+        sheet(
+            "habit_days.csv",
+            ["habit", "kind", "unit", "date", "amount", "note"],
+            ([*row] for row in habit_rows),
         )
         archive.writestr(
             "README.txt",
@@ -966,6 +1008,62 @@ async def import_data(
             )
         except Exception:
             pass
+    # Habits: matched by name, like gear; days fill gaps and never overwrite.
+    owned_habits = {
+        h.name.lower(): h
+        for h in (await db.execute(select(Habit).where(Habit.user_id == user.id))).scalars()
+    }
+    for item in data.get("habits") or []:
+        try:
+            spec = HabitIn.model_validate(
+                {k: item.get(k) for k in HabitIn.model_fields if k != "template_id"}
+            )
+            started = date.fromisoformat(item["started_on"])
+        except Exception:
+            continue
+        if not spec.name:
+            continue
+        habit = owned_habits.get(spec.name.lower())
+        if habit is None:
+            kind = spec.kind or "check"
+            habit = Habit(
+                user_id=user.id,
+                name=spec.name.strip(),
+                emoji=spec.emoji or "✨",
+                category=spec.category or "other",
+                kind=kind,
+                unit=spec.unit,
+                daily_goal=spec.daily_goal if kind in ("duration", "count") else None,
+                weekly_target=spec.weekly_target or 7,
+                time_of_day=spec.time_of_day or "anytime",
+                cue=spec.cue,
+                why=spec.why,
+                total_goal=spec.total_goal,
+                remind_hour=spec.remind_hour,
+                started_on=started,
+                archived_at=utcnow() if item.get("archived_at") else None,
+            )
+            db.add(habit)
+            await db.flush()
+            owned_habits[spec.name.lower()] = habit
+        have_days = {
+            d
+            for d in (
+                await db.execute(select(HabitLog.day).where(HabitLog.habit_id == habit.id))
+            ).scalars()
+        }
+        for entry in item.get("days") or []:
+            try:
+                day = date.fromisoformat(entry["date"])
+                amount = float(entry["amount"])
+            except Exception:
+                continue
+            if day in have_days or not 0 < amount <= 100_000:
+                continue
+            have_days.add(day)
+            note = str(entry.get("note") or "")[:280] or None
+            db.add(HabitLog(habit_id=habit.id, user_id=user.id, day=day, amount=amount, note=note))
+
     # Readiness and reflections: fill gaps, never overwrite.
     have_ready = {
         d

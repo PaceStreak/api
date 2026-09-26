@@ -27,6 +27,7 @@ from app.game.service import (
     recompute,
     record_label,
     snapshot,
+    weeks_payload,
 )
 from app.game.streak import target_resolver
 from app.profile.models import Profile
@@ -68,6 +69,27 @@ async def stats(user: User = Depends(get_current_user), db: AsyncSession = Depen
         },
         "last_active": snap.last_active.isoformat() if snap.last_active else None,
         "quests": _quests_payload(snap),
+        "life": (
+            {
+                "target": snap.profile.life_target,
+                "current": snap.life.current,
+                "longest": snap.life.longest,
+                "this_week_days": snap.life.this_week_days,
+                "needed": snap.life.needed,
+                "days_left": snap.life.days_left,
+                "freezes_available": snap.life.freezes_available,
+                "weeks": weeks_payload(snap.life, 26),
+            }
+            if snap.life
+            else None
+        ),
+        "habits": {
+            "count": len(snap.habits),
+            "done_today": sum(1 for _, v, _ in snap.habits if snap.today in v.done_days),
+            "kept_this_week": sum(
+                1 for _, v, _ in snap.habits if v.chain.this_week_days >= v.chain.this_week_target
+            ),
+        },
         "pr_streak": _pr_streak_payload(snap),
         "wager": _wager_state(snap),
     }

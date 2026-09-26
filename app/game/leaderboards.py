@@ -9,6 +9,8 @@ Four boards, all computed from the user_stats projection:
 - season_xp: this quarter's XP. XP never scales with load or volume.
 - season_prs: this quarter's personal records - each one relative to the
   person's own history, so being big or lying about weight wins nothing.
+- life_streak: the whole-life streak (training or any habit), for those who
+  turned it on.
 
 Any board can be narrowed to "similar": people who train about as often as
 you, so someone on two days a week is not ranked against someone on six.
@@ -44,6 +46,9 @@ BOARDS = {
     "streak": UserStats.current_streak,
     "season_xp": UserStats.season_xp,
     "season_prs": UserStats.season_prs,
+    # Weeks in a row with any training or habit, for people who turned the
+    # whole-life streak on. Attendance again: never which habit, or how much.
+    "life_streak": UserStats.life_streak,
 }
 
 

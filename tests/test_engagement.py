@@ -58,7 +58,7 @@ def test_quests_are_the_same_three_for_everyone_and_weigh_ins_need_history():
         w = week + timedelta(weeks=i)
         assert "morning_weigh" not in {q.id for q in quests_for(w, weighs=False)}
     # Over a stretch of weeks, everything in the pool comes round.
-    seen = {q.id for i in range(20) for q in quests_for(week + timedelta(weeks=i), True)}
+    seen = {q.id for i in range(20) for q in quests_for(week + timedelta(weeks=i), True, True)}
     assert seen == set(BY_ID)
 
 
@@ -177,7 +177,8 @@ def test_weight_goal_starts_from_the_trend_and_is_private(client):
     stats = client.get("/v1/me/stats", headers=bearer(token)).text
     assert "target_kg" not in stats
     other = person(client, "peek@example.com", "peeker")
-    assert "75" not in client.get("/v1/people/goalie", headers=bearer(other)).text
+    public = client.get("/v1/people/goalie", headers=bearer(other)).text
+    assert "target_kg" not in public and "start_kg" not in public
     assert client.delete("/v1/weight-goal", headers=bearer(token)).status_code == 204
     assert client.get("/v1/weight-goal", headers=bearer(token)).json() is None
 

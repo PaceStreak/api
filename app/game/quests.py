@@ -47,6 +47,7 @@ POOL: tuple[QuestDef, ...] = (
     QuestDef("new_exercise", "Something new", "Try an exercise you've never logged.", 1),
     QuestDef("rest_day", "Rest on purpose", "Log a rest day. Recovery is training.", 1),
     QuestDef("morning_weigh", "Same time, every time", "Weigh in after waking on 5 days.", 5),
+    QuestDef("habit_week", "Every habit, kept", "Keep the weekly target on all your habits.", 1),
 )
 BY_ID = {q.id: q for q in POOL}
 
@@ -62,6 +63,8 @@ class WeekFacts:
     new_exercises: int = 0
     rest_days: int = 0
     waking_weigh_days: int = 0
+    habits_kept: int = 0
+    habits_total: int = 0
 
 
 def progress_of(quest: QuestDef, facts: WeekFacts, week: date) -> int:
@@ -82,13 +85,19 @@ def progress_of(quest: QuestDef, facts: WeekFacts, week: date) -> int:
         return facts.rest_days
     if quest.id == "morning_weigh":
         return facts.waking_weigh_days
+    if quest.id == "habit_week":
+        return int(facts.habits_total > 0 and facts.habits_kept >= facts.habits_total)
     return 0
 
 
-def quests_for(week: date, weighs: bool) -> list[QuestDef]:
-    """This week's three. Deterministic in the week alone, so everyone shares
-    them and they never reshuffle on a recompute."""
-    pool = [q for q in POOL if weighs or q.id != "morning_weigh"]
+def quests_for(week: date, weighs: bool, has_habits: bool = False) -> list[QuestDef]:
+    """This week's three. Deterministic in the week and in what the person
+    tracks, so they never reshuffle on a recompute."""
+    pool = [
+        q
+        for q in POOL
+        if (weighs or q.id != "morning_weigh") and (has_habits or q.id != "habit_week")
+    ]
     seed = week.toordinal() // 7
     picked: list[QuestDef] = []
     i = seed
@@ -115,6 +124,7 @@ def compute_quests(
     facts_for: Callable[[date], WeekFacts],
     first_weigh_in: date | None,
     paused: set[date],
+    first_habit: date | None = None,
 ) -> list[QuestWeek]:
     out: list[QuestWeek] = []
     for w in weeks:
@@ -122,7 +132,9 @@ def compute_quests(
             continue
         facts = facts_for(w)
         weighs = first_weigh_in is not None and first_weigh_in < w
-        out.append(QuestWeek(w, [(q, progress_of(q, facts, w)) for q in quests_for(w, weighs)]))
+        tracked = first_habit is not None and first_habit < w
+        picks = quests_for(w, weighs, tracked)
+        out.append(QuestWeek(w, [(q, progress_of(q, facts, w)) for q in picks]))
     return out
 
 

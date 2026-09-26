@@ -8,6 +8,7 @@ import app.account.models  # noqa: F401
 import app.auth.models  # noqa: F401
 import app.game.models  # noqa: F401
 import app.groups.models  # noqa: F401
+import app.habits.models  # noqa: F401
 import app.notifications.models  # noqa: F401
 import app.ops.models  # noqa: F401
 import app.profile.models  # noqa: F401

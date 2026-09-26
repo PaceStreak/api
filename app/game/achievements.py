@@ -41,6 +41,10 @@ class Context:
     challenges_finished: int = 0
     body_metric_days: int = 0
     pr_streak: int = 0  # longest run of four-week blocks with a PR
+    habit_best_days: int = 0  # most days any one habit was done
+    habit_kept_weeks: int = 0  # kept weeks across all habits
+    habit_categories: int = 0  # areas of life with a habit done at least once
+    habit_best_clean: int = 0  # longest clean run of a habit being broken
 
 
 @dataclass(frozen=True)
@@ -221,6 +225,42 @@ RULES: tuple[Rule, ...] = (
         lambda c: c.rpe_sets,
         (50, 200, 500),
         unit="sets",
+    ),
+    # --- habits --------------------------------------------------------------
+    # Named generically on purpose: badges show on profiles, and a habit's
+    # name - especially one being broken - never should.
+    Rule(
+        "sixty_six",
+        "Sixty-six days",
+        "Do one habit on 66 days: about how long, on average, a habit takes to feel automatic.",
+        "consistency",
+        lambda c: c.habit_best_days,
+        (66,),
+    ),
+    Rule(
+        "habit_keeper",
+        "Habit keeper",
+        "Keep the weekly target on your habits, week after week.",
+        "consistency",
+        lambda c: c.habit_kept_weeks,
+        (10, 50, 150),
+        unit="habit weeks",
+    ),
+    Rule(
+        "well_rounded",
+        "Well rounded",
+        "Keep habits in three different areas of life.",
+        "collection",
+        lambda c: c.habit_categories,
+        (3,),
+    ),
+    Rule(
+        "held_the_line",
+        "Held the line",
+        "Thirty days in a row free of a habit you're breaking. Private: it never says which.",
+        "consistency",
+        lambda c: c.habit_best_clean,
+        (30,),
     ),
     Rule(
         "measured",

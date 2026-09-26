@@ -35,12 +35,16 @@ from app.game.models import UserStats
 from app.game.recap import build_recap, digest_lines
 from app.game.service import recompute, snapshot
 from app.groups.router import resolve_finished
+from app.habits.engine import is_done
+from app.habits.models import Habit, HabitLog
 from app.notifications.models import Notification, NotificationPreference
 from app.notifications.service import channels_for, deliver, notify
 from app.ops.health import WORKER_NAME
 from app.ops.models import WorkerHeartbeat
 from app.ops.service import sweep as sweep_ops
 from app.profile.models import Profile
+from app.training.models import StreakPause
+from app.training.pauses import Span
 
 logger = logging.getLogger("app.worker")
 settings = get_settings()
@@ -374,6 +378,69 @@ async def resolve_challenges() -> list[UUID]:
     return ids
 
 
+async def habit_reminders() -> list[UUID]:
+    """At the hour someone chose for a habit, if it isn't done yet today. Not
+    for habits being broken - "don't smoke" at 6pm is a prompt, not a help -
+    and not during a pause. Quiet hours and the reminder category's settings
+    apply as for every other nudge, via notify(), in its own "habits"
+    category so it can be turned off separately."""
+    note_ids: list[UUID] = []
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Habit, Profile)
+                .join(Profile, Profile.user_id == Habit.user_id)
+                .join(User, User.id == Habit.user_id)
+                .where(
+                    Habit.remind_hour.is_not(None),
+                    Habit.archived_at.is_(None),
+                    Habit.kind != "quit",
+                    Profile.onboarded_at.is_not(None),
+                    Profile.deletion_scheduled_at.is_(None),
+                    User.is_active.is_(True),
+                    _local_hour_is(Habit.remind_hour),
+                )
+                .limit(BATCH * 10)
+            )
+        ).all()
+        for habit, profile in rows:
+            today = local_today(profile.timezone)
+            pauses = (
+                await db.execute(select(StreakPause).where(StreakPause.user_id == profile.user_id))
+            ).scalars()
+            if any(Span(p.starts_on, p.ends_on).is_active(today) for p in pauses):
+                continue
+            logged = (
+                await db.execute(
+                    select(HabitLog.amount).where(
+                        HabitLog.habit_id == habit.id, HabitLog.day == today
+                    )
+                )
+            ).scalar_one_or_none()
+            if logged is not None and is_done(habit.kind, logged, habit.daily_goal):
+                continue
+            goal = (
+                f" {habit.daily_goal:g} {habit.unit or ''}".rstrip()
+                if habit.kind in ("duration", "count") and habit.daily_goal
+                else ""
+            )
+            nid = await notify(
+                db,
+                profile.user_id,
+                kind="habit_reminder",
+                category="habits",
+                title=f"{habit.emoji} {habit.name}".strip(),
+                body=(habit.cue + ". " if habit.cue else "")
+                + (f"Today's goal:{goal}." if goal else "One tap when it's done."),
+                url=f"/habits/{habit.id}",
+                dedupe_key=f"habit:{habit.id}:{today.isoformat()}",
+            )
+            if nid:
+                note_ids.append(nid)
+        await db.commit()
+    return note_ids
+
+
 async def tick() -> None:
     try:
         got = await get_client().set(
@@ -386,6 +453,7 @@ async def tick() -> None:
     jobs = (
         ("stats", refresh_stale_stats),
         ("nudges", streak_nudges),
+        ("habits", habit_reminders),
         ("digest", weekly_digest),
         ("challenges", resolve_challenges),
         ("backup", monthly_backup),

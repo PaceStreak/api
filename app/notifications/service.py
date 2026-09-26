@@ -32,6 +32,8 @@ settings = get_settings()
 CATEGORIES: dict[str, dict] = {
     "streak_risk": {"label": "Streak at risk", "push": True, "email": False},
     "reminder": {"label": "Training reminders", "push": False, "email": False},
+    # Push on by default: a habit only reminds at an hour its owner chose.
+    "habits": {"label": "Habit reminders", "push": True, "email": False},
     "digest": {"label": "Weekly summary", "push": False, "email": True},
     "achievements": {"label": "Achievements and records", "push": False, "email": False},
     "social": {"label": "Follows, kudos and comments", "push": True, "email": False},

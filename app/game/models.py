@@ -54,6 +54,8 @@ class UserStats(Base):
     weekly_days_4w: Mapped[float] = mapped_column(
         Float, default=0, server_default="0", nullable=False
     )
+    # The optional whole-life streak, in kept weeks; 0 when it's off.
+    life_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
     sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

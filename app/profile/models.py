@@ -80,6 +80,9 @@ class Profile(Base):
     training_days: Mapped[int | None] = mapped_column(SmallInteger)
     # For heart-rate zones. Unset means estimated from the birth year.
     max_hr: Mapped[int | None] = mapped_column(SmallInteger)
+    # The optional whole-life streak: days a week with any training or any
+    # habit done. Null means it's off.
+    life_target: Mapped[int | None] = mapped_column(SmallInteger)
 
     # Consent and age. Birth *year* only - enough for the age gate, not a
     # date of birth anyone could use for anything else.

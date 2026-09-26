@@ -81,6 +81,38 @@ def compute_xp(
     return items
 
 
+HABIT_DAY_XP = 5
+HABIT_DAY_CAP = 20
+HABIT_KEPT_WEEK_XP = 10
+
+
+def habit_xp(habits: list, week_starts_on: int, today: date) -> list[XpItem]:
+    """Showing up for habits pays like showing up for training, with caps so
+    it can't be farmed: each habit pays for at most its weekly target of days
+    in a week, all habits together at most HABIT_DAY_CAP a day, and a kept
+    habit week pays HABIT_KEPT_WEEK_XP. A habit being broken pays only for
+    kept weeks - clean days happen by themselves, so paying for each would
+    reward creating habits rather than keeping them."""
+    per_day: dict[date, int] = defaultdict(int)
+    items: list[XpItem] = []
+    for habit, view, _ in habits:
+        if habit.kind != "quit":
+            by_week: dict[date, list[date]] = defaultdict(list)
+            for d in view.done_days:
+                by_week[week_start(d, week_starts_on)].append(d)
+            for days in by_week.values():
+                for d in sorted(days)[: habit.weekly_target]:
+                    per_day[d] += HABIT_DAY_XP
+        for cell in view.chain.weeks:
+            if cell.status == "kept" and cell.week_start + timedelta(days=6) < today:
+                items.append(
+                    XpItem("habit_week", HABIT_KEPT_WEEK_XP, cell.week_start + timedelta(days=6))
+                )
+    for d, amount in per_day.items():
+        items.append(XpItem("habit_day", min(HABIT_DAY_CAP, amount), d))
+    return items
+
+
 def summarise(items: list[XpItem], season: str) -> dict:
     total = sum(i.amount for i in items)
     season_xp = sum(i.amount for i in items if season_id(i.day) == season)

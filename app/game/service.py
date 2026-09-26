@@ -37,8 +37,9 @@ from app.game.quests import (
 )
 from app.game.records import RUN_BANDS, Observation, PrEvent, detect, e1rm
 from app.game.streak import ChainResult, compute_chain, requirements_resolver, target_resolver
-from app.game.xp import DayActivity, XpItem, compute_xp, summarise
+from app.game.xp import DayActivity, XpItem, compute_xp, habit_xp, summarise
 from app.groups.models import ChallengeParticipant, GroupMember
+from app.habits.service import habit_views
 from app.profile.models import Profile
 from app.profile.service import get_chains, get_profile
 from app.social.models import Kudos
@@ -94,6 +95,9 @@ class Snapshot:
     xp_items: list[XpItem] = field(default_factory=list)
     pr_streak: PrStreak | None = None
     wagers: list[StreakWager] = field(default_factory=list)
+    # Habits with their streaks, and the optional whole-life streak.
+    habits: list = field(default_factory=list)
+    life: ChainResult | None = None
 
 
 def exercise_meta(exercise_id: str, customs: dict[str, CustomExercise]) -> tuple[str, str, str]:
@@ -224,6 +228,23 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         )
         views.append(ChainView(chain, result))
     main = views[0]
+
+    # --- habits and the whole-life streak --------------------------------
+    habits = await habit_views(db, user_id, today, profile.week_starts_on, sheltered)
+    life: ChainResult | None = None
+    if profile.life_target:
+        # Any training, or any habit actually done (a clean day of a habit
+        # being broken is not an activity), keeps the whole-life week.
+        life_days = {w.local_date for w in workouts} | {
+            d for h, v, _ in habits if h.kind != "quit" for d in v.done_days
+        }
+        life = compute_chain(
+            life_days,
+            today,
+            profile.week_starts_on,
+            lambda _week: profile.life_target,
+            paused_days=sheltered,
+        )
 
     # --- days ------------------------------------------------------------
     sets_per_workout = Counter(s.workout_id for s in sets)
@@ -385,6 +406,16 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         repaired_then_kept=repaired_then_kept,
         body_metric_days=body_days,
         pr_streak=pr_streak.longest,
+        habit_best_days=max(
+            (len(v.done_days) for h, v, _ in habits if h.kind != "quit"), default=0
+        ),
+        habit_kept_weeks=sum(
+            sum(1 for c in v.chain.weeks if c.status == "kept") for _, v, _ in habits
+        ),
+        habit_categories=len({h.category for h, v, _ in habits if v.done_days}),
+        habit_best_clean=max(
+            (v.best_clean_run or 0 for h, v, _ in habits if h.kind == "quit"), default=0
+        ),
         **social,
     )
 
@@ -421,6 +452,17 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
     waking_by_week = Counter(week_of(d) for d in {d for d, m in weigh_rows if m == "waking"})
     first_weigh = min((d for d, _ in weigh_rows), default=None)
 
+    habits_by_week: Counter[date] = Counter()
+    habits_kept_by_week: Counter[date] = Counter()
+    for _, v, _ in habits:
+        for cell in v.chain.weeks:
+            if cell.status == "paused":
+                continue
+            habits_by_week[cell.week_start] += 1
+            habits_kept_by_week[cell.week_start] += cell.status == "kept" or (
+                cell.status == "open" and cell.days >= cell.target
+            )
+
     def facts_for(week: date) -> WeekFacts:
         f = facts.get(week)
         return WeekFacts(
@@ -431,14 +473,18 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
             new_exercises=f["new"] if f else 0,
             rest_days=rest_by_week.get(week, 0),
             waking_weigh_days=waking_by_week.get(week, 0),
+            habits_kept=habits_kept_by_week.get(week, 0),
+            habits_total=habits_by_week.get(week, 0),
         )
 
     quest_start = min((c.week_start for c in main.result.weeks), default=today)
+    first_habit = min((h.started_on for h, _, _ in habits), default=None)
     quests = compute_quests(
         weeks_between(quest_start, today, profile.week_starts_on),
         facts_for,
         first_weigh,
         {c.week_start for c in main.result.weeks if c.status == "paused"},
+        first_habit=first_habit,
     )
 
     # --- XP ----------------------------------------------------------------
@@ -459,6 +505,7 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         [e.day for e in rewarded],
         [(u.tier, u.unlocked_on) for u in unlocked],
     )
+    items += habit_xp(habits, profile.week_starts_on, today)
     for qw in quests:
         paid_on = min(qw.week_start + timedelta(days=6), today)
         items += [XpItem("quest", QUEST_XP, paid_on) for _ in qw.done]
@@ -518,6 +565,8 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         xp_items=items,
         pr_streak=pr_streak,
         wagers=wagers,
+        habits=habits,
+        life=life,
     )
 
 
@@ -728,6 +777,7 @@ async def recompute(
         "this_week_days": main.this_week_days,
         "this_week_target": main.this_week_target,
         "recent_weeks": [c.status for c in main.weeks[-26:]],
+        "life_streak": snap.life.current if snap.life else 0,
         "weekly_days_4w": round(sum(c.days for c in recent) / max(1, len(recent)), 2),
         "sessions": snap.sessions,
         "active_days": len(snap.days),
@@ -888,17 +938,23 @@ def chain_payload(view: ChainView, weeks: int = 26) -> dict:
             {"disciplines": sorted(req.disciplines), "days": req.days, "done": done}
             for req, done in r.requirements_progress
         ],
-        "weeks": [
-            {
-                "week_start": c.week_start.isoformat(),
-                "days": c.days,
-                "target": c.target,
-                "status": c.status,
-                "score": c.score,
-            }
-            for c in r.weeks[-weeks:]
-        ],
+        "weeks": weeks_payload(r, weeks),
     }
+
+
+def weeks_payload(r: ChainResult, weeks: int = 26) -> list[dict]:
+    """The last `weeks` verdicts of a streak, oldest first. Shared by training
+    chains and habits, so both draw the same grid."""
+    return [
+        {
+            "week_start": c.week_start.isoformat(),
+            "days": c.days,
+            "target": c.target,
+            "status": c.status,
+            "score": c.score,
+        }
+        for c in r.weeks[-weeks:]
+    ]
 
 
 def pause_payload(pause: StreakPause, today: date) -> dict:

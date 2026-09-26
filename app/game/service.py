@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, union
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,7 @@ from app.training.models import (
     StreakChain,
     StreakPause,
     StreakRepair,
+    WeighIn,
     Workout,
     WorkoutSet,
 )
@@ -328,9 +329,13 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         for i, cell in enumerate(closed)
     )
     social = await _social_counts(db, user_id)
-    body_days = (
-        await db.execute(select(func.count()).where(BodyMetric.user_id == user_id))
-    ).scalar_one()
+    # Distinct days with any private body entry, whether a weigh-in or another
+    # measure. Rewards the habit of keeping the log, never the numbers in it.
+    logged_days = union(
+        select(BodyMetric.measured_on.label("day")).where(BodyMetric.user_id == user_id),
+        select(WeighIn.local_date.label("day")).where(WeighIn.user_id == user_id),
+    ).subquery()
+    body_days = (await db.execute(select(func.count()).select_from(logged_days))).scalar_one()
     ctx = ach.Context(
         sessions=len(workouts),
         active_days=len(days),

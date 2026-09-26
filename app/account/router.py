@@ -4,8 +4,9 @@ import csv
 import io
 import json
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import (
     APIRouter,
@@ -52,6 +53,7 @@ from app.training.models import (
     StreakPause,
     StreakRepair,
     TrainingPlan,
+    WeighIn,
     Workout,
     WorkoutSet,
 )
@@ -60,7 +62,7 @@ from app.training.pauses import REASONS, Span
 router = APIRouter(prefix="/me", tags=["account"])
 settings = get_settings()
 
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_IMPORT_WORKOUTS = 25_000
 
@@ -310,7 +312,6 @@ async def build_export(db: AsyncSession, user: User) -> dict:
         "body_metrics": [
             {
                 "date": m.measured_on.isoformat(),
-                "weight_kg": m.weight_kg,
                 "body_fat_pct": m.body_fat_pct,
                 "waist_cm": m.waist_cm,
                 "resting_hr": m.resting_hr,
@@ -318,6 +319,17 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "note": m.note,
             }
             for m in await all_of(BodyMetric, BodyMetric.user_id == uid)
+        ],
+        "weigh_ins": [
+            {
+                "id": str(w.id),
+                "weighed_at": w.weighed_at.isoformat(),
+                "date": w.local_date.isoformat(),
+                "moment": w.moment,
+                "weight_kg": w.weight_kg,
+                "note": w.note,
+            }
+            for w in await all_of(WeighIn, WeighIn.user_id == uid)
         ],
         "achievements": [
             {"id": a.achievement_id, "tier": a.tier, "unlocked_on": a.unlocked_on.isoformat()}
@@ -522,11 +534,10 @@ async def export(
         )
         sheet(
             "body_metrics.csv",
-            ["date", "weight_kg", "body_fat_pct", "waist_cm", "resting_hr", "sleep_hours", "note"],
+            ["date", "body_fat_pct", "waist_cm", "resting_hr", "sleep_hours", "note"],
             (
                 [
                     m.measured_on,
-                    m.weight_kg,
                     m.body_fat_pct,
                     m.waist_cm,
                     m.resting_hr,
@@ -535,6 +546,20 @@ async def export(
                 ]
                 for m in metrics
             ),
+        )
+        weigh_ins = (
+            (
+                await db.execute(
+                    select(WeighIn).where(WeighIn.user_id == user.id).order_by(WeighIn.weighed_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        sheet(
+            "weigh_ins.csv",
+            ["weighed_at", "date", "moment", "weight_kg", "note"],
+            ([w.weighed_at, w.local_date, w.moment, w.weight_kg, w.note] for w in weigh_ins),
         )
         archive.writestr(
             "README.txt",
@@ -637,7 +662,6 @@ async def import_data(
             wid = UUID(str(item["id"]))
             if item["discipline"] not in DISCIPLINE_IDS:
                 raise ValueError
-            from datetime import datetime
 
             started = datetime.fromisoformat(item["started_at"])
             if started.tzinfo is None:
@@ -720,12 +744,53 @@ async def import_data(
             )
         )
 
+    from app.training.schemas import BodyMetricIn, WeighInIn
+
+    tz = ZoneInfo(profile.timezone)
+    known_weigh_ins = {
+        (w.local_date, w.moment, w.weight_kg)
+        for w in (await db.execute(select(WeighIn).where(WeighIn.user_id == user.id))).scalars()
+    }
+
+    def add_weigh_in(spec: WeighInIn, wanted_id: UUID | None = None) -> None:
+        day = local_date(spec.weighed_at, profile.timezone)
+        key = (day, spec.moment, round(spec.weight_kg, 2))
+        if key in known_weigh_ins:
+            return
+        known_weigh_ins.add(key)
+        w = WeighIn(
+            user_id=user.id,
+            weighed_at=spec.weighed_at,
+            local_date=day,
+            moment=spec.moment,
+            weight_kg=round(spec.weight_kg, 2),
+            note=spec.note,
+        )
+        if wanted_id is not None:
+            w.id = wanted_id
+        db.add(w)
+
     for m in data.get("body_metrics") or []:
         try:
-            from datetime import date as date_
-
-            day = date_.fromisoformat(m["date"])
+            day = date.fromisoformat(m["date"])
+            spec = BodyMetricIn.model_validate({k: v for k, v in m.items() if k != "date"})
         except Exception:
+            continue
+        # Exports before version 3 kept one weight per day on this row. It
+        # arrives as a weigh-in at local midday, with no moment claimed.
+        if m.get("weight_kg") is not None:
+            try:
+                add_weigh_in(
+                    WeighInIn(
+                        weighed_at=datetime.combine(day, time(12), tzinfo=tz),
+                        moment="other",
+                        weight_kg=m["weight_kg"],
+                    )
+                )
+            except Exception:
+                pass
+        values = spec.model_dump()
+        if all(v is None for v in values.values()):
             continue
         exists = (
             await db.execute(
@@ -735,23 +800,24 @@ async def import_data(
             )
         ).scalar_one_or_none()
         if exists is None:
-            db.add(
-                BodyMetric(
-                    user_id=user.id,
-                    measured_on=day,
-                    **{
-                        k: m.get(k)
-                        for k in (
-                            "weight_kg",
-                            "body_fat_pct",
-                            "waist_cm",
-                            "resting_hr",
-                            "sleep_hours",
-                            "note",
-                        )
-                    },
-                )
-            )
+            db.add(BodyMetric(user_id=user.id, measured_on=day, **values))
+
+    for item in data.get("weigh_ins") or []:
+        try:
+            spec = WeighInIn.model_validate(item)
+        except Exception:
+            continue
+        if spec.weighed_at.tzinfo is None:
+            continue
+        # Keep the original id unless it is already in use, by anyone.
+        try:
+            wanted = UUID(str(item.get("id")))
+        except ValueError:
+            wanted = None
+        if wanted is not None and await db.get(WeighIn, wanted) is not None:
+            wanted = None
+        add_weigh_in(spec, wanted)
+
     await db.flush()
     await recompute(db, user.id, notify=False)
     await db.commit()

@@ -210,11 +210,17 @@ class RoutineIn(BaseModel):
 
 
 class BodyMetricIn(BaseModel):
-    weight_kg: float | None = Field(default=None, gt=0, le=700)
     body_fat_pct: float | None = Field(default=None, ge=1, le=75)
     waist_cm: float | None = Field(default=None, gt=0, le=400)
     resting_hr: int | None = Field(default=None, ge=20, le=250)
     sleep_hours: float | None = Field(default=None, ge=0, le=24)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class WeighInIn(BaseModel):
+    weighed_at: datetime
+    moment: Literal["waking", "pre_workout", "post_workout", "bedtime", "other"]
+    weight_kg: float = Field(gt=0, le=700)
     note: str | None = Field(default=None, max_length=200)
 
 

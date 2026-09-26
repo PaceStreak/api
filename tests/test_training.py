@@ -279,11 +279,74 @@ def test_custom_exercise_routine_and_body_metrics(client):
     day = (now() - timedelta(days=1)).date().isoformat()
     assert (
         client.put(
-            f"/v1/body-metrics/{day}", json={"weight_kg": 80.5}, headers=bearer(token)
+            f"/v1/body-metrics/{day}", json={"sleep_hours": 7.5}, headers=bearer(token)
         ).status_code
         == 200
     )
-    assert client.get("/v1/body-metrics", headers=bearer(token)).json()[0]["weight_kg"] == 80.5
+    assert client.get("/v1/body-metrics", headers=bearer(token)).json()[0]["sleep_hours"] == 7.5
+
+
+def test_weigh_ins_several_a_day_private_and_owned(client):
+    token = person(client, "scale@example.com", "scaler")
+    morning, evening = uuid4(), uuid4()
+    first = client.put(
+        f"/v1/weigh-ins/{morning}",
+        json={
+            "weighed_at": (now() - timedelta(hours=10)).isoformat(),
+            "moment": "waking",
+            "weight_kg": 80.456,
+        },
+        headers=bearer(token),
+    )
+    assert first.status_code == 200 and first.json()["weight_kg"] == 80.46
+    body = {"weighed_at": (now() - timedelta(hours=1)).isoformat(), "moment": "bedtime"}
+    client.put(f"/v1/weigh-ins/{evening}", json=body | {"weight_kg": 81.2}, headers=bearer(token))
+    # A retried save updates the same row instead of adding another.
+    client.put(f"/v1/weigh-ins/{evening}", json=body | {"weight_kg": 81.0}, headers=bearer(token))
+    listed = client.get("/v1/weigh-ins", headers=bearer(token)).json()
+    assert [(w["moment"], w["weight_kg"]) for w in listed] == [("waking", 80.46), ("bedtime", 81.0)]
+
+    # Validation: moments are a fixed set; no future, no naive times.
+    bad = [
+        body | {"weight_kg": 80, "moment": "lunch"},
+        body | {"weight_kg": 0},
+        {
+            "weighed_at": (now() + timedelta(hours=2)).isoformat(),
+            "moment": "other",
+            "weight_kg": 80,
+        },
+        {"weighed_at": "2026-01-01T08:00:00", "moment": "other", "weight_kg": 80},
+        {
+            "weighed_at": (now() - timedelta(days=40)).isoformat(),
+            "moment": "other",
+            "weight_kg": 80,
+        },
+    ]
+    for payload in bad:
+        assert (
+            client.put(f"/v1/weigh-ins/{uuid4()}", json=payload, headers=bearer(token)).status_code
+            == 422
+        ), payload
+
+    # Someone else's id is not found, for writes and deletes alike.
+    other = person(client, "nosy@example.com", "nosy")
+    assert (
+        client.put(
+            f"/v1/weigh-ins/{morning}", json=body | {"weight_kg": 50}, headers=bearer(other)
+        ).status_code
+        == 404
+    )
+    client.delete(f"/v1/weigh-ins/{morning}", headers=bearer(other))
+    assert client.get("/v1/weigh-ins", headers=bearer(other)).json() == []
+    assert len(client.get("/v1/weigh-ins", headers=bearer(token)).json()) == 2
+
+    # The day's summary on Progress is the mean; nothing leaks to the profile.
+    progress = client.get("/v1/me/progress", headers=bearer(token)).json()
+    assert [b["weight_kg"] for b in progress["body"] if b["weight_kg"]] in ([80.73], [80.46, 81.0])
+    assert "80.4" not in client.get("/v1/people/scaler", headers=bearer(other)).text
+
+    assert client.delete(f"/v1/weigh-ins/{evening}", headers=bearer(token)).status_code == 204
+    assert len(client.get("/v1/weigh-ins", headers=bearer(token)).json()) == 1
 
 
 def test_export_and_import_roundtrip(client):
@@ -310,6 +373,44 @@ def test_export_and_import_roundtrip(client):
     files = {"file": ("export.json", io.BytesIO(json.dumps(data).encode()), "application/json")}
     again = client.post("/v1/me/import", files=files, headers=bearer(token)).json()
     assert again == {"imported": 0, "skipped": 1}
+
+
+def test_weigh_ins_export_and_import_including_legacy_daily_weight(client):
+    token = person(client, "legacy@example.com", "legacy")
+    day = (now() - timedelta(days=3)).date().isoformat()
+    at = (now() - timedelta(hours=2)).isoformat()
+    legacy = {
+        "format": "pacestreak-export",
+        "version": 2,
+        "workouts": [],
+        "body_metrics": [{"date": day, "weight_kg": 79.9, "sleep_hours": 8}],
+        "weigh_ins": [
+            {"id": str(uuid4()), "weighed_at": at, "moment": "waking", "weight_kg": 79.5}
+        ],
+    }
+
+    def send(data: dict, who: str) -> None:
+        files = {"file": ("e.json", io.BytesIO(json.dumps(data).encode()), "application/json")}
+        assert client.post("/v1/me/import", files=files, headers=bearer(who)).status_code == 200
+
+    send(legacy, token)
+    send(legacy, token)  # twice: no duplicates
+    weighs = client.get("/v1/weigh-ins", headers=bearer(token)).json()
+    assert sorted((w["moment"], w["weight_kg"]) for w in weighs) == [
+        ("other", 79.9),
+        ("waking", 79.5),
+    ]
+    assert next(w for w in weighs if w["moment"] == "other")["date"] == day
+    assert client.get("/v1/body-metrics", headers=bearer(token)).json()[0]["sleep_hours"] == 8
+
+    exported = client.get("/v1/me/export?format=json", headers=bearer(token)).json()
+    assert exported["version"] == 3 and len(exported["weigh_ins"]) == 2
+    assert "weight_kg" not in exported["body_metrics"][0]
+    # Someone else importing it gets their own copies, and the owner keeps theirs.
+    other = person(client, "copy@example.com", "copier")
+    send(exported, other)
+    theirs = client.get("/v1/weigh-ins", headers=bearer(other)).json()
+    assert len(theirs) == 2 and not {w["id"] for w in theirs} & {w["id"] for w in weighs}
 
 
 def test_account_deletion_is_scheduled_and_cancellable(client):
@@ -463,7 +564,7 @@ def test_export_carries_tags_and_gear_and_import_restores_them(client):
     ).json()
     log_session(client, token, tags=["race"], gear_id=shoes["id"])
     exported = client.get("/v1/me/export?format=json", headers=bearer(token)).json()
-    assert exported["version"] == 2
+    assert exported["version"] == 3
     assert exported["gear"][0]["name"] == "Racers"
     assert exported["workouts"][0]["tags"] == ["race"]
 

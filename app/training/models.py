@@ -202,11 +202,40 @@ class BodyMetric(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
     measured_on: Mapped[date] = mapped_column(Date, nullable=False)
-    weight_kg: Mapped[float | None] = mapped_column(Float)
     body_fat_pct: Mapped[float | None] = mapped_column(Float)
     waist_cm: Mapped[float | None] = mapped_column(Float)
     resting_hr: Mapped[int | None] = mapped_column(SmallInteger)
     sleep_hours: Mapped[float | None] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(String(200))
+
+
+# When in the day a weigh-in was taken. Weight swings by a kilo or more across
+# a day (water, food, a workout), so readings are only comparable with others
+# from the same moment; the moment is what the trend is filtered by.
+WEIGH_IN_MOMENTS = ("waking", "pre_workout", "post_workout", "bedtime", "other")
+
+
+class WeighIn(Base):
+    """Private, like BodyMetric: never XP, a badge, a board or another person.
+    Several per day. The id is chosen by the client, so a retried save is an
+    update rather than a duplicate."""
+
+    __tablename__ = "weigh_ins"
+    __table_args__ = (
+        CheckConstraint(
+            "moment IN ('waking', 'pre_workout', 'post_workout', 'bedtime', 'other')",
+            name="ck_weigh_in_moment",
+        ),
+        Index("ix_weigh_ins_user_day", "user_id", "local_date"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    weighed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, nullable=False)
+    moment: Mapped[str] = mapped_column(String(16), nullable=False)
+    weight_kg: Mapped[float] = mapped_column(Float, nullable=False)
     note: Mapped[str | None] = mapped_column(String(200))
 
 

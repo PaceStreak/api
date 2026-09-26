@@ -20,7 +20,7 @@ from app.game.service import chain_payload, pause_payload, record_label, snapsho
 from app.game.xp import compute_xp
 from app.profile.models import Profile
 from app.training.library import EXERCISE_BY_ID, MUSCLES
-from app.training.models import BodyMetric, CustomExercise, Workout
+from app.training.models import BodyMetric, CustomExercise, WeighIn, Workout
 
 router = APIRouter(prefix="/me", tags=["stats"])
 
@@ -364,16 +364,26 @@ async def progress(
         w["target"] = cell.target if cell else None
         w["status"] = cell.status if cell else None
 
-    body = (
+    body = {
+        b.measured_on: b
+        for b in (
+            await db.execute(
+                select(BodyMetric).where(
+                    BodyMetric.user_id == user.id, BodyMetric.measured_on >= first
+                )
+            )
+        ).scalars()
+    }
+    # A day's weight is the mean of that day's weigh-ins. The Body screen does
+    # the moment-aware trend; this is only a per-day summary.
+    weights = dict(
         (
             await db.execute(
-                select(BodyMetric)
-                .where(BodyMetric.user_id == user.id, BodyMetric.measured_on >= first)
-                .order_by(BodyMetric.measured_on)
+                select(WeighIn.local_date, func.avg(WeighIn.weight_kg))
+                .where(WeighIn.user_id == user.id, WeighIn.local_date >= first)
+                .group_by(WeighIn.local_date)
             )
-        )
-        .scalars()
-        .all()
+        ).all()
     )
 
     return {
@@ -389,13 +399,13 @@ async def progress(
         ],
         "body": [
             {
-                "date": b.measured_on.isoformat(),
-                "weight_kg": b.weight_kg,
-                "body_fat_pct": b.body_fat_pct,
-                "waist_cm": b.waist_cm,
-                "resting_hr": b.resting_hr,
-                "sleep_hours": b.sleep_hours,
+                "date": day.isoformat(),
+                "weight_kg": round(weights[day], 2) if day in weights else None,
+                "body_fat_pct": body[day].body_fat_pct if day in body else None,
+                "waist_cm": body[day].waist_cm if day in body else None,
+                "resting_hr": body[day].resting_hr if day in body else None,
+                "sleep_hours": body[day].sleep_hours if day in body else None,
             }
-            for b in body
+            for day in sorted(body.keys() | weights.keys())
         ],
     }

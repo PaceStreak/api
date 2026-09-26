@@ -50,6 +50,7 @@ from app.training.models import (
     StreakChain,
     StreakPause,
     StreakRepair,
+    WeighIn,
     Workout,
     WorkoutSet,
     sync_seq,
@@ -72,6 +73,7 @@ from app.training.schemas import (
     RepairIn,
     RequirementIn,
     RoutineIn,
+    WeighInIn,
     WorkoutIn,
     WorkoutOut,
     check_requirements,
@@ -739,7 +741,6 @@ async def delete_routine(
 def _metric_out(m: BodyMetric) -> dict:
     return {
         "date": m.measured_on.isoformat(),
-        "weight_kg": m.weight_kg,
         "body_fat_pct": m.body_fat_pct,
         "waist_cm": m.waist_cm,
         "resting_hr": m.resting_hr,
@@ -799,6 +800,80 @@ async def delete_metric(
     await db.execute(
         delete(BodyMetric).where(BodyMetric.user_id == user.id, BodyMetric.measured_on == day)
     )
+    await db.commit()
+
+
+# --- weigh-ins ----------------------------------------------------------------------
+
+
+def _weigh_in_out(w: WeighIn) -> dict:
+    return {
+        "id": str(w.id),
+        "weighed_at": w.weighed_at.isoformat(),
+        "date": w.local_date.isoformat(),
+        "moment": w.moment,
+        "weight_kg": w.weight_kg,
+        "note": w.note,
+    }
+
+
+@router.get("/weigh-ins")
+async def list_weigh_ins(
+    days: int = Query(default=365, ge=1, le=3650),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    profile = await get_profile(db, user.id)
+    since = local_today(profile.timezone) - timedelta(days=days)
+    rows = await db.execute(
+        select(WeighIn)
+        .where(WeighIn.user_id == user.id, WeighIn.local_date >= since)
+        .order_by(WeighIn.weighed_at)
+    )
+    return [_weigh_in_out(w) for w in rows.scalars()]
+
+
+@router.put("/weigh-ins/{weigh_in_id}")
+async def put_weigh_in(
+    weigh_in_id: UUID,
+    body: WeighInIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.weighed_at.tzinfo is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Time needs a timezone")
+    now = utcnow()
+    if body.weighed_at > now + FUTURE_TOLERANCE:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That time has not happened yet")
+    if body.weighed_at < now - timedelta(days=MAX_BACKDATE_DAYS):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Weigh-ins can be backdated up to {MAX_BACKDATE_DAYS} days",
+        )
+    profile = await get_profile(db, user.id)
+    w = await db.get(WeighIn, weigh_in_id)
+    if w is not None and w.user_id != user.id:
+        # Somebody else's id. 404 rather than 403, so ids cannot be probed.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    if w is None:
+        w = WeighIn(id=weigh_in_id, user_id=user.id)
+        db.add(w)
+    w.weighed_at = body.weighed_at
+    w.local_date = local_date(body.weighed_at, profile.timezone)
+    w.moment = body.moment
+    w.weight_kg = round(body.weight_kg, 2)
+    w.note = body.note
+    await db.flush()
+    await recompute(db, user.id, notify=True)
+    await db.commit()
+    return _weigh_in_out(w)
+
+
+@router.delete("/weigh-ins/{weigh_in_id}", status_code=204)
+async def delete_weigh_in(
+    weigh_in_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    await db.execute(delete(WeighIn).where(WeighIn.user_id == user.id, WeighIn.id == weigh_in_id))
     await db.commit()
 
 

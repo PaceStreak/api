@@ -55,6 +55,7 @@ class WorkoutIn(BaseModel):
     routine_id: UUID | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     gear_id: UUID | None = None
+    gym_id: UUID | None = None
     # Echoed back by the client so editing an imported run keeps its splits.
     splits: list[SplitIn] = Field(default_factory=list, max_length=500)
     client_updated_at: datetime
@@ -117,6 +118,7 @@ class WorkoutOut(BaseModel):
     routine_id: UUID | None
     tags: list[str] = []
     gear_id: UUID | None = None
+    gym_id: UUID | None = None
     splits: list[dict] = []
     source: str
     client_updated_at: datetime
@@ -314,6 +316,38 @@ class GearIn(BaseModel):
     @classmethod
     def _default_for(cls, v: list[str]) -> list[str]:
         return _known_disciplines(v)
+
+
+class GymIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    equipment: list[str] = Field(default_factory=list, max_length=20)
+    plates_kg: list[float] = Field(default_factory=list, max_length=20)
+    bar_kg: float = Field(default=20, ge=0, le=50)
+    is_default: bool = False
+
+    @field_validator("equipment")
+    @classmethod
+    def _equipment(cls, v: list[str]) -> list[str]:
+        bad = [e for e in v if e not in EQUIPMENT]
+        if bad:
+            raise ValueError(f"unknown equipment: {', '.join(bad)}")
+        return list(dict.fromkeys(v))
+
+    @field_validator("plates_kg")
+    @classmethod
+    def _plates(cls, v: list[float]) -> list[float]:
+        if any(p <= 0 or p > 50 for p in v):
+            raise ValueError("plates are between 0 and 50 kg")
+        return sorted({round(p, 3) for p in v}, reverse=True)
+
+
+class ExerciseNoteIn(BaseModel):
+    note: str = Field(max_length=500)
+
+
+class WeightGoalIn(BaseModel):
+    target_kg: float = Field(gt=20, le=400)
+    milestone_kg: float = Field(default=2, ge=0.5, le=20)
 
 
 class GearPatch(BaseModel):

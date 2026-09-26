@@ -46,6 +46,7 @@ from app.training.models import (
     BodyMetric,
     CustomExercise,
     Gear,
+    Gym,
     Routine,
     StreakChain,
     StreakPause,
@@ -180,6 +181,8 @@ async def _apply_put(
     # workout is touched, so the lookup cannot autoflush a half-built row.
     gear = await db.get(Gear, body.gear_id) if body.gear_id is not None else None
     gear_id = gear.id if gear is not None and gear.user_id == user.id else None
+    gym = await db.get(Gym, body.gym_id) if body.gym_id is not None else None
+    gym_id = gym.id if gym is not None and gym.user_id == user.id else None
 
     workout = await db.get(Workout, workout_id)
     created = workout is None
@@ -211,6 +214,7 @@ async def _apply_put(
     workout.tags = body.tags
     workout.splits = [s.model_dump() for s in body.splits]
     workout.gear_id = gear_id
+    workout.gym_id = gym_id
     workout.client_updated_at = body.client_updated_at
     workout.deleted_at = None
     workout.sets = [WorkoutSet(user_id=user.id, **s.model_dump()) for s in body.sets]

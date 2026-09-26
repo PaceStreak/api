@@ -3,9 +3,11 @@ and the weekly aggregates behind the progress charts."""
 
 from collections import defaultdict
 from datetime import date, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from pydantic import BaseModel
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -13,11 +15,20 @@ from app.auth.models import User
 from app.common.time import season_bounds, season_id, week_start
 from app.database import get_db
 from app.game import achievements as ach
-from app.game.models import PersonalRecord, UserAchievement
+from app.game.models import PersonalRecord, StreakWager, UserAchievement
+from app.game.monthly import build_month
+from app.game.quests import QUEST_XP
 from app.game.recap import build_recap, last_closed_week
 from app.game.review import build_year, record_history
-from app.game.service import chain_payload, pause_payload, record_label, snapshot
-from app.game.xp import compute_xp
+from app.game.service import (
+    Snapshot,
+    chain_payload,
+    pause_payload,
+    recompute,
+    record_label,
+    snapshot,
+)
+from app.game.streak import target_resolver
 from app.profile.models import Profile
 from app.training.library import EXERCISE_BY_ID, MUSCLES
 from app.training.models import BodyMetric, CustomExercise, WeighIn, Workout
@@ -56,7 +67,166 @@ async def stats(user: User = Depends(get_current_user), db: AsyncSession = Depen
             "exercises": ctx.distinct_exercises,
         },
         "last_active": snap.last_active.isoformat() if snap.last_active else None,
+        "quests": _quests_payload(snap),
+        "pr_streak": _pr_streak_payload(snap),
+        "wager": _wager_state(snap),
     }
+
+
+def _quests_payload(snap: Snapshot) -> dict | None:
+    if not snap.profile.gamification_enabled:
+        return None
+    this_week = week_start(snap.today, snap.profile.week_starts_on)
+    current = next((q for q in snap.quests if q.week_start == this_week), None)
+    return {
+        "week_start": this_week.isoformat(),
+        "xp_each": QUEST_XP,
+        "paused": current is None,
+        "items": [
+            {
+                "id": q.id,
+                "title": q.title,
+                "description": q.description,
+                "goal": q.goal,
+                "progress": min(progress, q.goal),
+                "done": progress >= q.goal,
+            }
+            for q, progress in (current.quests if current else [])
+        ],
+        "completed_total": sum(len(q.done) for q in snap.quests),
+    }
+
+
+def _pr_streak_payload(snap: Snapshot) -> dict | None:
+    p = snap.pr_streak
+    if p is None:
+        return None
+    return {
+        "current": p.current,
+        "longest": p.longest,
+        "this_block_has_pr": p.this_block_has_pr,
+        "block_ends": p.block_ends.isoformat(),
+    }
+
+
+def _wager_state(snap: Snapshot) -> dict:
+    """The wager for this week or next, if any, and whether one can be made."""
+    main = snap.chains[0]
+    this_week = week_start(snap.today, snap.profile.week_starts_on)
+    next_week = this_week + timedelta(days=7)
+    by_week = {w.week_start: w for w in snap.wagers}
+    won = set(main.result.wagers_won)
+    this_cell = main.result.weeks[-1]
+    target_for = target_resolver(main.chain.target_history)
+
+    def entry(week: date) -> dict | None:
+        w = by_week.get(week)
+        if w is None:
+            return None
+        status_ = (
+            "won"
+            if week in won or (week == this_week and this_cell.days >= w.days)
+            else ("open" if week >= this_week else "lost")
+        )
+        return {
+            "week_start": week.isoformat(),
+            "days": w.days,
+            "done": this_cell.days if week == this_week else None,
+            "status": status_,
+        }
+
+    def blocked(week: date) -> str | None:
+        if any(w.week_start.strftime("%Y-%m") == week.strftime("%Y-%m") for w in snap.wagers):
+            return "One wager a month."
+        if target_for(week) + 1 > 7:
+            return "Your target is already every day."
+        if week == this_week and this_cell.days > 0:
+            return "Wagers are made before the week's first session."
+        if week == this_week and this_cell.status == "paused":
+            return "Not during a pause."
+        return None
+
+    last_closed = next((w for w in reversed(snap.wagers) if w.week_start < this_week), None)
+    return {
+        "current": entry(this_week),
+        "next": entry(next_week),
+        "last": entry(last_closed.week_start) if last_closed else None,
+        "options": [
+            {
+                "week": key,
+                "week_start": week.isoformat(),
+                "days": min(7, target_for(week) + 1),
+                "blocked": None
+                if by_week.get(week) is None and blocked(week) is None
+                else (blocked(week) or "Already made."),
+            }
+            for key, week in (("this", this_week), ("next", next_week))
+        ],
+        "freezes_available": main.result.freezes_available,
+    }
+
+
+class WagerIn(BaseModel):
+    week: Literal["this", "next"]
+
+
+@router.post("/wager", status_code=201)
+async def make_wager(
+    body: WagerIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Promise one more day than the target in a week. Kept, it earns a
+    freeze; missed, nothing happens. Opt-in, and never offered as a nag."""
+    snap = await snapshot(db, user.id)
+    option = next(o for o in _wager_state(snap)["options"] if o["week"] == body.week)
+    if option["blocked"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, option["blocked"])
+    db.add(
+        StreakWager(
+            user_id=user.id,
+            week_start=date.fromisoformat(option["week_start"]),
+            days=option["days"],
+        )
+    )
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()
+    return _wager_state(await snapshot(db, user.id))
+
+
+@router.delete("/wager/{week}", status_code=204)
+async def cancel_wager(
+    week: date, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Take a wager back while nothing has been logged against it."""
+    snap = await snapshot(db, user.id)
+    this_week = week_start(snap.today, snap.profile.week_starts_on)
+    if week < this_week or (week == this_week and snap.chains[0].result.this_week_days > 0):
+        raise HTTPException(status.HTTP_409_CONFLICT, "That wager is already under way")
+    await db.execute(
+        delete(StreakWager).where(StreakWager.user_id == user.id, StreakWager.week_start == week)
+    )
+    await db.commit()
+
+
+@router.get("/recap/month")
+async def month_recap(
+    month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One month of lifting against your own history. Defaults to last month
+    once this one has barely started, otherwise this month."""
+    snap = await snapshot(db, user.id)
+    await db.commit()
+    if month is None:
+        ref = snap.today if snap.today.day > 7 else snap.today.replace(day=1) - timedelta(days=1)
+        month = ref.strftime("%Y-%m")
+    if month > snap.today.strftime("%Y-%m"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That month has not started")
+    result = await build_month(db, snap, month)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nothing logged that month")
+    return result
 
 
 @router.get("/recap")
@@ -117,25 +287,7 @@ async def xp_breakdown(user: User = Depends(get_current_user), db: AsyncSession 
     showing up, not lifting heavier, is what it rewards."""
     snap = await snapshot(db, user.id)
     await db.commit()
-    main = snap.chains[0]
-    from app.game.streak import target_resolver
-
-    unlocked = (
-        await db.execute(
-            select(UserAchievement.tier, UserAchievement.unlocked_on).where(
-                UserAchievement.user_id == user.id
-            )
-        )
-    ).all()
-    items = compute_xp(
-        snap.days,
-        snap.profile.week_starts_on,
-        target_resolver(main.chain.target_history),
-        [c.week_start for c in main.result.weeks if c.status == "kept"],
-        main.result.milestones_hit,
-        [e.day for e in snap.events if e.rewarded],
-        [(u.tier, u.unlocked_on) for u in unlocked],
-    )
+    items = snap.xp_items
     recent = sorted(items, key=lambda i: i.day, reverse=True)[:40]
     weekly: dict[str, int] = defaultdict(int)
     for item in items:

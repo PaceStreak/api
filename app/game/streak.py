@@ -13,6 +13,8 @@ Three things forgive a bad week, in this order:
 3. A freeze, earned automatically (one per four kept weeks, holding at most
    two) and spent automatically on a missed week - but only when there is a
    streak to protect, so a freeze is never wasted on a week with no run.
+   A kept wager (an opt-in promise of extra days in one week) also earns one,
+   within the same cap. A lost wager costs nothing.
 
 A declared pause (injury, illness, life) sits outside that ladder. A week the
 pause covers for at least PAUSE_MIN_DAYS days, and which was not kept anyway,
@@ -101,6 +103,8 @@ class ChainResult:
     consistency_52: int = 0
     # This week, per requirement: (requirement, distinct days done so far).
     requirements_progress: list[tuple[Requirement, int]] = field(default_factory=list)
+    # Weeks whose wager was met.
+    wagers_won: list[date] = field(default_factory=list)
 
 
 def target_resolver(history: list[dict], default: int = 3) -> Callable[[date], int]:
@@ -171,6 +175,7 @@ def compute_chain(
     paused_days: Iterable[date] = (),
     requirements_for: Callable[[date], list[Requirement]] | None = None,
     day_disciplines: dict[date, set[str]] | None = None,
+    wagers: dict[date, int] | None = None,
 ) -> ChainResult:
     days = set(active_days)
     day_disciplines = day_disciplines or {}
@@ -210,6 +215,8 @@ def compute_chain(
     longest = 0
     run_started: date | None = None
     milestones: list[tuple[int, date]] = []
+    wagers = wagers or {}
+    wagers_won: list[date] = []
 
     w = earliest
     while w <= current_week:
@@ -238,6 +245,9 @@ def compute_chain(
             kept_toward_freeze += 1
             if kept_toward_freeze >= FREEZE_EVERY:
                 kept_toward_freeze = 0
+                freezes = min(FREEZE_CAP, freezes + 1)
+            if w in wagers and count >= wagers[w]:
+                wagers_won.append(w)
                 freezes = min(FREEZE_CAP, freezes + 1)
 
         if status in ("kept", "frozen", "repaired"):
@@ -303,4 +313,5 @@ def compute_chain(
         consistency_12=_mean_score(closed_cells[-12:]),
         consistency_52=_mean_score(closed_cells[-52:]),
         requirements_progress=progress,
+        wagers_won=wagers_won,
     )

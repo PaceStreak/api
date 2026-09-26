@@ -22,13 +22,22 @@ from sqlalchemy import delete, func, select, union
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.time import local_today, month_key, season_id, utcnow, zone
+from app.common.time import local_today, month_key, season_id, utcnow, week_start, zone
 from app.game import achievements as ach
 from app.game.levels import level_progress
-from app.game.models import PersonalRecord, UserAchievement, UserStats
+from app.game.models import PersonalRecord, StreakWager, UserAchievement, UserStats
+from app.game.quests import (
+    QUEST_XP,
+    PrStreak,
+    QuestWeek,
+    WeekFacts,
+    compute_pr_streak,
+    compute_quests,
+    weeks_between,
+)
 from app.game.records import RUN_BANDS, Observation, PrEvent, detect, e1rm
 from app.game.streak import ChainResult, compute_chain, requirements_resolver, target_resolver
-from app.game.xp import DayActivity, compute_xp, summarise
+from app.game.xp import DayActivity, XpItem, compute_xp, summarise
 from app.groups.models import ChallengeParticipant, GroupMember
 from app.profile.models import Profile
 from app.profile.service import get_chains, get_profile
@@ -43,6 +52,7 @@ from app.training.library import (
 from app.training.models import (
     BodyMetric,
     CustomExercise,
+    RestDay,
     StreakChain,
     StreakPause,
     StreakRepair,
@@ -79,6 +89,11 @@ class Snapshot:
     exercise_names: dict[str, str] = field(default_factory=dict)
     pauses: list[StreakPause] = field(default_factory=list)
     paused_today: bool = False
+    quests: list[QuestWeek] = field(default_factory=list)
+    # Every XP line behind `xp`, so the XP screen lists exactly what was summed.
+    xp_items: list[XpItem] = field(default_factory=list)
+    pr_streak: PrStreak | None = None
+    wagers: list[StreakWager] = field(default_factory=list)
 
 
 def exercise_meta(exercise_id: str, customs: dict[str, CustomExercise]) -> tuple[str, str, str]:
@@ -174,6 +189,15 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
     )
     spans = [Span(p.starts_on, p.ends_on) for p in pauses]
     sheltered = paused_days(spans)
+    wagers = list(
+        (
+            await db.execute(
+                select(StreakWager)
+                .where(StreakWager.user_id == user_id)
+                .order_by(StreakWager.week_start)
+            )
+        ).scalars()
+    )
 
     # --- streaks ---------------------------------------------------------
     views: list[ChainView] = []
@@ -195,6 +219,8 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
             paused_days=sheltered,
             requirements_for=requirements_resolver(chain.requirements_history),
             day_disciplines=day_disciplines,
+            # Wagers are made on the main chain only.
+            wagers={x.week_start: x.days for x in wagers} if not views else None,
         )
         views.append(ChainView(chain, result))
     main = views[0]
@@ -307,6 +333,7 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
 
     events, bests = detect(observations)
     rewarded = [e for e in events if e.rewarded]
+    pr_streak = compute_pr_streak([e.day for e in rewarded], today)
 
     # --- achievement context ---------------------------------------------
     active_dates = sorted(d.day for d in days)
@@ -357,7 +384,61 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         restful_run=best_restful,
         repaired_then_kept=repaired_then_kept,
         body_metric_days=body_days,
+        pr_streak=pr_streak.longest,
         **social,
+    )
+
+    # --- quests and the PR streak -----------------------------------------
+    first_seen: dict[str, date] = {}
+    for s in sets:
+        if s.exercise_id not in first_seen or s.local_date < first_seen[s.exercise_id]:
+            first_seen[s.exercise_id] = s.local_date
+    week_of = lambda d: week_start(d, profile.week_starts_on)  # noqa: E731
+    facts: dict[date, dict] = defaultdict(
+        lambda: {"days": set(), "patterns": set(), "rpe": 0, "short": 0, "new": 0}
+    )
+    for w in workouts:
+        f = facts[week_of(w.local_date)]
+        f["days"].add(w.local_date)
+        if w.duration_sec and w.duration_sec <= 20 * 60:
+            f["short"] += 1
+    for s in sets:
+        f = facts[week_of(s.local_date)]
+        f["patterns"].add(exercise_meta(s.exercise_id, customs)[1])
+        if s.rpe is not None:
+            f["rpe"] += 1
+    for day in first_seen.values():
+        facts[week_of(day)]["new"] += 1
+    rest_by_week = Counter(
+        week_of(d)
+        for d in (await db.execute(select(RestDay.day).where(RestDay.user_id == user_id))).scalars()
+    )
+    weigh_rows = (
+        await db.execute(
+            select(WeighIn.local_date, WeighIn.moment).where(WeighIn.user_id == user_id)
+        )
+    ).all()
+    waking_by_week = Counter(week_of(d) for d in {d for d, m in weigh_rows if m == "waking"})
+    first_weigh = min((d for d, _ in weigh_rows), default=None)
+
+    def facts_for(week: date) -> WeekFacts:
+        f = facts.get(week)
+        return WeekFacts(
+            active_days=frozenset(f["days"]) if f else frozenset(),
+            patterns=frozenset(f["patterns"]) if f else frozenset(),
+            rpe_sets=f["rpe"] if f else 0,
+            short_sessions=f["short"] if f else 0,
+            new_exercises=f["new"] if f else 0,
+            rest_days=rest_by_week.get(week, 0),
+            waking_weigh_days=waking_by_week.get(week, 0),
+        )
+
+    quest_start = min((c.week_start for c in main.result.weeks), default=today)
+    quests = compute_quests(
+        weeks_between(quest_start, today, profile.week_starts_on),
+        facts_for,
+        first_weigh,
+        {c.week_start for c in main.result.weeks if c.status == "paused"},
     )
 
     # --- XP ----------------------------------------------------------------
@@ -378,6 +459,9 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         [e.day for e in rewarded],
         [(u.tier, u.unlocked_on) for u in unlocked],
     )
+    for qw in quests:
+        paid_on = min(qw.week_start + timedelta(days=6), today)
+        items += [XpItem("quest", QUEST_XP, paid_on) for _ in qw.done]
     xp = summarise(items, season_id(today))
 
     # --- heatmap -------------------------------------------------------------
@@ -430,6 +514,10 @@ async def snapshot(db: AsyncSession, user_id: UUID) -> Snapshot:
         exercise_names=names,
         pauses=pauses,
         paused_today=any(sp.is_active(today) for sp in spans),
+        quests=quests,
+        xp_items=items,
+        pr_streak=pr_streak,
+        wagers=wagers,
     )
 
 
@@ -626,6 +714,7 @@ async def recompute(
         and (workout_id is None or e.workout_id == str(workout_id))
     ]
 
+    recent = [c for c in main.weeks[:-1] if c.status != "paused"][-4:]
     stats_values = {
         "computed_at": utcnow(),
         "computed_for": snap.today,
@@ -639,6 +728,7 @@ async def recompute(
         "this_week_days": main.this_week_days,
         "this_week_target": main.this_week_target,
         "recent_weeks": [c.status for c in main.weeks[-26:]],
+        "weekly_days_4w": round(sum(c.days for c in recent) / max(1, len(recent)), 2),
         "sessions": snap.sessions,
         "active_days": len(snap.days),
         "season_prs": sum(

@@ -87,6 +87,11 @@ class Workout(Base):
     gear_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("gear.id", ondelete="SET NULL"), index=True
     )
+    # Where it happened, for the equipment and plates on hand. NULLed if the
+    # gym is deleted, like gear.
+    gym_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("gyms.id", ondelete="SET NULL"), index=True
+    )
     # "app" or "import". Imported history counts for the personal streak but
     # never for challenges, where backfilling would be cheating.
     source: Mapped[str] = mapped_column(String(10), default="app", nullable=False)
@@ -355,6 +360,58 @@ class Gear(Base):
     initial_m: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(String(200))
+
+
+class Gym(Base):
+    """A place someone trains, with what it has: equipment, plates and bar.
+    Private. The exercise picker can narrow to what this gym has, and the
+    plate calculator uses its plates instead of a full commercial set."""
+
+    __tablename__ = "gyms"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    # Library equipment ids ("barbell", "dumbbell", ...).
+    equipment: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    # Plate weights available, per side, in kg.
+    plates_kg: Mapped[list[float]] = mapped_column(JSONB, default=list, nullable=False)
+    bar_kg: Mapped[float] = mapped_column(Float, default=20, nullable=False)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+
+
+class ExerciseNote(Base):
+    """A note that stays with an exercise across sessions: seat height, grip,
+    a form cue. Private."""
+
+    __tablename__ = "exercise_notes"
+    __table_args__ = (UniqueConstraint("user_id", "exercise_id", name="uq_exercise_note"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    exercise_id: Mapped[str] = mapped_column(String(60), nullable=False)
+    note: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+class WeightGoal(Base):
+    """A private weight goal: where the trend is heading, broken into small
+    milestones. It never pays XP, a badge or anything visible to others -
+    rewarding a number on the scale is an incentive to chase it unsafely."""
+
+    __tablename__ = "weight_goals"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    target_kg: Mapped[float] = mapped_column(Float, nullable=False)
+    # The smoothed weight when the goal was set, so progress has a start.
+    start_kg: Mapped[float] = mapped_column(Float, nullable=False)
+    milestone_kg: Mapped[float] = mapped_column(Float, default=2, nullable=False)
+    set_on: Mapped[date] = mapped_column(Date, nullable=False)
 
 
 class TrainingPlan(Base):

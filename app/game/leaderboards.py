@@ -10,6 +10,9 @@ Four boards, all computed from the user_stats projection:
 - season_prs: this quarter's personal records - each one relative to the
   person's own history, so being big or lying about weight wins nothing.
 
+Any board can be narrowed to "similar": people who train about as often as
+you, so someone on two days a week is not ranked against someone on six.
+
 There is deliberately no board for weight lifted, distance, or anything
 body-related (see the scorefit ED-safety review this inherits).
 """
@@ -34,6 +37,8 @@ from app.social.service import can_see_clause, not_blocked_clause, social_ok_cla
 
 router = APIRouter(prefix="/leaderboards", tags=["leaderboards"])
 
+SIMILAR_BAND = 1.0
+
 BOARDS = {
     "consistency": UserStats.consistency,
     "streak": UserStats.current_streak,
@@ -45,7 +50,7 @@ BOARDS = {
 @router.get("/{board}")
 async def leaderboard(
     board: str,
-    scope: str = Query(default="global", pattern="^(global|following|group)$"),
+    scope: str = Query(default="global", pattern="^(global|following|group|similar)$"),
     group_id: UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -66,6 +71,17 @@ async def leaderboard(
         conditions.append(UserStats.season_id == season_id(utcnow().date()))
     if scope == "global":
         conditions.append(Profile.leaderboard_opt_in.is_(True))
+    elif scope == "similar":
+        # Opted-in people who train about as often as you do: within a day a
+        # week of your own four-week average, so the board is winnable
+        # whichever end of the range you train at.
+        mine = (
+            await db.execute(select(UserStats.weekly_days_4w).where(UserStats.user_id == user.id))
+        ).scalar_one_or_none() or 0.0
+        conditions += [
+            Profile.leaderboard_opt_in.is_(True),
+            UserStats.weekly_days_4w.between(mine - SIMILAR_BAND, mine + SIMILAR_BAND),
+        ]
     elif scope == "following":
         followees = select(Follow.followee_id).where(
             Follow.follower_id == user.id, Follow.status == "accepted"

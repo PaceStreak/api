@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     UniqueConstraint,
 )
@@ -47,6 +48,12 @@ class UserStats(Base):
     consistency: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     this_week_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     this_week_target: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    # Mean active days per week over the last four closed weeks. Used only to
+    # pair people with others who train about as often, so a board or a
+    # challenge feels winnable.
+    weekly_days_4w: Mapped[float] = mapped_column(
+        Float, default=0, server_default="0", nullable=False
+    )
 
     sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -100,3 +107,19 @@ class PersonalRecord(Base):
     rewarded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # True for the current best of its key - the row the records page shows.
     is_current: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class StreakWager(Base):
+    """An opt-in promise: one more day than the target in a given week. Kept,
+    it earns a freeze (within the usual cap); missed, it costs nothing at all.
+    At most one a calendar month, set before the week's first session, so it
+    can't be placed on a week that is already won."""
+
+    __tablename__ = "streak_wagers"
+    __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_streak_wager_week"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    days: Mapped[int] = mapped_column(SmallInteger, nullable=False)

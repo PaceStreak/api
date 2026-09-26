@@ -34,7 +34,7 @@ from app.common.limits import enforce
 from app.common.time import local_date, utcnow
 from app.config import get_settings
 from app.database import get_db
-from app.game.models import PersonalRecord, UserAchievement
+from app.game.models import PersonalRecord, StreakWager, UserAchievement
 from app.game.service import recompute
 from app.groups.models import Challenge, ChallengeParticipant, Group, GroupMember
 from app.notifications.models import NotificationPreference
@@ -46,7 +46,9 @@ from app.training.library import CUSTOM_PREFIX, DISCIPLINE_IDS, EXERCISE_BY_ID
 from app.training.models import (
     BodyMetric,
     CustomExercise,
+    ExerciseNote,
     Gear,
+    Gym,
     MonthlyGoal,
     RestDay,
     Routine,
@@ -54,6 +56,7 @@ from app.training.models import (
     StreakRepair,
     TrainingPlan,
     WeighIn,
+    WeightGoal,
     Workout,
     WorkoutSet,
 )
@@ -247,6 +250,7 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "tags": w.tags,
                 "splits": w.splits,
                 "gear_id": str(w.gear_id) if w.gear_id else None,
+                "gym_id": str(w.gym_id) if w.gym_id else None,
                 "source": w.source,
                 "sets": [
                     {
@@ -287,6 +291,37 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "note": g.note,
             }
             for g in await all_of(Gear, Gear.user_id == uid)
+        ],
+        "gyms": [
+            {
+                "id": str(g.id),
+                "name": g.name,
+                "equipment": g.equipment,
+                "plates_kg": g.plates_kg,
+                "bar_kg": g.bar_kg,
+                "is_default": g.is_default,
+            }
+            for g in await all_of(Gym, Gym.user_id == uid)
+        ],
+        "exercise_notes": [
+            {"exercise_id": n.exercise_id, "note": n.note}
+            for n in await all_of(ExerciseNote, ExerciseNote.user_id == uid)
+        ],
+        "weight_goal": next(
+            (
+                {
+                    "target_kg": g.target_kg,
+                    "start_kg": g.start_kg,
+                    "milestone_kg": g.milestone_kg,
+                    "set_on": g.set_on.isoformat(),
+                }
+                for g in await all_of(WeightGoal, WeightGoal.user_id == uid)
+            ),
+            None,
+        ),
+        "streak_wagers": [
+            {"week_start": x.week_start.isoformat(), "days": x.days}
+            for x in await all_of(StreakWager, StreakWager.user_id == uid)
         ],
         "plans": [
             {
@@ -604,7 +639,7 @@ async def import_data(
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Too many sessions in one file")
 
     profile = await get_profile(db, user.id)
-    from app.training.schemas import CustomExerciseIn, GearIn, SetIn, clean_tags
+    from app.training.schemas import CustomExerciseIn, GearIn, GymIn, SetIn, clean_tags
 
     # Custom exercises first, remembering how their ids map.
     id_map: dict[str, str] = {}
@@ -656,6 +691,25 @@ async def import_data(
             owned_gear[spec.name.lower()] = match
         gear_map[str(item.get("id"))] = match.id
 
+    # Gyms, matched by name like gear.
+    gym_map: dict[str, UUID] = {}
+    owned_gyms = {
+        g.name.lower(): g
+        for g in (await db.execute(select(Gym).where(Gym.user_id == user.id))).scalars()
+    }
+    for item in data.get("gyms") or []:
+        try:
+            spec = GymIn.model_validate(item)
+        except Exception:
+            continue
+        match = owned_gyms.get(spec.name.lower())
+        if match is None:
+            match = Gym(user_id=user.id, **(spec.model_dump() | {"is_default": False}))
+            db.add(match)
+            await db.flush()
+            owned_gyms[spec.name.lower()] = match
+        gym_map[str(item.get("id"))] = match.id
+
     imported = skipped = 0
     for item in workouts:
         try:
@@ -703,6 +757,7 @@ async def import_data(
                 tags=clean_tags([t for t in item.get("tags") or [] if isinstance(t, str)]),
                 splits=_valid_splits(item.get("splits")),
                 gear_id=gear_map.get(str(item.get("gear_id"))),
+                gym_id=gym_map.get(str(item.get("gym_id"))),
                 source="import",
                 client_updated_at=utcnow(),
                 sets=[WorkoutSet(user_id=user.id, **s.model_dump()) for s in sets],
@@ -744,7 +799,7 @@ async def import_data(
             )
         )
 
-    from app.training.schemas import BodyMetricIn, WeighInIn
+    from app.training.schemas import BodyMetricIn, WeighInIn, WeightGoalIn
 
     tz = ZoneInfo(profile.timezone)
     known_weigh_ins = {
@@ -817,6 +872,41 @@ async def import_data(
         if wanted is not None and await db.get(WeighIn, wanted) is not None:
             wanted = None
         add_weigh_in(spec, wanted)
+
+    noted = {
+        n.exercise_id
+        for n in (
+            await db.execute(select(ExerciseNote).where(ExerciseNote.user_id == user.id))
+        ).scalars()
+    }
+    for item in data.get("exercise_notes") or []:
+        exercise_id = id_map.get(item.get("exercise_id"), item.get("exercise_id"))
+        text = str(item.get("note") or "").strip()[:500]
+        known = exercise_id in EXERCISE_BY_ID or str(exercise_id).startswith(CUSTOM_PREFIX)
+        if known and text and exercise_id not in noted:
+            noted.add(exercise_id)
+            db.add(ExerciseNote(user_id=user.id, exercise_id=exercise_id, note=text))
+
+    goal = data.get("weight_goal")
+    has_goal = (
+        await db.execute(select(WeightGoal.id).where(WeightGoal.user_id == user.id))
+    ).scalar_one_or_none()
+    if isinstance(goal, dict) and has_goal is None:
+        try:
+            spec = WeightGoalIn.model_validate(goal)
+            db.add(
+                WeightGoal(
+                    user_id=user.id,
+                    target_kg=spec.target_kg,
+                    milestone_kg=spec.milestone_kg,
+                    start_kg=float(goal["start_kg"]),
+                    set_on=date.fromisoformat(goal["set_on"]),
+                )
+            )
+        except Exception:
+            pass
+    # Wagers are not imported: a freeze earned on another account's history
+    # would be one this account never earned.
 
     await db.flush()
     await recompute(db, user.id, notify=False)

@@ -40,6 +40,7 @@ class Context:
     groups_joined: int = 0
     challenges_finished: int = 0
     body_metric_days: int = 0
+    pr_streak: int = 0  # longest run of four-week blocks with a PR
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,15 @@ RULES: tuple[Rule, ...] = (
         lambda c: c.rewarded_prs,
         (10, 25, 50),
         unit="records",
+    ),
+    Rule(
+        "always_improving",
+        "Always improving",
+        "A personal record in consecutive four-week blocks. Any lift, any size.",
+        "pr",
+        lambda c: c.pr_streak,
+        (3, 6, 13),
+        unit="blocks",
     ),
     # --- honest logging ------------------------------------------------------
     Rule(

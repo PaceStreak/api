@@ -2,20 +2,27 @@
 
 The app keeps every photo on the device first and uploads only when the person
 has turned backup on, so a photo can follow them to a new phone. The bytes are
-already a re-encoded JPEG with the camera's EXIF (location included) dropped;
-the server checks the type and size and stores them as sent.
+already a re-encoded JPEG with the camera's EXIF (location included) dropped.
 
-The bytes themselves live in Cloudflare R2 (see app/storage.py), not Postgres;
-each row here is metadata plus an object key. Photos are served only to their
-owner, with `Cache-Control: private, no-store`, so no shared cache or CDN ever
-holds a copy.
+Upload and download both go straight between the client and Cloudflare R2 (see
+app/storage.py) over short-lived, single-object presigned URLs - this server
+never sees the bytes, only metadata plus an object key. A presigned PUT can
+pin the declared Content-Type into its signature, but R2 has no way to sniff
+what was actually uploaded, so nothing is trusted - and no database row is
+written - until `complete` below has independently checked the real size and
+the real magic bytes, deleting the object if either is wrong.
+
+Photos are served only to their owner: `presigned_get_url` signs
+`Cache-Control: private, no-store` into the URL itself, so no shared cache or
+CDN ever holds a copy even though the bytes come straight from R2's edge.
 """
 
 from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +40,12 @@ router = APIRouter(prefix="/body-photos", tags=["body"])
 ALLOWED_TYPES = {"image/jpeg": b"\xff\xd8\xff", "image/webp": b"RIFF", "image/png": b"\x89PNG"}
 
 
+class PhotoIn(BaseModel):
+    date: date
+    pose: Literal["front", "side", "back"]
+    content_type: str
+
+
 def _object_key(user_id: UUID, photo_id: UUID) -> str:
     return f"body-photos/{user_id}/{photo_id}"
 
@@ -41,11 +54,20 @@ def _out(p: BodyPhoto) -> dict:
     return {"id": str(p.id), "date": p.taken_on.isoformat(), "pose": p.pose, "size": p.size}
 
 
-async def _own(db: AsyncSession, user: User, photo_id: UUID) -> BodyPhoto:
-    query = select(BodyPhoto).where(BodyPhoto.id == photo_id, BodyPhoto.user_id == user.id)
-    photo = (await db.execute(query)).scalar_one_or_none()
-    if photo is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+async def _check(db: AsyncSession, user: User, photo_id: UUID, body: PhotoIn) -> BodyPhoto | None:
+    """Shared validation for both ends of an upload: the type is one this app
+    serves, the date isn't in the future, and the id either doesn't exist yet
+    or already belongs to this person. Returns the existing row, if any."""
+    if body.content_type not in ALLOWED_TYPES:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Send a JPEG, WebP or PNG")
+    profile = await get_profile(db, user.id)
+    today = local_today(profile.timezone)
+    if body.date > today + timedelta(days=1):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That day has not happened yet")
+    photo = await db.get(BodyPhoto, photo_id)
+    if photo is not None and photo.user_id != user.id:
+        # Someone else's id: refuse without saying whose.
+        raise HTTPException(status.HTTP_409_CONFLICT, "Pick another id")
     return photo
 
 
@@ -63,50 +85,25 @@ async def list_photos(user: User = Depends(get_current_user), db: AsyncSession =
 async def get_photo(
     photo_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    photo = await _own(db, user, photo_id)
-    try:
-        data = await storage.get_object(photo.object_key)
-    except FileNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found") from None
-    return Response(
-        data,
-        media_type=photo.content_type,
-        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
-    )
+    query = select(BodyPhoto).where(BodyPhoto.id == photo_id, BodyPhoto.user_id == user.id)
+    photo = (await db.execute(query)).scalar_one_or_none()
+    if photo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    url = await storage.presigned_get_url(photo.object_key, photo.content_type)
+    return {"url": url, "expires_in": 60}
 
 
-@router.put("/{photo_id}")
-async def put_photo(
+@router.post("/{photo_id}/upload")
+async def start_upload(
     photo_id: UUID,
-    request: Request,
-    taken_on: date = Query(alias="date"),
-    pose: Literal["front", "side", "back"] = Query(),
+    body: PhotoIn,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Step 1: a presigned URL the client PUTs the photo's bytes to directly.
+    Nothing is written to the database yet - see `complete_upload`."""
     await enforce("body-photo", user.id, 60, 3600)
-    content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
-    if content_type not in ALLOWED_TYPES:
-        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Send a JPEG, WebP or PNG")
-    if int(request.headers.get("content-length") or 0) > MAX_BODY_PHOTO_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "That photo is too large")
-    data = bytearray()
-    async for chunk in request.stream():
-        data += chunk
-        if len(data) > MAX_BODY_PHOTO_BYTES:
-            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "That photo is too large")
-    if not data.startswith(ALLOWED_TYPES[content_type]):
-        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Not the image type it claims")
-
-    profile = await get_profile(db, user.id)
-    today = local_today(profile.timezone)
-    if taken_on > today + timedelta(days=1):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "That day has not happened yet")
-
-    photo = await db.get(BodyPhoto, photo_id)
-    if photo is not None and photo.user_id != user.id:
-        # Someone else's id: refuse without saying whose.
-        raise HTTPException(status.HTTP_409_CONFLICT, "Pick another id")
+    photo = await _check(db, user, photo_id, body)
     if photo is None:
         count = await db.scalar(
             select(func.count()).select_from(BodyPhoto).where(BodyPhoto.user_id == user.id)
@@ -116,22 +113,49 @@ async def put_photo(
                 status.HTTP_409_CONFLICT,
                 f"You have {MAX_BODY_PHOTOS} photos backed up. Delete some old ones first.",
             )
-        photo = BodyPhoto(id=photo_id, user_id=user.id, object_key=_object_key(user.id, photo_id))
-        db.add(photo)
-
-    # Uploaded before the row is written, so a failed upload never leaves a
-    # row pointing at an object that doesn't exist.
     try:
-        await storage.put_object(photo.object_key, bytes(data), content_type)
+        url = await storage.presigned_put_url(_object_key(user.id, photo_id), body.content_type)
     except storage.StorageUnavailable:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Photo backup is temporarily unavailable"
         ) from None
+    return {"upload_url": url, "expires_in": 300}
 
-    photo.taken_on = taken_on
-    photo.pose = pose
-    photo.content_type = content_type
-    photo.size = len(data)
+
+@router.post("/{photo_id}/upload/complete")
+async def complete_upload(
+    photo_id: UUID,
+    body: PhotoIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2, after the client's PUT to R2 has finished: independently
+    verify what actually landed there, and only then create or update the
+    row. A failed check deletes the object - it never counts against
+    MAX_BODY_PHOTOS and is never reachable by anyone."""
+    photo = await _check(db, user, photo_id, body)
+    key = _object_key(user.id, photo_id)
+    magic = ALLOWED_TYPES[body.content_type]
+    try:
+        size = await storage.verify_upload(key, magic, MAX_BODY_PHOTO_BYTES)
+    except FileNotFoundError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload it first") from None
+    except ValueError as error:
+        if str(error) == "too large":
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE, "That photo is too large"
+            ) from None
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Not the image type it claims"
+        ) from None
+
+    if photo is None:
+        photo = BodyPhoto(id=photo_id, user_id=user.id, object_key=key)
+        db.add(photo)
+    photo.taken_on = body.date
+    photo.pose = body.pose
+    photo.content_type = body.content_type
+    photo.size = size
     await db.commit()
     return _out(photo)
 

@@ -4,12 +4,14 @@ habit fixes that shipped with them."""
 import io
 import zipfile
 from datetime import UTC, date, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.habits.engine import HabitDay, first_week_target, view_habit
+from app.training.photos import _object_key
 from tests.conftest import bearer, person
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+JPEG_TYPE = "image/jpeg"
 
 
 def test_tape_measurements_round_trip_and_export(client):
@@ -26,28 +28,71 @@ def test_tape_measurements_round_trip_and_export(client):
     assert "chest_cm" in csv_zip.read("body_metrics.csv").decode().splitlines()[0]
 
 
-def test_photo_backup_is_owner_only_and_checked(client):
+def _put_bytes(fake_storage, user_id: str, pid, data: bytes, content_type: str = JPEG_TYPE):
+    """Stands in for the client's browser PUTting bytes straight to R2 - the
+    thing `/upload` merely hands out a URL for. See conftest's fake_storage."""
+    key = _object_key(UUID(user_id), pid)
+    fake_storage[key] = (data, content_type)
+
+
+def test_photo_backup_is_owner_only_and_checked(client, fake_storage):
     h = bearer(person(client, "photo@example.com", "photoer"))
     other = bearer(person(client, "peek@example.com", "peeker"))
     pid = uuid4()
+    uid = client.get("/v1/me", headers=h).json()["user"]["id"]
     today = datetime.now(UTC).date().isoformat()
-    url = f"/v1/body-photos/{pid}?date={today}&pose=front"
-    jpeg = {**h, "Content-Type": "image/jpeg"}
-    assert client.put(url, content=JPEG, headers=jpeg).status_code == 200
+    body = {"date": today, "pose": "front", "content_type": JPEG_TYPE}
+
+    # Step 1: ask for an upload URL.
+    started = client.post(f"/v1/body-photos/{pid}/upload", json=body, headers=h)
+    assert started.status_code == 200 and started.json()["upload_url"]
+    # Step 2, after the (faked) browser PUT: verify and commit.
+    _put_bytes(fake_storage, uid, pid, JPEG)
+    assert (
+        client.post(f"/v1/body-photos/{pid}/upload/complete", json=body, headers=h).status_code
+        == 200
+    )
     # A retry replaces rather than duplicates.
-    assert client.put(url, content=JPEG, headers=jpeg).status_code == 200
+    _put_bytes(fake_storage, uid, pid, JPEG)
+    assert (
+        client.post(f"/v1/body-photos/{pid}/upload/complete", json=body, headers=h).status_code
+        == 200
+    )
     assert [p["id"] for p in client.get("/v1/body-photos", headers=h).json()] == [str(pid)]
 
     got = client.get(f"/v1/body-photos/{pid}", headers=h)
-    assert got.content == JPEG and "no-store" in got.headers["cache-control"]
+    assert got.status_code == 200 and got.json()["url"]
     assert client.get(f"/v1/body-photos/{pid}", headers=other).status_code == 404
-    # Someone else can't overwrite it by reusing the id.
-    taken = client.put(url, content=JPEG, headers={**other, "Content-Type": "image/jpeg"})
-    assert taken.status_code == 409
-    # The declared type must match the bytes, and only images are taken.
-    assert client.put(url, content=b"<svg/>", headers=jpeg).status_code == 415
-    text = {**h, "Content-Type": "text/html"}
-    assert client.put(url, content=b"<html>", headers=text).status_code == 415
+    # Someone else can't overwrite it by reusing the id, at either step.
+    assert client.post(f"/v1/body-photos/{pid}/upload", json=body, headers=other).status_code == 409
+    assert (
+        client.post(f"/v1/body-photos/{pid}/upload/complete", json=body, headers=other).status_code
+        == 409
+    )
+    # The declared type must match the bytes actually sitting in R2 - checked
+    # (and rejected) as its own upload, not the one already backed up above.
+    bad = uuid4()
+    _put_bytes(fake_storage, uid, bad, b"<svg/>")
+    assert (
+        client.post(f"/v1/body-photos/{bad}/upload/complete", json=body, headers=h).status_code
+        == 415
+    )
+    # The rejected upload never lingers in the bucket or the database.
+    assert _object_key(UUID(uid), bad) not in fake_storage
+    assert client.get(f"/v1/body-photos/{bad}", headers=h).status_code == 404
+    # ...and only images are accepted in the first place.
+    text_body = {**body, "content_type": "text/html"}
+    assert (
+        client.post(f"/v1/body-photos/{bad}/upload", json=text_body, headers=h).status_code == 415
+    )
+    # Completing without ever having uploaded anything is refused, not a 500.
+    missing = uuid4()
+    assert (
+        client.post(f"/v1/body-photos/{missing}/upload/complete", json=body, headers=h).status_code
+        == 400
+    )
+    # The original, valid photo is unaffected by all of the above.
+    assert client.get(f"/v1/body-photos/{pid}", headers=h).status_code == 200
 
     csv_zip = zipfile.ZipFile(io.BytesIO(client.get("/v1/me/export?format=csv", headers=h).content))
     assert any(n.startswith("photos/") for n in csv_zip.namelist())
@@ -55,6 +100,23 @@ def test_photo_backup_is_owner_only_and_checked(client):
     assert client.delete(f"/v1/body-photos/{pid}", headers=other).status_code == 204
     assert len(client.get("/v1/body-photos", headers=h).json()) == 1
     assert client.delete("/v1/body-photos", headers=h).status_code == 204
+    assert client.get("/v1/body-photos", headers=h).json() == []
+
+
+def test_oversized_upload_is_rejected_and_swept_from_r2(client, fake_storage):
+    h = bearer(person(client, "big@example.com", "bigger"))
+    uid = client.get("/v1/me", headers=h).json()["user"]["id"]
+    pid = uuid4()
+    today = datetime.now(UTC).date().isoformat()
+    body = {"date": today, "pose": "front", "content_type": JPEG_TYPE}
+    from app.training.models import MAX_BODY_PHOTO_BYTES
+
+    oversized = JPEG + b"\x00" * MAX_BODY_PHOTO_BYTES
+    _put_bytes(fake_storage, uid, pid, oversized)
+    resp = client.post(f"/v1/body-photos/{pid}/upload/complete", json=body, headers=h)
+    assert resp.status_code == 413
+    # Rejected uploads don't linger in the bucket, and never reach the database.
+    assert _object_key(UUID(uid), pid) not in fake_storage
     assert client.get("/v1/body-photos", headers=h).json() == []
 
 

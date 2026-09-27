@@ -71,13 +71,39 @@ def clean_database():
 @pytest.fixture(autouse=True)
 def fake_storage(monkeypatch):
     """Body photos live in R2 in production; tests fake it with a dict so the
-    suite needs no real bucket or credentials. See app/storage.py."""
+    suite needs no real bucket or credentials. See app/storage.py.
+
+    A real presigned PUT happens entirely in the client's browser - this
+    process never sees it - so a test stands in for "the browser's PUT
+    succeeded" by writing into `objects` directly, under the same key
+    `app.training.photos._object_key` would use, before calling the
+    `/upload/complete` route. `verify_upload` below then runs the same
+    size/magic-byte checks the real R2-backed version does, against that
+    dict instead of a real bucket."""
     from app import storage
 
     objects: dict[str, tuple[bytes, str]] = {}
 
     async def put_object(key, data, content_type):
         objects[key] = (data, content_type)
+
+    async def presigned_put_url(key, content_type, expires_in=300):
+        return f"https://fake-r2.test/{key}"
+
+    async def presigned_get_url(key, content_type, expires_in=60):
+        return f"https://fake-r2.test/{key}"
+
+    async def verify_upload(key, magic, max_bytes):
+        if key not in objects:
+            raise FileNotFoundError(key)
+        data, _content_type = objects[key]
+        if len(data) > max_bytes:
+            del objects[key]
+            raise ValueError("too large")
+        if not data.startswith(magic):
+            del objects[key]
+            raise ValueError("wrong type")
+        return len(data)
 
     async def get_object(key):
         try:
@@ -93,6 +119,9 @@ def fake_storage(monkeypatch):
             objects.pop(key, None)
 
     monkeypatch.setattr(storage, "put_object", put_object)
+    monkeypatch.setattr(storage, "presigned_put_url", presigned_put_url)
+    monkeypatch.setattr(storage, "presigned_get_url", presigned_get_url)
+    monkeypatch.setattr(storage, "verify_upload", verify_upload)
     monkeypatch.setattr(storage, "get_object", get_object)
     monkeypatch.setattr(storage, "delete_object", delete_object)
     monkeypatch.setattr(storage, "delete_objects", delete_objects)

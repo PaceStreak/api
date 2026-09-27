@@ -54,6 +54,74 @@ async def put_object(key: str, data: bytes, content_type: str) -> None:
     )
 
 
+async def presigned_put_url(key: str, content_type: str, expires_in: int = 300) -> str:
+    """A short-lived URL the client PUTs bytes to directly, bypassing this
+    server's bandwidth. `ContentType` is signed into the URL, so a PUT with
+    any other Content-Type header fails signature verification before it
+    reaches R2 at all - the client cannot silently swap the declared type.
+
+    This still does not verify what the bytes *actually* are - R2 has no way
+    to sniff content the way `photos.py` does - so nothing here is trusted
+    until `verify_upload` below has checked it."""
+    settings = get_settings()
+    return await asyncio.to_thread(
+        _client().generate_presigned_url,
+        "put_object",
+        Params={"Bucket": settings.r2_bucket, "Key": key, "ContentType": content_type},
+        ExpiresIn=expires_in,
+    )
+
+
+async def presigned_get_url(key: str, content_type: str, expires_in: int = 60) -> str:
+    """A short-lived, single-object URL for the client to fetch directly from
+    R2. `ResponseCacheControl` is signed into the URL itself, so R2 - not this
+    server - is what tells the browser never to cache it."""
+    settings = get_settings()
+    return await asyncio.to_thread(
+        _client().generate_presigned_url,
+        "get_object",
+        Params={
+            "Bucket": settings.r2_bucket,
+            "Key": key,
+            "ResponseContentType": content_type,
+            "ResponseCacheControl": "private, no-store",
+        },
+        ExpiresIn=expires_in,
+    )
+
+
+async def verify_upload(key: str, magic: bytes, max_bytes: int) -> int:
+    """Confirms what a presigned PUT actually put there before any database
+    row is allowed to point at it: real size within the cap, and the first
+    bytes matching the claimed image type. Deletes the object and raises on
+    either failure, so a rejected upload never lingers in the bucket.
+
+    Returns the verified size in bytes."""
+    settings = get_settings()
+
+    def _verify() -> int:
+        client = _client()
+        try:
+            head = client.head_object(Bucket=settings.r2_bucket, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise FileNotFoundError(key) from exc
+            raise
+        size = head["ContentLength"]
+        if size > max_bytes:
+            client.delete_object(Bucket=settings.r2_bucket, Key=key)
+            raise ValueError("too large")
+        head_bytes = client.get_object(
+            Bucket=settings.r2_bucket, Key=key, Range=f"bytes=0-{len(magic) - 1}"
+        )["Body"].read()
+        if not head_bytes.startswith(magic):
+            client.delete_object(Bucket=settings.r2_bucket, Key=key)
+            raise ValueError("wrong type")
+        return size
+
+    return await asyncio.to_thread(_verify)
+
+
 async def get_object(key: str) -> bytes:
     settings = get_settings()
 

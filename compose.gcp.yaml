@@ -42,7 +42,19 @@
 
 x-hardening: &hardening
   read_only: true
-  tmpfs: ["/tmp"]
+  # `docker stack deploy` (Swarm mode) silently ignores the short-form
+  # `tmpfs:` key - it is a plain-Compose-only field with no Swarm mount
+  # equivalent, so it does not error, it just does nothing. The long
+  # `volumes:` syntax with `type: tmpfs` is the one Swarm actually
+  # translates into a mount on each task. Confirmed the hard way: with the
+  # short form, `read_only: true` took effect but /tmp stayed on the
+  # read-only rootfs, and anything writing a temp file (VAPID key setup)
+  # threw an unhandled 500 - which, because Starlette's ServerErrorMiddleware
+  # sits outside CORSMiddleware, the browser reported as a CORS error
+  # instead of the 500 it actually was.
+  volumes:
+    - type: tmpfs
+      target: /tmp
   security_opt: ["no-new-privileges:true"]
   logging:
     driver: json-file

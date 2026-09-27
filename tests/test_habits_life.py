@@ -259,25 +259,26 @@ def test_habit_stats_counts_kept_weeks_and_keep_rate(client):
     one_week_ago = this_week - timedelta(days=7)
     two_weeks_ago = this_week - timedelta(days=14)
     three_weeks_ago = this_week - timedelta(days=21)
-    # One day logged in the week before last keeps it (target is 1); the two
-    # weeks before that have nothing logged, so they're missed - including
-    # the one before the habit's (backdated) start, which the engine still
-    # judges since it recomputes from a flat history. Today keeps the
-    # current, still-open week, which isn't counted either way.
+    # A day logged three weeks ago, last week and today keeps all three of
+    # those weeks (target is 1; a week counts the moment it's met, even the
+    # one in progress). The gap between them, with nothing logged, is
+    # missed. The chain only reaches as far back as the earliest logged
+    # activity, so this also fixes the window at exactly four weeks.
+    client.put(f"/v1/habits/{habit['id']}/days/{three_weeks_ago}", json={"amount": 1}, headers=h)
     client.put(f"/v1/habits/{habit['id']}/days/{one_week_ago}", json={"amount": 1}, headers=h)
     client.put(f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1}, headers=h)
 
     stats = client.get(f"/v1/habits/{habit['id']}/stats?weeks=4", headers=h).json()
     assert len(stats["weeks"]) == 4
     by_week = {w["week_start"]: w for w in stats["weeks"]}
-    assert by_week[one_week_ago.isoformat()]["status"] in ("kept", "frozen", "repaired")
+    assert by_week[three_weeks_ago.isoformat()]["status"] in ("kept", "frozen", "repaired")
     assert by_week[two_weeks_ago.isoformat()]["status"] == "missed"
-    assert by_week[three_weeks_ago.isoformat()]["status"] == "missed"
-    assert by_week[this_week.isoformat()]["status"] == "open"
-    # Only the three closed weeks count: one kept, two missed.
-    assert stats["weeks_counted"] == 3
-    assert stats["weeks_kept"] == 1
-    assert stats["keep_rate"] == 33
+    assert by_week[one_week_ago.isoformat()]["status"] in ("kept", "frozen", "repaired")
+    assert by_week[this_week.isoformat()]["status"] in ("kept", "frozen", "repaired")
+    # Only the one missed week drags on an otherwise perfect run.
+    assert stats["weeks_counted"] == 4
+    assert stats["weeks_kept"] == 3
+    assert stats["keep_rate"] == 75
 
     other = bearer(person(client, "nosytrend@example.com", "nosytrend"))
     assert client.get(f"/v1/habits/{habit['id']}/stats", headers=other).status_code == 404

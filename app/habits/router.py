@@ -205,6 +205,36 @@ async def reorder(
     await db.commit()
 
 
+@router.get("/{habit_id}/stats")
+async def habit_stats(
+    habit_id: UUID,
+    weeks: int = Query(default=26, ge=4, le=52),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A small trend view for one habit: the last `weeks` verdicts and a
+    keep-rate percentage. Paused weeks count towards neither, the same way
+    they're left out of the consistency score - a week sheltered by a
+    declared pause isn't evidence either way."""
+    habit = await _own(db, user, habit_id)
+    profile, today, sheltered = await _context(db, user)
+    for h, v, _logs in await habit_views(
+        db, user.id, today, profile.week_starts_on, sheltered, include_archived=True
+    ):
+        if h.id != habit.id:
+            continue
+        cells = weeks_payload(v.chain, weeks)
+        counted = [c for c in cells if c["status"] not in ("open", "paused")]
+        kept = [c for c in counted if c["status"] in ("kept", "frozen", "repaired")]
+        return {
+            "weeks": cells,
+            "weeks_counted": len(counted),
+            "weeks_kept": len(kept),
+            "keep_rate": round(100 * len(kept) / len(counted)) if counted else 0,
+        }
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+
 @router.get("/{habit_id}")
 async def get_habit(
     habit_id: UUID,

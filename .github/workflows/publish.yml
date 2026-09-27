@@ -1,0 +1,45 @@
+# Builds the production image and pushes it to GHCR on every push to main.
+# This is the whole "deploy" step for the GCP host in compose.gcp.yaml:
+# nothing here touches the VM directly. A `watchtower` container there polls
+# ghcr.io for a newer digest of the tag it's already running and restarts
+# api/worker itself - see compose.gcp.yaml's comment for why.
+#
+# CI's own `image` job (ci.yml) already proves this Dockerfile builds on every
+# PR; this job only runs after that's true (push to main = merged), and only
+# it needs `packages: write`, so that scope stays off every other job.
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  # A half-pushed image tag is worse than a slightly-stale one - never
+  # cancel a push that's already started.
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/pacestreak/api:latest
+            ghcr.io/pacestreak/api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

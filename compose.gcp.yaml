@@ -1,0 +1,163 @@
+# The GCP e2-micro deploy. A Docker Swarm stack, not a plain Compose project -
+# `docker stack deploy`, not `docker compose up` - because zero-downtime
+# rolling updates (a new container healthy *before* the old one stops) are a
+# Swarm feature with no equivalent in plain Compose. This is a single-node
+# swarm (`docker swarm init` on this one VM, nothing else joins it); that
+# still buys the rolling-update behaviour and the overlay network's
+# healthcheck-aware routing, which is what makes the swap invisible to
+# `cloudflared`.
+#
+# It also does NOT layer on compose.yaml or compose.prod.yaml, unlike every
+# other environment in this repo, because there is no clean way to *remove* a
+# service (postgres, redis) through Compose's file-merging; those live in
+# Neon and Upstash here, not in a container on this host.
+#
+#   docker swarm init                                  # once, ever
+#   docker stack deploy -c compose.gcp.yaml pacestreak  # first deploy
+#
+# Every deploy after that is CI, not a person: .github/workflows/publish.yml
+# builds and pushes ghcr.io/pacestreak/api:<sha>, then SSHes in as a
+# forced-command-only key and runs `docker service update --image ...` for
+# api and worker - see infra/DECISIONS.md. There is no Watchtower here; a
+# poll-based updater and a push-based CI deploy would just race each other.
+#
+# What else is different from every other environment:
+#
+# - `image:`, not `build:`. This host never has the source checked out and
+#   never builds anything; it only ever pulls what CI already pushed.
+# - `RUN_MIGRATIONS: "1"`. Every other environment runs migrations from a
+#   separate one-shot container specifically so two replicas can never race
+#   each other running `alembic upgrade head` at once (see compose.prod.yaml).
+#   This stack runs exactly one replica of each, by design (an e2-micro
+#   cannot afford more) - the case migrations guard against is structurally
+#   impossible here, and the tradeoff flips: without this, an unattended
+#   CI deploy would need a human to SSH in and migrate by hand after every
+#   schema change. Do not copy this default to a host with more than one
+#   replica.
+# - No `ports:`. `api` is reachable only by service name (`http://api:8000`)
+#   from `cloudflared`, over the overlay network - nothing binds to the
+#   host's network at all, matching the "no inbound port" firewall setup.
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+x-prod-env: &prod-env
+  APP_MODE: prod
+  ENVIRONMENT: production
+  DEBUG: "False"
+  RUN_MIGRATIONS: "1"
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to Neon's pooled connection string}
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL to Upstash's rediss:// connection string}
+  JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM:?set JWT_PRIVATE_KEY_PEM}
+  JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:?set JWT_PUBLIC_KEY_PEM}
+  VAPID_PRIVATE_KEY_PEM: ${VAPID_PRIVATE_KEY_PEM:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:hello@pacestreak.com}
+  TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?set TOTP_ENCRYPTION_KEY}
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?set TURNSTILE_SECRET_KEY}
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-pacestreak.com}
+  COOKIE_SECURE: "True"
+  COOKIE_SAMESITE: lax
+  CORS_ORIGINS: ${CORS_ORIGINS:-https://app.pacestreak.com}
+  FRONTEND_URL: ${FRONTEND_URL:-https://app.pacestreak.com}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-https://api.pacestreak.com}
+  REQUIRE_VERIFIED_EMAIL: "True"
+  EMAIL_BACKEND: smtp
+  EMAIL_FROM: ${EMAIL_FROM:-no-reply@pacestreak.com}
+  SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-True}
+  SMTP_SSL: ${SMTP_SSL:-False}
+  WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-120}
+  R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:?set R2_ACCOUNT_ID}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?set R2_ACCESS_KEY_ID}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?set R2_SECRET_ACCESS_KEY}
+  R2_BUCKET: ${R2_BUCKET:?set R2_BUCKET}
+  # cloudflared is the only thing that ever talks to `api` on this host, and
+  # it's another container on the same overlay network - its address is not a
+  # public internet hop, so there is no single external proxy address to
+  # trust here the way compose.prod.yaml's reverse-proxy setup has one.
+  # "*" is safe ONLY because nothing else can reach this container at all.
+  FORWARDED_ALLOW_IPS: "*"
+  WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+
+services:
+  api:
+    image: ghcr.io/pacestreak/api:latest
+    <<: *hardening
+    environment: *prod-env
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          try:
+              with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3) as r:
+                  sys.exit(0 if r.status == 200 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [backend]
+    deploy:
+      replicas: 1
+      resources:
+        limits: { memory: 384m }
+      restart_policy:
+        condition: on-failure
+      # The zero-downtime part: Swarm starts the replacement task, waits for
+      # its healthcheck to pass, and only then stops the old one. The
+      # overlay network's routing mesh only ever sends traffic to a task
+      # that's passed its healthcheck, so cloudflared never sees a gap.
+      update_config:
+        order: start-first
+        failure_action: rollback
+        delay: 5s
+
+  worker:
+    image: ghcr.io/pacestreak/api:latest
+    <<: *hardening
+    command: ["python", "-m", "app.worker"]
+    environment: *prod-env
+    networks: [backend]
+    deploy:
+      replicas: 1
+      resources:
+        limits: { memory: 256m }
+      restart_policy:
+        condition: on-failure
+      # start-first here too: app/worker.py's own docstring already documents
+      # that a tick briefly running twice is safe (Redis lock per tick, a
+      # dedupe key per notification), which is exactly what a moment of
+      # overlap during the swap produces.
+      update_config:
+        order: start-first
+        delay: 5s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN from the Cloudflare Zero Trust dashboard}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    networks: [backend]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  backend:
+    driver: overlay

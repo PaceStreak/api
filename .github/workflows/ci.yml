@@ -1,5 +1,7 @@
-# Fails a pull request before it reaches main. It does not deploy anything:
-# where the API runs is still undecided (ARCHITECTURE.md).
+# Fails a pull request before it reaches main. It does not deploy anything -
+# that's publish.yml, which runs after a merge and only builds/pushes the
+# image; a watchtower container on the host does the rest (see
+# compose.gcp.yaml).
 name: CI
 
 on:

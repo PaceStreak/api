@@ -1,8 +1,11 @@
 # Builds the production image and pushes it to GHCR on every push to main.
 # This is the whole "deploy" step for the GCP host in compose.gcp.yaml:
-# nothing here touches the VM directly. A `watchtower` container there polls
-# ghcr.io for a newer digest of the tag it's already running and restarts
-# api/worker itself - see compose.gcp.yaml's comment for why.
+# nothing here touches the VM directly, and there is no SSH credential in
+# this repo's secrets to do so. A systemd timer on the VM itself
+# (autodeploy.timer, every 2 minutes) pulls ghcr.io/pacestreak/api:latest,
+# compares its resolved digest against what's running, and rolls out a
+# change with `docker service update` if one exists - see
+# infra/DECISIONS.md.
 #
 # CI's own `image` job (ci.yml) already proves this Dockerfile builds on every
 # PR; this job only runs after that's true (push to main = merged), and only

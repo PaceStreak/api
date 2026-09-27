@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull and roll out a newer pacestreak/api image, if one exists
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pacestreak/autodeploy.sh

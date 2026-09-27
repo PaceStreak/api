@@ -15,11 +15,13 @@
 #   docker swarm init                                  # once, ever
 #   docker stack deploy -c compose.gcp.yaml pacestreak  # first deploy
 #
-# Every deploy after that is CI, not a person: .github/workflows/publish.yml
-# builds and pushes ghcr.io/pacestreak/api:<sha>, then SSHes in as a
-# forced-command-only key and runs `docker service update --image ...` for
-# api and worker - see infra/DECISIONS.md. There is no Watchtower here; a
-# poll-based updater and a push-based CI deploy would just race each other.
+# Every deploy after that is automatic, not a person and not CI reaching in:
+# .github/workflows/publish.yml only builds and pushes
+# ghcr.io/pacestreak/api:<sha>/:latest - it has no SSH credential for this
+# VM at all. A systemd timer here (autodeploy.timer -> /opt/pacestreak/
+# autodeploy.sh, every 2 minutes) pulls :latest, compares its resolved
+# digest against what's running, and does `docker service update --image ...`
+# for api and worker when they differ - see infra/DECISIONS.md.
 #
 # What else is different from every other environment:
 #

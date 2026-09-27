@@ -5,8 +5,10 @@ has turned backup on, so a photo can follow them to a new phone. The bytes are
 already a re-encoded JPEG with the camera's EXIF (location included) dropped;
 the server checks the type and size and stores them as sent.
 
-Photos are served only to their owner, with `Cache-Control: private,
-no-store`, so no shared cache or CDN ever holds a copy.
+The bytes themselves live in Cloudflare R2 (see app/storage.py), not Postgres;
+each row here is metadata plus an object key. Photos are served only to their
+owner, with `Cache-Control: private, no-store`, so no shared cache or CDN ever
+holds a copy.
 """
 
 from datetime import date, timedelta
@@ -16,8 +18,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import undefer
 
+from app import storage
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.common.limits import enforce
@@ -31,14 +33,16 @@ router = APIRouter(prefix="/body-photos", tags=["body"])
 ALLOWED_TYPES = {"image/jpeg": b"\xff\xd8\xff", "image/webp": b"RIFF", "image/png": b"\x89PNG"}
 
 
+def _object_key(user_id: UUID, photo_id: UUID) -> str:
+    return f"body-photos/{user_id}/{photo_id}"
+
+
 def _out(p: BodyPhoto) -> dict:
     return {"id": str(p.id), "date": p.taken_on.isoformat(), "pose": p.pose, "size": p.size}
 
 
-async def _own(db: AsyncSession, user: User, photo_id: UUID, with_data: bool = False) -> BodyPhoto:
+async def _own(db: AsyncSession, user: User, photo_id: UUID) -> BodyPhoto:
     query = select(BodyPhoto).where(BodyPhoto.id == photo_id, BodyPhoto.user_id == user.id)
-    if with_data:
-        query = query.options(undefer(BodyPhoto.data))
     photo = (await db.execute(query)).scalar_one_or_none()
     if photo is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
@@ -59,9 +63,13 @@ async def list_photos(user: User = Depends(get_current_user), db: AsyncSession =
 async def get_photo(
     photo_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    photo = await _own(db, user, photo_id, with_data=True)
+    photo = await _own(db, user, photo_id)
+    try:
+        data = await storage.get_object(photo.object_key)
+    except FileNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found") from None
     return Response(
-        photo.data,
+        data,
         media_type=photo.content_type,
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
@@ -108,12 +116,21 @@ async def put_photo(
                 status.HTTP_409_CONFLICT,
                 f"You have {MAX_BODY_PHOTOS} photos backed up. Delete some old ones first.",
             )
-        photo = BodyPhoto(id=photo_id, user_id=user.id)
+        photo = BodyPhoto(id=photo_id, user_id=user.id, object_key=_object_key(user.id, photo_id))
         db.add(photo)
+
+    # Uploaded before the row is written, so a failed upload never leaves a
+    # row pointing at an object that doesn't exist.
+    try:
+        await storage.put_object(photo.object_key, bytes(data), content_type)
+    except storage.StorageUnavailable:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Photo backup is temporarily unavailable"
+        ) from None
+
     photo.taken_on = taken_on
     photo.pose = pose
     photo.content_type = content_type
-    photo.data = bytes(data)
     photo.size = len(data)
     await db.commit()
     return _out(photo)
@@ -123,10 +140,16 @@ async def put_photo(
 async def delete_photo(
     photo_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    await db.execute(
-        delete(BodyPhoto).where(BodyPhoto.id == photo_id, BodyPhoto.user_id == user.id)
-    )
+    photo = (
+        await db.execute(
+            select(BodyPhoto).where(BodyPhoto.id == photo_id, BodyPhoto.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if photo is None:
+        return
+    await db.execute(delete(BodyPhoto).where(BodyPhoto.id == photo_id))
     await db.commit()
+    await storage.delete_object(photo.object_key)
 
 
 @router.delete("", status_code=204)
@@ -134,5 +157,11 @@ async def delete_all_photos(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     """Turning backup off removes every copy from the server."""
+    keys = (
+        (await db.execute(select(BodyPhoto.object_key).where(BodyPhoto.user_id == user.id)))
+        .scalars()
+        .all()
+    )
     await db.execute(delete(BodyPhoto).where(BodyPhoto.user_id == user.id))
     await db.commit()
+    await storage.delete_objects(list(keys))

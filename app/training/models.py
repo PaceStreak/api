@@ -11,7 +11,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     Sequence,
     SmallInteger,
     String,
@@ -266,7 +265,10 @@ class BodyPhoto(Base):
     """A progress photo backed up to the account, only when the person turns
     backup on. Private like BodyMetric: served only to its owner, never
     cached by a shared cache, never shown to anyone. The id is chosen by the
-    client, so a retried upload replaces rather than duplicates."""
+    client, so a retried upload replaces rather than duplicates.
+
+    The bytes themselves live in R2 (see app/storage.py), keyed by
+    `object_key`; this row is metadata plus a pointer, not the image."""
 
     __tablename__ = "body_photos"
 
@@ -276,7 +278,7 @@ class BodyPhoto(Base):
     taken_on: Mapped[date] = mapped_column(Date, nullable=False)
     pose: Mapped[str] = mapped_column(String(8), nullable=False)
     content_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    object_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

@@ -135,6 +135,16 @@ class Settings(BaseSettings):
     # Cloudflare account, the same pattern as EMAIL_BACKEND=console.
     turnstile_secret_key: str | None = Field(default=None)
 
+    # --- object storage (Cloudflare R2) ----------------------------------------
+    # Progress photos live in R2, not Postgres - see app/storage/r2.py. All four
+    # must be set for body-photo backup to work; unset (the default) leaves the
+    # feature unavailable rather than crashing at import time, so a fresh
+    # checkout without an R2 bucket still boots.
+    r2_account_id: str | None = Field(default=None)
+    r2_access_key_id: str | None = Field(default=None)
+    r2_secret_access_key: str | None = Field(default=None, repr=False)
+    r2_bucket: str | None = Field(default=None)
+
     # --- rate limiting --------------------------------------------------------
     # Backed by Redis (see app/ratelimit.py) so limits hold across replicas.
     rate_limit_login: str = Field(default="10/minute")

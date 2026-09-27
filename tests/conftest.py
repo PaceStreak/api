@@ -68,6 +68,37 @@ def clean_database():
     yield
 
 
+@pytest.fixture(autouse=True)
+def fake_storage(monkeypatch):
+    """Body photos live in R2 in production; tests fake it with a dict so the
+    suite needs no real bucket or credentials. See app/storage.py."""
+    from app import storage
+
+    objects: dict[str, tuple[bytes, str]] = {}
+
+    async def put_object(key, data, content_type):
+        objects[key] = (data, content_type)
+
+    async def get_object(key):
+        try:
+            return objects[key][0]
+        except KeyError:
+            raise FileNotFoundError(key) from None
+
+    async def delete_object(key):
+        objects.pop(key, None)
+
+    async def delete_objects(keys):
+        for key in keys:
+            objects.pop(key, None)
+
+    monkeypatch.setattr(storage, "put_object", put_object)
+    monkeypatch.setattr(storage, "get_object", get_object)
+    monkeypatch.setattr(storage, "delete_object", delete_object)
+    monkeypatch.setattr(storage, "delete_objects", delete_objects)
+    return objects
+
+
 @pytest.fixture
 def client(clean_database):
     """Depends on clean_database so the truncate always happens first."""

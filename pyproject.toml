@@ -23,6 +23,7 @@ dependencies = [
     "fitdecode>=0.11.0",
     "defusedxml>=0.7.1",
     "webauthn>=2.5",
+    "boto3>=1.43.103",
 ]
 
 [dependency-groups]

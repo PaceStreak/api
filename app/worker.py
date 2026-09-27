@@ -25,6 +25,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import and_, case, delete, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app import storage
 from app.auth.models import User
 from app.auth.passkeys import sweep_expired_challenges
 from app.cache import close_cache, get_client, init_cache
@@ -43,7 +44,7 @@ from app.ops.health import WORKER_NAME
 from app.ops.models import WorkerHeartbeat
 from app.ops.service import sweep as sweep_ops
 from app.profile.models import Profile
-from app.training.models import StreakPause
+from app.training.models import BodyPhoto, StreakPause
 from app.training.pauses import Span
 
 logger = logging.getLogger("app.worker")
@@ -354,10 +355,18 @@ async def purge_deleted_accounts() -> int:
             .scalars()
             .all()
         )
+        keys = (
+            (await db.execute(select(BodyPhoto.object_key).where(BodyPhoto.user_id.in_(due))))
+            .scalars()
+            .all()
+        )
         for user_id in due:
-            # Cascades to every table keyed on the user.
+            # Cascades to every table keyed on the user - except R2, which
+            # Postgres's foreign keys cannot reach, so the object keys are
+            # collected above and swept after the commit.
             await db.execute(delete(User).where(User.id == user_id))
         await db.commit()
+    await storage.delete_objects(list(keys))
     return len(due)
 
 

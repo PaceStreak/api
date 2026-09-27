@@ -22,8 +22,8 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import undefer
 
+from app import storage
 from app.account import service as security
 from app.account.calendar import build_calendar
 from app.account.models import SecurityEvent
@@ -685,16 +685,20 @@ async def export(
             ([*row] for row in habit_rows),
         )
         photos = (
-            await db.execute(
-                select(BodyPhoto)
-                .options(undefer(BodyPhoto.data))
-                .where(BodyPhoto.user_id == user.id)
-                .order_by(BodyPhoto.taken_on)
+            (
+                await db.execute(
+                    select(BodyPhoto)
+                    .where(BodyPhoto.user_id == user.id)
+                    .order_by(BodyPhoto.taken_on)
+                )
             )
-        ).scalars()
+            .scalars()
+            .all()
+        )
         for p in photos:
             ext = {"image/png": "png", "image/webp": "webp"}.get(p.content_type, "jpg")
-            archive.writestr(f"photos/{p.taken_on}_{p.pose}_{p.id}.{ext}", p.data)
+            data = await storage.get_object(p.object_key)
+            archive.writestr(f"photos/{p.taken_on}_{p.pose}_{p.id}.{ext}", data)
         archive.writestr(
             "README.txt",
             "PaceStreak export.\n\nWeights are always kilograms and distances always metres,\n"

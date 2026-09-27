@@ -95,6 +95,7 @@ def profile_out(p: Profile) -> dict:
         "training_days": p.training_days,
         "max_hr": p.max_hr,
         "life_target": p.life_target,
+        "favourite_disciplines": p.favourite_disciplines,
         "onboarded_at": p.onboarded_at.isoformat() if p.onboarded_at else None,
         "birth_year": p.birth_year,
         "onboarded": p.onboarded_at is not None,
@@ -268,6 +269,7 @@ class ProfilePatch(BaseModel):
     training_days: int | None = Field(default=None, ge=0, le=127)
     max_hr: int | None = Field(default=None, ge=100, le=230)
     life_target: int | None = Field(default=None, ge=1, le=7)
+    favourite_disciplines: list[str] | None = Field(default=None, max_length=20)
     visibility: str | None = Field(default=None, pattern="^(private|followers|public)$")
     sharing_paused: bool | None = None
     gamification_enabled: bool | None = None

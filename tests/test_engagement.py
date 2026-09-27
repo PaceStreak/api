@@ -214,6 +214,21 @@ def test_stats_carry_quests_and_pr_streak_unless_gamification_is_off(client):
     assert client.get("/v1/me/stats", headers=bearer(token)).json()["quests"] is None
 
 
+def test_favourite_disciplines_round_trip(client):
+    token = person(client, "favdisc@example.com", "favdisc")
+    assert client.get("/v1/me", headers=bearer(token)).json()["profile"]["favourite_disciplines"] == []
+    res = client.patch(
+        "/v1/me/profile", json={"favourite_disciplines": ["running", "climbing"]}, headers=bearer(token)
+    )
+    assert res.status_code == 200
+    assert res.json()["profile"]["favourite_disciplines"] == ["running", "climbing"]
+    # Persists across requests, not just echoed back.
+    assert client.get("/v1/me", headers=bearer(token)).json()["profile"]["favourite_disciplines"] == [
+        "running",
+        "climbing",
+    ]
+
+
 def test_monthly_recap_compares_with_your_own_history(client):
     token = person(client, "month@example.com", "monthly")
     old = (datetime.now(UTC) - timedelta(days=20)).isoformat()

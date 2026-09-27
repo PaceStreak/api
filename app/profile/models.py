@@ -10,6 +10,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -83,6 +84,11 @@ class Profile(Base):
     # The optional whole-life streak: days a week with any training or any
     # habit done. Null means it's off.
     life_target: Mapped[int | None] = mapped_column(SmallInteger)
+    # Disciplines picked at onboarding. Only biases the ordering of the log
+    # sheet's suggestions until usage history takes over; never authoritative.
+    favourite_disciplines: Mapped[list[str]] = mapped_column(
+        ARRAY(String), default=list, server_default="{}", nullable=False
+    )
 
     # Consent and age. Birth *year* only - enough for the age gate, not a
     # date of birth anyone could use for anything else.

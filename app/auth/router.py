@@ -380,7 +380,7 @@ async def resend_verification(
     """
     if not (caller and caller.email == body.email.lower()):
         await verify_turnstile(request, body.turnstile_token)
-    generic = MessageResponse(detail="If that address needs verification, a link has been sent.")
+    generic = MessageResponse(detail="If that address needs verification, a code has been sent.")
 
     result = await db.execute(select(User).where(User.email == body.email.lower()))
     user = result.scalar_one_or_none()
@@ -406,7 +406,7 @@ async def resend_verification(
 async def forgot_password(request: Request, body: EmailRequest, db: AsyncSession = Depends(get_db)):
     """Always reports success, for the same enumeration reason as above."""
     await verify_turnstile(request, body.turnstile_token)
-    generic = MessageResponse(detail="If that address has an account, a reset link has been sent.")
+    generic = MessageResponse(detail="If that address has an account, a reset code has been sent.")
 
     result = await db.execute(select(User).where(User.email == body.email.lower()))
     user = result.scalar_one_or_none()
@@ -826,7 +826,7 @@ async def change_email(
     # Same answer whether or not the address is in use, so this can't be used
     # to find out who has an account. If it is taken, no link is sent.
     generic = MessageResponse(
-        detail=f"If {new} can be used, a confirmation link is on its way there."
+        detail=f"If {new} can be used, a confirmation code is on its way there."
     )
     if taken:
         return generic

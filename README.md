@@ -128,7 +128,7 @@ After deploying a release that adds a projected stats field, run
 
 `POST /v1/auth/recover` sets a password with a 2FA recovery code (no email
 needed). `POST /v1/auth/change-email` needs the password and only moves the
-account when the link sent to the new address is confirmed
+account when the code sent to the new address is confirmed
 (`/v1/auth/confirm-email-change`); the old address is told. `TERMS_VERSION`
 is the date of the current terms/privacy wording: **bump it in the same
 change as a material edit to /terms or /privacy on www**, and every
@@ -172,10 +172,10 @@ All under `/v1/auth`, per the versioning rule below.
 | `POST` | `/logout` | refresh cookie + CSRF header | End this session only. |
 | `POST` | `/logout-all` | bearer | End every session for this user, on every device. |
 | `GET` | `/me` | bearer | The current user. |
-| `POST` | `/verify-email` | — | Redeem a link from the verification email. |
-| `POST` | `/resend-verification` | — | Request another verification link. |
-| `POST` | `/forgot-password` | — | Email a reset link. Always reports success. |
-| `POST` | `/reset-password` | reset token | Set a new password and sign out everywhere. |
+| `POST` | `/verify-email` | email + code | Redeem the 6-digit code from the verification email. |
+| `POST` | `/resend-verification` | — | Email another verification code. |
+| `POST` | `/forgot-password` | — | Email a reset code. Always reports success. |
+| `POST` | `/reset-password` | email + code | Set a new password and sign out everywhere. |
 | `POST` | `/change-password` | bearer + current password | Change password, keep this session, end the others. |
 | `GET` | `/sessions` | bearer | List active sessions, with the current one flagged. |
 | `DELETE` | `/sessions/{id}` | bearer | End one session remotely. |

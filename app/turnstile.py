@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+# Named rather than inlined into the except clause below: ruff 0.16.5's
+# formatter has a bug where `except (A, B):` gets "reformatted" into the
+# invalid-syntax `except A, B:` (Python 2 tuple-exception syntax). Naming the
+# tuple sidesteps the buggy code path entirely.
+_REQUEST_ERRORS = (httpx.HTTPError, ValueError)
 
 
 async def verify_turnstile(request: Request, token: str | None) -> None:
@@ -47,7 +52,7 @@ async def verify_turnstile(request: Request, token: str | None) -> None:
                 },
             )
         result = response.json()
-    except (httpx.HTTPError, ValueError):
+    except _REQUEST_ERRORS:
         # Cloudflare being unreachable shouldn't silently wave every request
         # through - fail closed, and let the client just try again.
         logger.exception("turnstile siteverify request failed")

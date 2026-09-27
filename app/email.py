@@ -144,9 +144,7 @@ async def send_email(
 # accent bar - never as body or link-colored text on the light background,
 # since lime-on-white text fails contrast.
 
-_FONT_STACK = (
-    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
-)
+_FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 _INK = "#16161a"  # near-black body text
 _DIM = "#5a5a63"  # muted secondary text, checked against white for contrast
 _LIME = "#d3ff3e"

@@ -48,9 +48,7 @@ def turnstile_on(monkeypatch):
 
     def set_result(result):
         monkeypatch.setattr(turnstile_module.settings, "turnstile_secret_key", "test-secret")
-        monkeypatch.setattr(
-            turnstile_module.httpx, "AsyncClient", lambda **kw: _FakeClient(result)
-        )
+        monkeypatch.setattr(turnstile_module.httpx, "AsyncClient", lambda **kw: _FakeClient(result))
 
     return set_result
 
@@ -112,9 +110,7 @@ def test_cloudflare_unreachable_fails_closed(client, turnstile_on):
 
 def test_resend_verification_needs_a_token_when_anonymous(client, turnstile_on):
     turnstile_on({"success": True})
-    response = client.post(
-        "/v1/auth/resend-verification", json={"email": "someone@example.com"}
-    )
+    response = client.post("/v1/auth/resend-verification", json={"email": "someone@example.com"})
     assert response.status_code == 400
 
 

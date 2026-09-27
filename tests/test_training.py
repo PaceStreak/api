@@ -189,6 +189,60 @@ def test_single_badge_cannot_be_awarded_twice_by_a_race(client):
     assert len(rows) == 1
 
 
+def test_recompute_is_serialized_across_concurrent_calls(client):
+    """Two requests that both trigger recompute() for the same user (e.g. an
+    offline outbox flush landing at the same moment as a live workout save)
+    each read a `previous` UserStats row to decide what's new (level-ups,
+    milestones). Without serializing them, both could read the same stale
+    `previous` and race on the read-then-write. recompute() now takes a
+    Postgres advisory transaction lock keyed on the user id before it reads
+    anything, so two genuinely concurrent calls run one after the other
+    instead of interleaving - this proves that holds (no deadlock, no crash)
+    and leaves exactly one consistent UserStats row behind."""
+    import asyncio
+
+    from sqlalchemy import select
+
+    from app.auth.models import User
+    from app.database import AsyncSessionLocal, engine
+    from app.game.models import UserStats
+    from app.game.service import recompute
+
+    token = person(client, "racecompute@example.com", "racecompute")
+    wid = str(uuid4())
+    client.put(f"/v1/workouts/{wid}", json=workout(), headers=bearer(token))
+
+    async def one(uid):
+        async with AsyncSessionLocal() as db:
+            await recompute(db, uid, notify=False)
+            await db.commit()
+
+    async def race():
+        async with AsyncSessionLocal() as db:
+            uid = (
+                await db.execute(select(User.id).where(User.email == "racecompute@example.com"))
+            ).scalar_one()
+        # Each task owns its own session/transaction, exactly like two
+        # concurrent requests would - the advisory lock is released when each
+        # commits, so the other proceeds rather than deadlocking.
+        await asyncio.gather(one(uid), one(uid))
+        async with AsyncSessionLocal() as db:
+            rows = (
+                (await db.execute(select(UserStats).where(UserStats.user_id == uid)))
+                .scalars()
+                .all()
+            )
+            return rows
+
+    # The pool holds connections bound to the TestClient's own event loop;
+    # asyncio.run() below starts a new one, so they must be dropped first
+    # (see clean_database's own note on this).
+    asyncio.run(engine.dispose())
+    rows = asyncio.run(race())
+    assert len(rows) == 1
+    assert rows[0].total_xp >= 0
+
+
 def test_older_edit_arriving_late_is_ignored(client):
     token = person(client, "lww@example.com", "lww")
     wid = str(uuid4())

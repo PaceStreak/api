@@ -646,6 +646,13 @@ async def recompute(
     from app.notifications.service import notify as push_note
     from app.social.service import emit_event
 
+    # Serializes concurrent recomputes for the same user (e.g. two workout
+    # saves landing back-to-back from an offline outbox flush). Without this,
+    # both could read the same `previous` UserStats row, so neither sees the
+    # other's level-up/milestone and both fire the "you just reached X"
+    # notification. Released automatically at transaction end.
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(user_id)))))
+
     snap = await snapshot(db, user_id)
     await _learn_reminder_hour(db, snap.profile)
     profile = snap.profile

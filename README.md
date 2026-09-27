@@ -246,6 +246,35 @@ that served it. Full policy - what counts as a breaking change, how `/v2`
 would get added, how a version eventually gets deprecated - is in
 [VERSIONING.md](./VERSIONING.md).
 
+### Cloudflare Turnstile guards the mailer and password/recovery endpoints
+
+`/auth/signup`, `/auth/login`, `/auth/forgot-password`, `/auth/resend-verification`
+and `/auth/recover` call `app/turnstile.py` before doing anything else. This is
+a deliberate, narrow exception to "no third-party services": Turnstile is
+Cloudflare's own product, already trusted for DNS and the CDN, and it exists
+specifically to stop a script from emptying Brevo's free SMTP quota (300/day)
+by hammering signup or resend-verification, or from grinding past the per-IP
+rate limits in `app/ratelimit.py` by spreading requests across addresses.
+
+- `TURNSTILE_SECRET_KEY` unset (the default) turns verification off entirely -
+  local development and the test suite need no Cloudflare account, same as
+  `EMAIL_BACKEND=console`. It is **required** in production
+  (`compose.prod.yaml`), enforced by `_check_production_config` in `app/main.py`.
+- The frontend's site key is public by design (`app/.env.example`,
+  `PUBLIC_TURNSTILE_SITE_KEY`) and renders the widget via
+  `challenges.cloudflare.com`, which the app's CSP allows in `script-src`,
+  `connect-src` and `frame-src` - the one embedded third-party script this
+  product ships, and it is not optional.
+- `/auth/resend-verification` skips the check for a caller who is already
+  signed in and asking to resend to *their own* address (`get_optional_user`
+  in `app/auth/dependencies.py`) - a live session already proves who they are,
+  so Today's coach card and the Settings resend button need no widget. Asking
+  to resend to any other address still requires a token.
+- A Turnstile token is single-use: Signup's immediate auto-login after a
+  successful signup call gets its own fresh token
+  (`captchaRef.current.getFreshToken()` in `app/src/routes/auth/Signup.tsx`),
+  not a reuse of the signup one.
+
 ### Data export is a product promise
 
 The public site promises full export. It is built (`/v1/me/export`, JSON, CSV

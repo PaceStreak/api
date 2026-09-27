@@ -85,6 +85,23 @@ async def get_current_user(auth: CurrentAuth = Depends(get_current_auth)) -> Use
     return auth.user
 
 
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Like get_current_user, but None rather than a 401 with no/bad
+    credentials - for an endpoint that is normally anonymous (and Turnstile-
+    guarded) but relaxes that for someone already proven to be a specific
+    account, such as /auth/resend-verification called from Settings."""
+    if credentials is None:
+        return None
+    try:
+        auth = await get_current_auth(credentials, db)
+    except HTTPException:
+        return None
+    return auth.user
+
+
 async def get_current_db_user(
     auth: CurrentAuth = Depends(get_current_auth),
     db: AsyncSession = Depends(get_db),

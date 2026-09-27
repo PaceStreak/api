@@ -54,6 +54,12 @@ def _check_production_config() -> None:
         )
     if settings.reset_db_on_startup:
         problems.append("RESET_DB_ON_STARTUP must be False in production")
+    if not settings.turnstile_secret_key:
+        problems.append(
+            "TURNSTILE_SECRET_KEY must be set in production, or signup, login, "
+            "forgot-password, resend-verification and recover have no protection "
+            "against a script emptying the daily email quota or grinding through guesses"
+        )
 
     if settings.email_backend != "smtp":
         problems.append(

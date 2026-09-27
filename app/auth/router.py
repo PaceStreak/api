@@ -15,6 +15,7 @@ from app.auth.dependencies import (
     get_current_auth,
     get_current_db_user,
     get_current_user,
+    get_optional_user,
 )
 from app.auth.models import RecoveryCode, RefreshToken, TokenPurpose, User
 from app.auth.schemas import (
@@ -75,6 +76,7 @@ from app.email import (
 from app.notifications.service import deliver
 from app.ops.service import record_failure
 from app.ratelimit import limiter
+from app.turnstile import verify_turnstile
 from app.versioning import API_V1_PREFIX
 
 # Unprefixed with a version here on purpose: app/v1/router.py mounts this at
@@ -184,6 +186,7 @@ async def start_session(
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit(settings.rate_limit_signup)
 async def signup(request: Request, body: SignupRequest, db: AsyncSession = Depends(get_db)) -> User:
+    await verify_turnstile(request, body.turnstile_token)
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
 
@@ -227,6 +230,7 @@ async def login(
     background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
+    await verify_turnstile(request, body.turnstile_token)
     # Lowercased to match how signup stores it, or mixed-case addresses could
     # register and then never sign in.
     user = await authenticate_user(db, body.email.lower(), body.password)
@@ -355,13 +359,24 @@ async def verify_email(request: TokenOnlyRequest, db: AsyncSession = Depends(get
 @router.post("/resend-verification", response_model=MessageResponse)
 @limiter.limit(settings.rate_limit_password_email)
 async def resend_verification(
-    request: Request, body: EmailRequest, db: AsyncSession = Depends(get_db)
+    request: Request,
+    body: EmailRequest,
+    db: AsyncSession = Depends(get_db),
+    caller: User | None = Depends(get_optional_user),
 ):
     """Always reports success.
 
     Saying "no such account" here would turn this endpoint into a free user
     enumeration oracle - the same reason login returns one generic error.
+
+    Called both anonymously (before Turnstile solves it, from Login's "not
+    verified" branch) and from a live session nagging its own unverified
+    owner (Today's coach card, Settings). The second case needs no widget:
+    the caller already proved who they are, and can only ask for their own
+    address, not use this as a free mailer for anyone else's.
     """
+    if not (caller and caller.email == body.email.lower()):
+        await verify_turnstile(request, body.turnstile_token)
     generic = MessageResponse(detail="If that address needs verification, a link has been sent.")
 
     result = await db.execute(select(User).where(User.email == body.email.lower()))
@@ -387,6 +402,7 @@ async def resend_verification(
 @limiter.limit(settings.rate_limit_password_email)
 async def forgot_password(request: Request, body: EmailRequest, db: AsyncSession = Depends(get_db)):
     """Always reports success, for the same enumeration reason as above."""
+    await verify_turnstile(request, body.turnstile_token)
     generic = MessageResponse(detail="If that address has an account, a reset link has been sent.")
 
     result = await db.execute(select(User).where(User.email == body.email.lower()))
@@ -735,6 +751,7 @@ class RecoverRequest(BaseModel):
     email: EmailStr
     recovery_code: str = Field(min_length=6, max_length=64)
     new_password: str = Field(min_length=16, max_length=256)
+    turnstile_token: str | None = Field(default=None)
 
 
 @router.post("/recover", response_model=MessageResponse)
@@ -749,6 +766,7 @@ async def recover(
     turned on, and only its hash is stored. Like a reset, it ends every
     session. The old address is still told, in case it wasn't them.
     """
+    await verify_turnstile(request, body.turnstile_token)
     failed = HTTPException(
         status.HTTP_401_UNAUTHORIZED, "That email and recovery code don't match."
     )

@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     # Grace period between "delete my account" and the purge.
     deletion_grace_days: int = Field(default=30)
 
+    # --- bot protection ---------------------------------------------------------
+    # Cloudflare Turnstile secret key, checked by app/turnstile.py before
+    # signup, login, forgot-password, resend-verification and recover run -
+    # the endpoints that either send email or take unlimited-looking guesses
+    # at a password/recovery code. Unset (the default) turns verification
+    # off entirely, so local development and the test suite need no
+    # Cloudflare account, the same pattern as EMAIL_BACKEND=console.
+    turnstile_secret_key: str | None = Field(default=None)
+
     # --- rate limiting --------------------------------------------------------
     # Backed by Redis (see app/ratelimit.py) so limits hold across replicas.
     rate_limit_login: str = Field(default="10/minute")

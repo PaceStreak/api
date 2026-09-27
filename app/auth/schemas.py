@@ -13,6 +13,9 @@ class BaseAuthRequest(BaseRequest):
         max_length=256,
         description="Password must be between 16 and 256 characters long.",
     )
+    # The Turnstile widget's response token. Required only when
+    # TURNSTILE_SECRET_KEY is set - see app/turnstile.py.
+    turnstile_token: str | None = Field(default=None)
 
 
 class SignupRequest(BaseAuthRequest):
@@ -50,6 +53,7 @@ class EmailRequest(BaseRequest):
     reveal whether it is registered."""
 
     email: EmailStr
+    turnstile_token: str | None = Field(default=None)
 
 
 class TokenOnlyRequest(BaseRequest):

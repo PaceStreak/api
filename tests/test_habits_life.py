@@ -243,6 +243,46 @@ def test_habit_lifecycle(client):
     assert stats["xp"]["by_source"].get("habit_day", 0) > 0
 
 
+def test_habit_stats_counts_kept_weeks_and_keep_rate(client):
+    from app.common.time import week_start
+
+    token = person(client, "trend@example.com", "trendy")
+    h = bearer(token)
+    habit = client.post(
+        "/v1/habits",
+        json={"name": "Journal", "kind": "check", "weekly_target": 1},
+        headers=h,
+    ).json()
+
+    today = datetime.now(UTC).date()
+    this_week = week_start(today, 0)
+    one_week_ago = this_week - timedelta(days=7)
+    two_weeks_ago = this_week - timedelta(days=14)
+    three_weeks_ago = this_week - timedelta(days=21)
+    # One day logged in the week before last keeps it (target is 1); the two
+    # weeks before that have nothing logged, so they're missed - including
+    # the one before the habit's (backdated) start, which the engine still
+    # judges since it recomputes from a flat history. Today keeps the
+    # current, still-open week, which isn't counted either way.
+    client.put(f"/v1/habits/{habit['id']}/days/{one_week_ago}", json={"amount": 1}, headers=h)
+    client.put(f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1}, headers=h)
+
+    stats = client.get(f"/v1/habits/{habit['id']}/stats?weeks=4", headers=h).json()
+    assert len(stats["weeks"]) == 4
+    by_week = {w["week_start"]: w for w in stats["weeks"]}
+    assert by_week[one_week_ago.isoformat()]["status"] in ("kept", "frozen", "repaired")
+    assert by_week[two_weeks_ago.isoformat()]["status"] == "missed"
+    assert by_week[three_weeks_ago.isoformat()]["status"] == "missed"
+    assert by_week[this_week.isoformat()]["status"] == "open"
+    # Only the three closed weeks count: one kept, two missed.
+    assert stats["weeks_counted"] == 3
+    assert stats["weeks_kept"] == 1
+    assert stats["keep_rate"] == 33
+
+    other = bearer(person(client, "nosytrend@example.com", "nosytrend"))
+    assert client.get(f"/v1/habits/{habit['id']}/stats", headers=other).status_code == 404
+
+
 def test_quit_habit_stays_private_and_badges_never_name_it(client):
     token = person(client, "quitter@example.com", "quitter", visibility="public")
     h = bearer(token)
@@ -258,6 +298,49 @@ def test_quit_habit_stays_private_and_badges_never_name_it(client):
     assert "smok" not in public
     feed = client.get("/v1/feed", headers=viewer).text.lower()
     assert "smok" not in feed
+
+
+def test_habit_day_note_is_kept_unless_cleared(client):
+    token = person(client, "journaler@example.com", "journaler")
+    h = bearer(token)
+    habit = client.post("/v1/habits", json={"name": "Meditate"}, headers=h).json()
+    today = datetime.now(UTC).date()
+
+    # A note can ride along with a tick.
+    marked = client.put(
+        f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1, "note": "restless start"}, headers=h
+    )
+    assert marked.status_code == 200
+    detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
+    assert detail["days"][0]["note"] == "restless start"
+
+    # A plain re-tick with no "note" key at all keeps the one already there -
+    # ticking off a day must never silently wipe what was written about it.
+    client.put(f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1}, headers=h)
+    detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
+    assert detail["days"][0]["note"] == "restless start"
+
+    # An explicit empty note clears it.
+    client.put(f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1, "note": ""}, headers=h)
+    detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
+    assert detail["days"][0]["note"] is None
+
+    # A day can hold just a note with no amount: it's kept, not counted done.
+    yesterday = (today - timedelta(days=1)).isoformat()
+    client.put(
+        f"/v1/habits/{habit['id']}/days/{yesterday}", json={"amount": 0, "note": "sick, rested"}, headers=h
+    )
+    detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
+    by_day = {d["date"]: d for d in detail["days"]}
+    assert by_day[yesterday]["note"] == "sick, rested" and by_day[yesterday]["amount"] == 0.0
+
+    # Over the 280-character cap is rejected.
+    assert (
+        client.put(
+            f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1, "note": "x" * 281}, headers=h
+        ).status_code
+        == 422
+    )
 
 
 def test_whole_life_streak_counts_training_or_any_habit(client):

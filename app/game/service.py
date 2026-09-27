@@ -880,7 +880,7 @@ async def recompute(
                 "streak",
                 f"streak:{chain.id}:{milestone}:{main.run_started}",
                 day,
-                {"weeks": milestone, "chain": chain.name},
+                {"weeks": milestone},
             )
             nid = await push_note(
                 db,

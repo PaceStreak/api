@@ -216,14 +216,20 @@ def test_stats_carry_quests_and_pr_streak_unless_gamification_is_off(client):
 
 def test_favourite_disciplines_round_trip(client):
     token = person(client, "favdisc@example.com", "favdisc")
-    assert client.get("/v1/me", headers=bearer(token)).json()["profile"]["favourite_disciplines"] == []
+    assert (
+        client.get("/v1/me", headers=bearer(token)).json()["profile"]["favourite_disciplines"] == []
+    )
     res = client.patch(
-        "/v1/me/profile", json={"favourite_disciplines": ["running", "climbing"]}, headers=bearer(token)
+        "/v1/me/profile",
+        json={"favourite_disciplines": ["running", "climbing"]},
+        headers=bearer(token),
     )
     assert res.status_code == 200
     assert res.json()["profile"]["favourite_disciplines"] == ["running", "climbing"]
     # Persists across requests, not just echoed back.
-    assert client.get("/v1/me", headers=bearer(token)).json()["profile"]["favourite_disciplines"] == [
+    assert client.get("/v1/me", headers=bearer(token)).json()["profile"][
+        "favourite_disciplines"
+    ] == [
         "running",
         "climbing",
     ]

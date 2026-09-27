@@ -309,7 +309,9 @@ def test_habit_day_note_is_kept_unless_cleared(client):
 
     # A note can ride along with a tick.
     marked = client.put(
-        f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1, "note": "restless start"}, headers=h
+        f"/v1/habits/{habit['id']}/days/{today}",
+        json={"amount": 1, "note": "restless start"},
+        headers=h,
     )
     assert marked.status_code == 200
     detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
@@ -329,7 +331,9 @@ def test_habit_day_note_is_kept_unless_cleared(client):
     # A day can hold just a note with no amount: it's kept, not counted done.
     yesterday = (today - timedelta(days=1)).isoformat()
     client.put(
-        f"/v1/habits/{habit['id']}/days/{yesterday}", json={"amount": 0, "note": "sick, rested"}, headers=h
+        f"/v1/habits/{habit['id']}/days/{yesterday}",
+        json={"amount": 0, "note": "sick, rested"},
+        headers=h,
     )
     detail = client.get(f"/v1/habits/{habit['id']}", headers=h).json()
     by_day = {d["date"]: d for d in detail["days"]}
@@ -338,7 +342,9 @@ def test_habit_day_note_is_kept_unless_cleared(client):
     # Over the 280-character cap is rejected.
     assert (
         client.put(
-            f"/v1/habits/{habit['id']}/days/{today}", json={"amount": 1, "note": "x" * 281}, headers=h
+            f"/v1/habits/{habit['id']}/days/{today}",
+            json={"amount": 1, "note": "x" * 281},
+            headers=h,
         ).status_code
         == 422
     )

@@ -39,17 +39,18 @@ def test_verification_email_keeps_plain_text_security_wording(monkeypatch):
         sent["html"] = html
 
     monkeypatch.setattr("app.email.send_email", fake_send_email)
-    asyncio.run(send_verification_email("new@example.com", "tok123"))
+    asyncio.run(send_verification_email("new@example.com", "123456"))
 
     assert sent["to"] == "new@example.com"
-    assert "tok123" in sent["body"]
+    assert "123456" in sent["body"]
     assert "If you did not create this account, ignore this message." in sent["body"]
     assert sent["html"] is not None
-    assert "tok123" in sent["html"]
+    # The HTML rendering spaces the digits out for legibility.
+    assert "1 2 3 4 5 6" in sent["html"]
     assert "PaceStreak" in sent["html"]
 
 
-def test_password_reset_email_html_has_button_and_matching_link(monkeypatch):
+def test_password_reset_email_html_has_matching_code(monkeypatch):
     sent: dict = {}
 
     async def fake_send_email(to, subject, body, headers=None, html=None):
@@ -57,12 +58,12 @@ def test_password_reset_email_html_has_button_and_matching_link(monkeypatch):
         sent["html"] = html
 
     monkeypatch.setattr("app.email.send_email", fake_send_email)
-    asyncio.run(send_password_reset_email("someone@example.com", "resettok"))
+    asyncio.run(send_password_reset_email("someone@example.com", "654321"))
 
-    assert "resettok" in sent["body"]
+    assert "654321" in sent["body"]
     assert "not changed" in sent["body"]
-    assert "resettok" in sent["html"]
-    assert "Reset password" in sent["html"]
+    assert "6 5 4 3 2 1" in sent["html"]
+    assert "Reset your password" in sent["html"]
 
 
 def test_html_template_escapes_untrusted_values():

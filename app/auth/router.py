@@ -20,6 +20,7 @@ from app.auth.dependencies import (
 from app.auth.models import RecoveryCode, RefreshToken, TokenPurpose, User
 from app.auth.schemas import (
     ChangePasswordRequest,
+    EmailCodeRequest,
     EmailRequest,
     LoginRequest,
     MessageResponse,
@@ -29,7 +30,6 @@ from app.auth.schemas import (
     ResetPasswordRequest,
     SessionResponse,
     SignupRequest,
-    TokenOnlyRequest,
     TokenResponse,
     TotpCodeRequest,
     TotpDisableRequest,
@@ -336,14 +336,17 @@ async def me(user: User = Depends(get_current_user)):
 
 
 @router.post("/verify-email", response_model=MessageResponse)
-async def verify_email(request: TokenOnlyRequest, db: AsyncSession = Depends(get_db)):
-    """Redeem a link from the verification email.
+@limiter.limit(settings.rate_limit_mfa_verify)
+async def verify_email(
+    request: Request, body: EmailCodeRequest, db: AsyncSession = Depends(get_db)
+):
+    """Redeem the code from the verification email.
 
-    Unauthenticated on purpose: the person clicking the link has just arrived
-    from their inbox and may not be signed in. Possession of the token is the
-    proof, which is why it is single-use and short-lived.
+    Unauthenticated on purpose: the person typing the code has just read it
+    off their inbox and may not be signed in. Possession of the code is the
+    proof, which is why it is single-use, short-lived and attempt-limited.
     """
-    user = await consume_one_time_token(db, request.token, TokenPurpose.EMAIL_VERIFY)
+    user = await consume_one_time_token(db, body.email, body.code, TokenPurpose.EMAIL_VERIFY)
 
     if not user.is_verified:
         user.is_verified = True
@@ -423,17 +426,21 @@ async def forgot_password(request: Request, body: EmailRequest, db: AsyncSession
 
 
 @router.post("/reset-password", response_model=MessageResponse)
+@limiter.limit(settings.rate_limit_mfa_verify)
 async def reset_password(
-    request: ResetPasswordRequest, response: Response, db: AsyncSession = Depends(get_db)
+    request: Request,
+    body: ResetPasswordRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
 ):
-    """Set a new password from an emailed token, and end every session.
+    """Set a new password from the emailed code, and end every session.
 
     Signing out everywhere is the point of a reset, not a side effect: the
     usual reason to reset is that someone else may have had access.
     """
-    user = await consume_one_time_token(db, request.token, TokenPurpose.PASSWORD_RESET)
+    user = await consume_one_time_token(db, body.email, body.code, TokenPurpose.PASSWORD_RESET)
 
-    user.hashed_password = hash_password(request.new_password)
+    user.hashed_password = hash_password(body.new_password)
     user.password_changed_at = utcnow()
 
     # Reaching the inbox also proves the address, so a reset confirms it.
@@ -834,8 +841,13 @@ async def change_email(
 
 
 @router.post("/confirm-email-change", response_model=MessageResponse)
-async def confirm_email_change(body: TokenOnlyRequest, db: AsyncSession = Depends(get_db)):
-    user = await consume_one_time_token(db, body.token, TokenPurpose.EMAIL_CHANGE)
+@limiter.limit(settings.rate_limit_mfa_verify)
+async def confirm_email_change(
+    request: Request, body: EmailCodeRequest, db: AsyncSession = Depends(get_db)
+):
+    """`body.email` is the new address the code was sent to - the account
+    still signs in with the old one until this succeeds."""
+    user = await consume_one_time_token(db, body.email, body.code, TokenPurpose.EMAIL_CHANGE)
     new = user.pending_email
     if not new:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired token")

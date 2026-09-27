@@ -104,19 +104,24 @@ def decode_access_token(token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# One-time link tokens (email verification, password reset)
+# One-time codes (email verification, password reset, email change)
 # ---------------------------------------------------------------------------
 
 
-def generate_one_time_token() -> str:
-    """A link token. 32 bytes is ample - these live minutes to hours."""
-    return secrets.token_urlsafe(32)
+def generate_otp_code() -> str:
+    """A 6-digit numeric code, emailed and typed back by hand.
+
+    Low entropy compared to a link token, on purpose - it has to be readable
+    off an email and retyped. That's why OneTimeToken.attempts exists: the
+    code alone is not enough to resist guessing, a bounded attempt count is.
+    """
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def hash_one_time_token(token: str) -> str:
-    """SHA-256, for the same reason refresh tokens use it: the input is
-    already high-entropy random, so a slow hash buys nothing and would
-    prevent the digest being an indexed unique column."""
+    """SHA-256, for the same reason refresh tokens use it: only the digest is
+    stored, so a database dump yields nothing redeemable on its own - the
+    attempt limit in app/auth/service.py is what stops online guessing."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 

@@ -144,10 +144,26 @@ def sent():
 PASSWORD = "correct-horse-battery-staple"
 
 
-def link_token(kind: str) -> str | None:
-    """Pull the token out of the most recent matching email."""
+# Distinguishes which of the three OTP emails a captured message is, by a
+# substring unique to its subject line (email.py's send_*_email functions).
+_OTP_SUBJECTS = {
+    "verify-email": "subject=Confirm your",
+    "reset-password": "subject=Reset your",
+    "confirm-email": "subject=Confirm your new",
+}
+
+
+def otp_code(kind: str) -> str | None:
+    """Pull the 6-digit code out of the most recent matching email."""
+    marker = _OTP_SUBJECTS[kind]
     for message in reversed(_SENT):
-        match = re.search(rf"{kind}\?token=([\w\-]+)", message)
+        if marker not in message:
+            continue
+        # "verify-email"'s marker is a prefix of "confirm-email"'s subject, so
+        # skip a message that actually matched the more specific one.
+        if kind == "verify-email" and _OTP_SUBJECTS["confirm-email"] in message:
+            continue
+        match = re.search(r"code is: (\d{6})", message)
         if match:
             return match.group(1)
     return None
@@ -161,7 +177,7 @@ def register(client, email: str = "user@example.com", password: str = PASSWORD):
     """Sign up and confirm the address. Returns (email, password) for reuse."""
     response = client.post("/v1/auth/signup", json={"email": email, "password": password})
     assert response.status_code == 201, response.text
-    client.post("/v1/auth/verify-email", json={"token": link_token("verify-email")})
+    client.post("/v1/auth/verify-email", json={"email": email, "code": otp_code("verify-email")})
     return email, password
 
 

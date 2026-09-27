@@ -1,6 +1,6 @@
 import pyotp
 
-from tests.conftest import PASSWORD, bearer, csrf_headers, link_token, login, register
+from tests.conftest import PASSWORD, bearer, csrf_headers, login, otp_code, register
 
 
 def test_signup_does_not_log_in(client):
@@ -29,8 +29,10 @@ def test_signup_rejects_short_password(client):
 
 def test_verify_email_confirms_the_account(client):
     client.post("/v1/auth/signup", json={"email": "verify@example.com", "password": PASSWORD})
-    token = link_token("verify-email")
-    response = client.post("/v1/auth/verify-email", json={"token": token})
+    code = otp_code("verify-email")
+    response = client.post(
+        "/v1/auth/verify-email", json={"email": "verify@example.com", "code": code}
+    )
     assert response.status_code == 200
 
     access_token = login(client, "verify@example.com")
@@ -38,11 +40,13 @@ def test_verify_email_confirms_the_account(client):
     assert me.json()["is_verified"] is True
 
 
-def test_verify_email_token_is_single_use(client):
+def test_verify_email_code_is_single_use(client):
     register(client, "reuse@example.com")
-    token = link_token("verify-email")
-    client.post("/v1/auth/verify-email", json={"token": token})
-    response = client.post("/v1/auth/verify-email", json={"token": token})
+    code = otp_code("verify-email")
+    client.post("/v1/auth/verify-email", json={"email": "reuse@example.com", "code": code})
+    response = client.post(
+        "/v1/auth/verify-email", json={"email": "reuse@example.com", "code": code}
+    )
     assert response.status_code == 400
 
 
@@ -170,12 +174,13 @@ def test_reset_password_signs_out_everywhere(client):
     login(client, email, password)
 
     client.post("/v1/auth/forgot-password", json={"email": email})
-    token = link_token("reset-password")
-    assert token
+    code = otp_code("reset-password")
+    assert code
 
     new_password = "a-brand-new-long-password"
     reset = client.post(
-        "/v1/auth/reset-password", json={"token": token, "new_password": new_password}
+        "/v1/auth/reset-password",
+        json={"email": email, "code": code, "new_password": new_password},
     )
     assert reset.status_code == 200
 

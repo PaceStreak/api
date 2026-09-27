@@ -101,12 +101,18 @@ class TokenPurpose(StrEnum):
 
 
 class OneTimeToken(Base):
-    """A single-use link token, emailed to the user.
+    """A single-use 6-digit code, emailed to the user and typed back.
 
     Same storage discipline as RefreshToken: only the SHA-256 digest is kept,
     so a database dump yields nothing that can be redeemed. `used_at` marks
     redemption rather than deleting the row, which keeps the audit trail and
-    lets a replayed link be distinguished from one that never existed.
+    lets a replayed code be distinguished from one that never existed.
+
+    Unlike a link token, the code alone isn't unique across users (six digits,
+    many accounts), so lookup is always by (user, purpose) for the newest
+    unused row, and the code is compared against that row's hash. `attempts`
+    bounds online guessing, which a random link token never needed because
+    guessing 32 bytes isn't feasible.
     """
 
     __tablename__ = "one_time_tokens"
@@ -122,9 +128,10 @@ class OneTimeToken(Base):
         ),
         nullable=False,
     )
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class RecoveryCode(Base):

@@ -56,8 +56,12 @@ class EmailRequest(BaseRequest):
     turnstile_token: str | None = Field(default=None)
 
 
-class TokenOnlyRequest(BaseRequest):
-    token: str = Field(min_length=1, max_length=512)
+class EmailCodeRequest(BaseRequest):
+    """An address plus the 6-digit code emailed to it - used to verify an
+    address and to confirm an email change alike."""
+
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class MessageResponse(BaseResponse):
@@ -68,7 +72,8 @@ class MessageResponse(BaseResponse):
 
 
 class ResetPasswordRequest(BaseRequest):
-    token: str = Field(min_length=1, max_length=512)
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
     new_password: str = Field(min_length=16, max_length=256)
 
 

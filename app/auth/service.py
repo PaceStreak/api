@@ -12,7 +12,7 @@ from app.auth.security import (
     create_access_token,
     decrypt_totp_secret,
     find_matching_totp_step,
-    generate_one_time_token,
+    generate_otp_code,
     generate_recovery_code,
     generate_refresh_token,
     hash_one_time_token,
@@ -25,6 +25,11 @@ from app.auth.security import (
 from app.config import get_settings
 
 settings = get_settings()
+
+# A code stops being redeemable after this many wrong guesses, independent of
+# its expiry - six digits is only ~20 bits, so the attempt count is the real
+# defense against guessing, not the code space.
+MAX_OTP_ATTEMPTS = 5
 
 
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:
@@ -230,15 +235,15 @@ async def list_sessions(db: AsyncSession, user: User) -> list[RefreshToken]:
 
 
 # ---------------------------------------------------------------------------
-# One-time link tokens
+# One-time codes
 # ---------------------------------------------------------------------------
 
 
 async def issue_one_time_token(
     db: AsyncSession, user: User, purpose: TokenPurpose, lifetime: timedelta
 ) -> str:
-    """Mint a link token, invalidating any earlier unused one for the same
-    purpose so only the most recent email works."""
+    """Mint an OTP code, invalidating any earlier unused one for the same
+    purpose so only the most recently emailed code works."""
     await db.execute(
         update(OneTimeToken)
         .where(OneTimeToken.user_id == user.id)
@@ -247,7 +252,7 @@ async def issue_one_time_token(
         .values(used_at=utcnow())
     )
 
-    raw = generate_one_time_token()
+    raw = generate_otp_code()
     db.add(
         OneTimeToken(
             user_id=user.id,
@@ -260,35 +265,56 @@ async def issue_one_time_token(
     return raw
 
 
-async def consume_one_time_token(db: AsyncSession, raw_token: str, purpose: TokenPurpose) -> User:
-    """Redeem a link token, or raise 400.
+async def _user_awaiting_code(db: AsyncSession, purpose: TokenPurpose, email: str) -> User | None:
+    """Which user a code for this purpose should be checked against.
+
+    Email change is the one purpose where the code is sent to an address the
+    account doesn't have yet, so it's looked up by pending_email rather than
+    email - everything else looks up by the account's current address.
+    """
+    column = User.pending_email if purpose is TokenPurpose.EMAIL_CHANGE else User.email
+    result = await db.execute(select(User).where(column == email))
+    return result.scalar_one_or_none()
+
+
+async def consume_one_time_token(
+    db: AsyncSession, email: str, raw_code: str, purpose: TokenPurpose
+) -> User:
+    """Redeem an OTP code, or raise 400.
 
     Every failure mode returns the same message. Distinguishing "expired" from
-    "already used" from "never existed" would tell an attacker holding a
-    guessed token which guesses were close.
+    "already used" from "wrong code" would tell an attacker which guesses were
+    close. Codes aren't unique across users the way link tokens were, so the
+    lookup is always by (user, purpose) for the newest unused, unexpired row,
+    then the submitted code is checked against that row's hash.
 
     The caller must commit; used_at is set here so redemption and the action
     it authorises land in one transaction.
     """
     invalid = HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token"
+        status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code"
     )
 
+    user = await _user_awaiting_code(db, purpose, email.lower())
+    if user is None or not user.is_active:
+        raise invalid
+
     result = await db.execute(
-        select(OneTimeToken).where(OneTimeToken.token_hash == hash_one_time_token(raw_token))
+        select(OneTimeToken)
+        .where(OneTimeToken.user_id == user.id)
+        .where(OneTimeToken.purpose == purpose)
+        .where(OneTimeToken.used_at.is_(None))
+        .where(OneTimeToken.expires_at > utcnow())
+        .order_by(OneTimeToken.created_at.desc())
+        .limit(1)
     )
     token = result.scalar_one_or_none()
 
-    if (
-        token is None
-        or token.purpose != purpose
-        or token.used_at is not None
-        or token.expires_at <= utcnow()
-    ):
+    if token is None or token.attempts >= MAX_OTP_ATTEMPTS:
         raise invalid
 
-    user = await db.get(User, token.user_id)
-    if user is None or not user.is_active:
+    if token.token_hash != hash_one_time_token(raw_code):
+        token.attempts += 1
         raise invalid
 
     token.used_at = utcnow()

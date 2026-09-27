@@ -268,55 +268,62 @@ def _p(text: str) -> str:
 # Message templates
 # ---------------------------------------------------------------------------
 #
-# The raw token is placed in a URL pointing at app.pacestreak.com, which posts
-# it back to this API. Only the digest is stored server-side, so this email is
-# the only place the token ever exists in readable form.
+# The raw code is a plain 6-digit number, typed back into app.pacestreak.com
+# rather than clicked from a link. Only the digest is stored server-side, so
+# this email is the only place the code ever exists in readable form.
 
 
-async def send_verification_email(to: str, token: str) -> None:
-    link = f"{settings.frontend_url}/verify-email?token={token}"
+def _code_html(code: str) -> str:
+    """A large, monospaced rendering of a 6-digit code for the HTML email."""
+    spaced = " ".join(code)
+    return (
+        '<p style="margin:0 0 16px;text-align:center;">'
+        f'<span style="display:inline-block;padding:12px 20px;font-family:monospace;'
+        f'font-size:28px;letter-spacing:4px;font-weight:bold;">{spaced}</span></p>'
+    )
+
+
+async def send_verification_email(to: str, code: str) -> None:
     subject = f"Confirm your {settings.app_name} email address"
     text = (
-        f"Confirm your address by opening this link:\n\n{link}\n\n"
-        f"The link expires in {settings.email_verify_token_hours} hours.\n"
+        f"Your verification code is: {code}\n\n"
+        f"Enter it in the app to confirm your address. It expires in "
+        f"{settings.email_verify_token_hours} hours.\n"
         "If you did not create this account, ignore this message."
     )
     html = _html_template(
-        preheader="Confirm your email address to finish setting up PaceStreak.",
+        preheader="Your PaceStreak verification code.",
         heading="Confirm your email address",
-        body_html=_p("Confirm your address to finish setting up your account.")
+        body_html=_p("Enter this code in the app to confirm your address.")
+        + _code_html(code)
         + _p(
-            f"This link expires in {settings.email_verify_token_hours} hours. "
+            f"This code expires in {settings.email_verify_token_hours} hours. "
             "If you did not create this account, ignore this message."
         ),
-        button_text="Confirm email address",
-        button_url=link,
         footer_note="You're receiving this because someone used this address on PaceStreak.",
     )
     await send_email(to, subject, text, html=html)
 
 
-async def send_password_reset_email(to: str, token: str) -> None:
-    link = f"{settings.frontend_url}/reset-password?token={token}"
+async def send_password_reset_email(to: str, code: str) -> None:
     subject = f"Reset your {settings.app_name} password"
     text = (
-        f"Reset your password by opening this link:\n\n{link}\n\n"
-        f"The link expires in {settings.password_reset_token_minutes} minutes "
-        "and can be used once.\n"
+        f"Your password reset code is: {code}\n\n"
+        f"Enter it in the app to choose a new password. It expires in "
+        f"{settings.password_reset_token_minutes} minutes and can be used once.\n"
         "If you did not request this, ignore this message - your password has "
         "not changed."
     )
     html = _html_template(
-        preheader="Reset your PaceStreak password.",
+        preheader="Your PaceStreak password reset code.",
         heading="Reset your password",
-        body_html=_p("Use the button below to choose a new password.")
+        body_html=_p("Enter this code in the app to choose a new password.")
+        + _code_html(code)
         + _p(
-            f"This link expires in {settings.password_reset_token_minutes} minutes and "
+            f"This code expires in {settings.password_reset_token_minutes} minutes and "
             "can be used once. If you did not request this, ignore this message - your "
             "password has not changed."
         ),
-        button_text="Reset password",
-        button_url=link,
     )
     await send_email(to, subject, text, html=html)
 
@@ -343,26 +350,25 @@ async def send_password_changed_email(to: str) -> None:
     await send_email(to, subject, text, html=html)
 
 
-async def send_email_change_email(to: str, token: str) -> None:
-    link = f"{settings.frontend_url}/confirm-email?token={token}"
+async def send_email_change_email(to: str, code: str) -> None:
     subject = f"Confirm your new {settings.app_name} email address"
     text = (
-        f"Open this link to use this address for your {settings.app_name} account:\n\n"
-        f"{link}\n\nThe link expires in {settings.email_change_token_hours} hours. "
+        f"Your confirmation code is: {code}\n\n"
+        f"Enter it in the app to use this address for your {settings.app_name} account. "
+        f"It expires in {settings.email_change_token_hours} hours.\n"
         "If you didn't ask for this, ignore this message; nothing has changed."
     )
     html = _html_template(
         preheader=f"Confirm this address for your {settings.app_name} account.",
         heading="Confirm your new email address",
         body_html=_p(
-            f"Use the button below to confirm this address for your {settings.app_name} account."
+            f"Enter this code in the app to use this address for your {settings.app_name} account."
         )
+        + _code_html(code)
         + _p(
-            f"This link expires in {settings.email_change_token_hours} hours. If you "
+            f"This code expires in {settings.email_change_token_hours} hours. If you "
             "didn't ask for this, ignore this message; nothing has changed."
         ),
-        button_text="Confirm new email address",
-        button_url=link,
     )
     await send_email(to, subject, text, html=html)
 

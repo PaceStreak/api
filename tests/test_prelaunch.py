@@ -4,7 +4,7 @@ the abuse view."""
 import pyotp
 
 from app.config import get_settings
-from tests.conftest import PASSWORD, bearer, link_token, login, person, register
+from tests.conftest import PASSWORD, bearer, login, otp_code, person, register
 from tests.test_social import make_role
 
 settings = get_settings()
@@ -107,10 +107,11 @@ def test_change_email_waits_for_the_new_address(client, sent):
         headers=bearer(token),
     )
     assert started.status_code == 200
-    # Still the old address until the link is opened.
+    # Still the old address until the code is confirmed.
     assert client.get("/v1/auth/me", headers=bearer(token)).json()["email"] == "old@example.com"
     confirmed = client.post(
-        "/v1/auth/confirm-email-change", json={"token": link_token("confirm-email")}
+        "/v1/auth/confirm-email-change",
+        json={"email": "new@example.com", "code": otp_code("confirm-email")},
     )
     assert confirmed.status_code == 200, confirmed.text
     assert (

@@ -118,6 +118,77 @@ def test_put_is_idempotent_and_returns_outcome(client):
     assert len(listed[0]["sets"]) == 2
 
 
+def test_single_badge_cannot_be_awarded_twice_by_a_race(client):
+    """UserAchievement.tier is NULL for a single (non-tiered) badge, and
+    Postgres treats NULL as distinct under a unique constraint - so two
+    concurrent recompute() calls (an offline outbox retry racing a live
+    request) could both pass the "already held" check and insert the same
+    badge twice, double-paying its XP. A partial unique index on
+    (user_id, achievement_id) WHERE tier IS NULL closes that, and the insert
+    goes through ON CONFLICT DO NOTHING for the tier-less case."""
+    import asyncio
+
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.auth.models import User
+    from app.database import AsyncSessionLocal, engine
+    from app.game.models import UserAchievement
+
+    token = person(client, "race@example.com", "racer")
+    wid = str(uuid4())
+    client.put(f"/v1/workouts/{wid}", json=workout(), headers=bearer(token))
+
+    async def race():
+        async with AsyncSessionLocal() as db:
+            uid = (
+                await db.execute(select(User.id).where(User.email == "race@example.com"))
+            ).scalar_one()
+
+            async def attempt():
+                await db.execute(
+                    insert(UserAchievement)
+                    .values(
+                        user_id=uid,
+                        achievement_id="first_session",
+                        tier=None,
+                        unlocked_on=now().date(),
+                        evidence={"value": 1},
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=["user_id", "achievement_id"],
+                        index_where=UserAchievement.tier.is_(None),
+                    )
+                )
+
+            # The badge is already held from the PUT above; two more attempts
+            # stand in for two concurrent recompute() calls racing each other -
+            # both must land on the same "already there" outcome.
+            await attempt()
+            await attempt()
+            await db.commit()
+            rows = (
+                (
+                    await db.execute(
+                        select(UserAchievement).where(
+                            UserAchievement.user_id == uid,
+                            UserAchievement.achievement_id == "first_session",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return rows
+
+    # The pool holds connections bound to the TestClient's own event loop;
+    # asyncio.run() below starts a new one, so they must be dropped first
+    # (see clean_database's own note on this).
+    asyncio.run(engine.dispose())
+    rows = asyncio.run(race())
+    assert len(rows) == 1
+
+
 def test_older_edit_arriving_late_is_ignored(client):
     token = person(client, "lww@example.com", "lww")
     wid = str(uuid4())

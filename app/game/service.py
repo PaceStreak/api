@@ -673,15 +673,40 @@ async def recompute(
         for tier in rule.reached(snap.context):
             if (rule.id, tier) in held:
                 continue
-            db.add(
-                UserAchievement(
-                    user_id=user_id,
-                    achievement_id=rule.id,
-                    tier=tier,
-                    unlocked_on=snap.today,
-                    evidence={"value": round(rule.value(snap.context), 1)},
+            if tier is None:
+                # Postgres treats NULL as distinct under a unique constraint,
+                # so the (user, achievement, tier) constraint never covers
+                # single badges - insert through the partial index instead,
+                # so two concurrent recomputes can't both award the same one.
+                row = (
+                    await db.execute(
+                        insert(UserAchievement)
+                        .values(
+                            user_id=user_id,
+                            achievement_id=rule.id,
+                            tier=None,
+                            unlocked_on=snap.today,
+                            evidence={"value": round(rule.value(snap.context), 1)},
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=["user_id", "achievement_id"],
+                            index_where=UserAchievement.tier.is_(None),
+                        )
+                        .returning(UserAchievement.id)
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    continue
+            else:
+                db.add(
+                    UserAchievement(
+                        user_id=user_id,
+                        achievement_id=rule.id,
+                        tier=tier,
+                        unlocked_on=snap.today,
+                        evidence={"value": round(rule.value(snap.context), 1)},
+                    )
                 )
-            )
             tier_name = None
             if tier and rule.tier_names:
                 tier_name = rule.tier_names[ach.TIERS.index(tier)]

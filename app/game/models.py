@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
+import sqlalchemy as sa
 from sqlalchemy import (
     Boolean,
     Date,
@@ -75,6 +76,17 @@ class UserAchievement(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "achievement_id", "tier", name="uq_user_achievement_tier"),
         Index("ix_user_achievements_achievement", "achievement_id"),
+        # Postgres treats NULL as distinct under a unique constraint, so the
+        # constraint above never covers single (non-tiered) badges - this
+        # partial index does, closing a race where two concurrent recomputes
+        # both insert the same single badge. See migration b7a4e1c9d3f8.
+        Index(
+            "uq_user_achievement_single",
+            "user_id",
+            "achievement_id",
+            unique=True,
+            postgresql_where=sa.text("tier IS NULL"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(

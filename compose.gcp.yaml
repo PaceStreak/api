@@ -128,7 +128,7 @@ services:
       resources:
         limits: { memory: 384m }
       restart_policy:
-        condition: on-failure
+        condition: any
       # The zero-downtime part: Swarm starts the replacement task, waits for
       # its healthcheck to pass, and only then stops the old one. The
       # overlay network's routing mesh only ever sends traffic to a task
@@ -149,7 +149,7 @@ services:
       resources:
         limits: { memory: 256m }
       restart_policy:
-        condition: on-failure
+        condition: any
       # start-first here too: app/worker.py's own docstring already documents
       # that a tick briefly running twice is safe (Redis lock per tick, a
       # dedupe key per notification), which is exactly what a moment of
@@ -160,7 +160,7 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: ["tunnel", "run"]
+    command: ["tunnel", "--protocol", "http2", "run"]
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN from the Cloudflare Zero Trust dashboard}
     logging:
@@ -170,7 +170,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any
 
 networks:
   backend:

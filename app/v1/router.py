@@ -11,11 +11,15 @@ from app.account.router import router as account_router
 from app.admin.router import router as admin_router
 from app.auth.passkeys import router as passkeys_router
 from app.auth.router import router as auth_router
+from app.coach.router import router as coach_router
 from app.game.leaderboards import router as leaderboards_router
 from app.game.router import router as stats_router
 from app.groups.router import router as groups_router
 from app.habits.router import router as habits_api_router
+from app.habits.routines import router as habit_routines_router
+from app.insights.router import router as insights_router
 from app.notifications.router import router as notifications_router
+from app.nutrition.router import router as nutrition_router
 from app.ops.router import router as ops_router
 from app.profile.router import router as profile_router
 from app.social.buddies import router as buddies_router
@@ -39,8 +43,12 @@ router.include_router(gear_router)
 router.include_router(personal_router)
 router.include_router(photos_router)
 router.include_router(habits_api_router)
+router.include_router(habit_routines_router)
+router.include_router(insights_router)
 router.include_router(habits_router)
 router.include_router(plans_router)
+router.include_router(nutrition_router)
+router.include_router(coach_router)
 router.include_router(social_router)
 router.include_router(buddies_router)
 router.include_router(groups_router)

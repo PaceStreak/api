@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -107,3 +108,27 @@ class HabitLog(Base):
     day: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     note: Mapped[str | None] = mapped_column(String(280))
+
+
+class HabitRoutine(Base):
+    """An ordered run of habits done together - a morning routine, a wind-down -
+    stepped through one at a time in the app. A routine is only an order:
+    ticking a step logs the habit itself, so streaks need nothing new.
+    Private, like the habits in it."""
+
+    __tablename__ = "habit_routines"
+    __table_args__ = (
+        CheckConstraint(
+            "time_of_day IN ('morning', 'afternoon', 'evening', 'anytime')",
+            name="ck_habit_routine_time",
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    emoji: Mapped[str] = mapped_column(String(8), default="🌅", nullable=False)
+    time_of_day: Mapped[str] = mapped_column(String(10), default="morning", nullable=False)
+    # Habit ids as strings, in order. A deleted habit simply drops out.
+    habit_ids: Mapped[list] = mapped_column(JSONB, nullable=False)

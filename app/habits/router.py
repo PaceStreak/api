@@ -9,17 +9,29 @@ from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
+from app.common.limits import enforce
 from app.common.time import local_today, utcnow
 from app.database import get_db
 from app.game.service import recompute, weeks_payload
 from app.habits.catalog import TEMPLATE_BY_ID, catalog_payload
+from app.habits.importer import MAX_BYTES, HabitImportError, parse
 from app.habits.models import HABIT_CATEGORIES, Habit, HabitLog
 from app.habits.service import habit_summary, habit_views
 from app.profile.service import get_profile
@@ -192,6 +204,91 @@ async def create_habit(
 
 class OrderIn(BaseModel):
     ids: list[UUID] = Field(max_length=MAX_HABITS * 3)
+
+
+@router.post("/import")
+async def import_habits(
+    file: UploadFile = File(...),
+    dry_run: bool = Form(default=False),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """History from another habit app. A habit whose name matches one already
+    here (ignoring case) is merged into it; the rest are created. Days already
+    logged here are never overwritten. `dry_run` shows what would happen."""
+    await enforce("import_habits", user.id, 20, 3600)
+    try:
+        parsed = parse(file.filename or "", await file.read(MAX_BYTES + 1))
+    except HabitImportError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    _, today, _ = await _context(db, user)
+    live = (
+        (
+            await db.execute(
+                select(Habit).where(Habit.user_id == user.id, Habit.archived_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_name = {h.name.casefold(): h for h in live}
+    new = [p for p in parsed if p.name.casefold() not in by_name]
+    if len(live) + len(new) > MAX_HABITS:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"That would make more than {MAX_HABITS} habits. Archive some first.",
+        )
+    preview = []
+    for p in parsed:
+        days = sorted(d for d in p.days if d <= today)
+        preview.append(
+            {
+                "name": p.name,
+                "days": len(days),
+                "first": days[0].isoformat() if days else None,
+                "last": days[-1].isoformat() if days else None,
+                "merge": p.name.casefold() in by_name,
+            }
+        )
+    if dry_run:
+        return {"habits": preview, "imported_days": 0}
+
+    imported = 0
+    position = len(live)
+    for p in parsed:
+        days = {d: v for d, v in p.days.items() if d <= today}
+        if not days:
+            continue
+        habit = by_name.get(p.name.casefold())
+        if habit is None:
+            first, last = min(days), max(days)
+            weeks = max(1, ((last - first).days + 1) / 7)
+            habit = Habit(
+                user_id=user.id,
+                name=p.name,
+                kind="check" if p.binary else "count",
+                daily_goal=None if p.binary else 1,
+                # How often it was really done, so the streak starts honest.
+                weekly_target=min(7, max(1, round(len(days) / weeks))),
+                started_on=first,
+                position=position,
+            )
+            position += 1
+            db.add(habit)
+            await db.flush()
+        known = set(
+            (await db.execute(select(HabitLog.day).where(HabitLog.habit_id == habit.id))).scalars()
+        )
+        for day, amount in days.items():
+            if day in known:
+                continue
+            db.add(HabitLog(habit_id=habit.id, user_id=user.id, day=day, amount=amount))
+            imported += 1
+        habit.started_on = min(habit.started_on, min(days))
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()
+    return {"habits": preview, "imported_days": imported}
 
 
 @router.put("/order", status_code=204)

@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     # Cloudflare account, the same pattern as EMAIL_BACKEND=console.
     turnstile_secret_key: str | None = Field(default=None)
 
+    # --- barcode lookup (Open Food Facts) ----------------------------------------
+    # Only the scanned barcode is sent - never who scanned it. Empty turns the
+    # lookup off; scanning then only finds foods the person saved themselves.
+    food_lookup_url: str = Field(
+        default="https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
+    )
+
     # --- object storage (Cloudflare R2) ----------------------------------------
     # Progress photos live in R2, not Postgres - see app/storage/r2.py. All four
     # must be set for body-photo backup to work; unset (the default) leaves the

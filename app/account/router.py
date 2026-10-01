@@ -38,10 +38,12 @@ from app.database import get_db
 from app.game.models import PersonalRecord, StreakWager, UserAchievement
 from app.game.service import recompute
 from app.groups.models import Challenge, ChallengeParticipant, Group, GroupMember
-from app.habits.models import Habit, HabitLog
+from app.habits.models import Habit, HabitLog, HabitRoutine
 from app.habits.router import HabitIn
+from app.insights.models import JournalDay
 from app.notifications.models import NotificationPreference
 from app.notifications.service import deliver, notify
+from app.nutrition.models import Food, MealEntry, NutritionTarget, Recipe
 from app.profile.router import profile_out
 from app.profile.service import get_chains, get_profile
 from app.social.models import Block, BuddyPair, Comment, Follow
@@ -449,6 +451,68 @@ async def build_export(db: AsyncSession, user: User) -> dict:
             }
             for w in await all_of(WeighIn, WeighIn.user_id == uid)
         ],
+        "meals": [
+            {
+                "id": str(m.id),
+                "date": m.day.isoformat(),
+                "meal": m.meal,
+                "name": m.name,
+                "servings": m.servings,
+                "kcal": m.kcal,
+                "protein_g": m.protein_g,
+                "carbs_g": m.carbs_g,
+                "fat_g": m.fat_g,
+            }
+            for m in await all_of(MealEntry, MealEntry.user_id == uid)
+        ],
+        "foods": [
+            {
+                "id": str(f.id),
+                "name": f.name,
+                "brand": f.brand,
+                "barcode": f.barcode,
+                "serving_label": f.serving_label,
+                "kcal": f.kcal,
+                "protein_g": f.protein_g,
+                "carbs_g": f.carbs_g,
+                "fat_g": f.fat_g,
+            }
+            for f in await all_of(Food, Food.user_id == uid)
+        ],
+        "recipes": [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "serves": r.serves,
+                "items": r.items,
+                "kcal": r.kcal,
+                "protein_g": r.protein_g,
+                "carbs_g": r.carbs_g,
+                "fat_g": r.fat_g,
+            }
+            for r in await all_of(Recipe, Recipe.user_id == uid)
+        ],
+        "journal": [
+            {"date": j.day.isoformat(), "mood": j.mood, "note": j.note}
+            for j in await all_of(JournalDay, JournalDay.user_id == uid)
+        ],
+        "habit_routines": [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "emoji": r.emoji,
+                "time_of_day": r.time_of_day,
+                "habit_ids": r.habit_ids,
+            }
+            for r in await all_of(HabitRoutine, HabitRoutine.user_id == uid)
+        ],
+        "nutrition_target": next(
+            (
+                {"kcal": t.kcal, "protein_g": t.protein_g, "carbs_g": t.carbs_g, "fat_g": t.fat_g}
+                for t in await all_of(NutritionTarget, NutritionTarget.user_id == uid)
+            ),
+            None,
+        ),
         "achievements": [
             {"id": a.achievement_id, "tier": a.tier, "unlocked_on": a.unlocked_on.isoformat()}
             for a in await all_of(UserAchievement, UserAchievement.user_id == uid)
@@ -669,6 +733,35 @@ async def export(
             ["weighed_at", "date", "moment", "weight_kg", "note"],
             ([w.weighed_at, w.local_date, w.moment, w.weight_kg, w.note] for w in weigh_ins),
         )
+        meals = (
+            (
+                await db.execute(
+                    select(MealEntry)
+                    .where(MealEntry.user_id == user.id)
+                    .order_by(MealEntry.day, MealEntry.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        sheet(
+            "meals.csv",
+            ["date", "meal", "name", "servings", "kcal", "protein_g", "carbs_g", "fat_g"],
+            (
+                [m.day, m.meal, m.name, m.servings, m.kcal, m.protein_g, m.carbs_g, m.fat_g]
+                for m in meals
+            ),
+        )
+        journal = (
+            (
+                await db.execute(
+                    select(JournalDay).where(JournalDay.user_id == user.id).order_by(JournalDay.day)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        sheet("journal.csv", ["date", "mood", "note"], ([j.day, j.mood, j.note] for j in journal))
         habit_rows = (
             await db.execute(
                 select(

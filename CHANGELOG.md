@@ -7,6 +7,8 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `AGENTS.md` with this repository's commands and rules for coding agents; the
+  README and architecture notes now describe the live deployment, not a plan.
 - Account recovery with a 2FA code, email change, terms versions.
 - Anonymous crash reports and an admin abuse view; both swept after 30 days.
 - Smart reminder timing, monthly goals, rest days.

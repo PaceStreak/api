@@ -1,11 +1,12 @@
 # PaceStreak API
 
-Backend for [PaceStreak](https://www.pacestreak.com), a workout streak tracker.
-Will be served from **`api.pacestreak.com`**.
+Backend for [PaceStreak](https://www.pacestreak.com), a habit and streak
+tracker. **Live at `api.pacestreak.com`.**
 
-The whole product backend is built: about 180 routes under `/v1`, a background
-worker, and a test suite that runs against real Postgres and Redis. It is not
-deployed yet. Where it runs is the open decision; see
+About 260 routes under `/v1`, a background worker, and a test suite of about
+260 tests that runs against real Postgres and Redis. It runs on a free-tier
+GCP e2-micro as a Docker Swarm stack behind a Cloudflare Tunnel, with Neon
+Postgres, Upstash Redis and Brevo for mail; see
 [ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
 
 Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE) — anyone
@@ -16,11 +17,12 @@ their users. That is the point of AGPL over GPL for a hosted service.
 
 | | |
 | --- | --- |
-| Stack | FastAPI, PostgreSQL, Redis, on Docker Compose |
-| Hostname | `api.pacestreak.com` (no DNS record yet, deliberately) |
-| Consumers | `PaceStreak/app` (the product frontend, built, not deployed) |
-| Tests | 162, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
-| Monitoring | To be added to [`PaceStreak/status`](https://github.com/PaceStreak/status) once it responds |
+| Stack | FastAPI, PostgreSQL, Redis; Docker Compose locally, Docker Swarm in production |
+| Hostname | `api.pacestreak.com`, through a Cloudflare Tunnel (no open port) |
+| Consumers | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
+| Tests | ~260, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
+| Deploys | Push to `main` → GHCR image → the VM's `autodeploy.timer` rolls it out within ~2 minutes |
+| Monitoring | `/health` on [`status.pacestreak.com`](https://status.pacestreak.com) |
 
 ## Quick start
 
@@ -47,7 +49,7 @@ make clean         # stop and delete both data volumes (Postgres and Redis)
 | Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes, **passkeys (WebAuthn)** |
 | Profile | `app/profile/` | Onboarding, age gates (13 / 16), settings, reserved handles and brand-impersonation checks |
 | Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 78-exercise library, routines, custom exercises, body metrics, streak chains with **requirements**, repairs, **pauses** (incl. travel), **GPX/FIT/CSV file import**, **tags**, **gear**, **training plans** |
-| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 23 achievements, 4 opt-in leaderboards, **weekly recap**, **year review**, **record history**, **joint (buddy/group) streaks** |
+| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 29 achievements, 5 opt-in leaderboards, **weekly quests**, **weekly recap**, **year review**, **record history**, **joint (buddy/group) streaks** |
 | Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports, **buddy streaks**, **preset encouragement**; visibility checked at emit and at read |
 | Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges, mute, **group streak** |
 | Notifications | `app/notifications/` | Inbox, Web Push (VAPID), email, per-category preferences, RFC 8058 unsubscribe |
@@ -194,7 +196,7 @@ issues a CSRF token — it arrives in the `csrf_token` cookie at login and is
 
 In production the cookies carry the `__Secure-` prefix and `Domain=pacestreak.com`
 so `app.pacestreak.com` can send them here — see `app/auth/router.py` and
-`CLAUDE.md`/`ARCHITECTURE.md` for why. Locally, with `COOKIE_SECURE=False`,
+[`AGENTS.md`](https://github.com/PaceStreak/pacestreak/blob/main/AGENTS.md) and `ARCHITECTURE.md` for why. Locally, with `COOKIE_SECURE=False`,
 they are named `refresh_token` / `csrf_token` with no prefix, because the
 prefix requires `Secure` and local development is plain HTTP.
 
@@ -221,21 +223,13 @@ was learned by breaking something.
   `Access-Control-Allow-Origin` — a wildcard is rejected when credentials are
   included.
 
-### The frontend's CSP will block this API until it is widened
+### The frontend's CSP names this host
 
-`PaceStreak/web` (and `app`, when it exists) ships:
-
-```http
-Content-Security-Policy: default-src 'self'; connect-src 'self'; …
-```
-
-The first `fetch()` to `api.pacestreak.com` will be blocked by the browser,
-silently from the page's perspective. Whoever wires the first call must add
-`connect-src 'self' https://api.pacestreak.com` to that site's `public/_headers`
-in the same change.
-
-In practice the caller is `app.pacestreak.com`, not `www` — the public site is
-deliberately static and makes no authenticated requests at all.
+Every site in the org ships `default-src 'self'`. `app/public/_headers` in
+`PaceStreak/app` allows `connect-src 'self' https://api.pacestreak.com`; if
+this API's hostname ever changes, that line must change **in the same
+commit** as the app's base URL, or every request fails silently. `www` never
+calls this API and its `connect-src` stays `'self'`.
 
 ### Versioning
 
@@ -327,17 +321,25 @@ from an empty database and a flushed Redis.
 - **No account lockout after repeated failed logins** beyond the per-IP rate
   limit in `app/ratelimit.py` — a distributed attacker still gets
   `RATE_LIMIT_LOGIN` guesses per IP.
-- **No outbound email provider wired in.** `EMAIL_BACKEND=console` (the
-  default) logs the message instead of sending it; `smtp` needs a real
-  `SMTP_HOST`. Deciding on a provider is a separate, deliberate choice per
-  CLAUDE.md's "no third-party services on the free tier" stance — SMTP itself
-  is a protocol, not a vendor, so this doesn't force that decision.
+- **Brevo's free tier sends 300 mails a day.** Turnstile keeps scripts from
+  spending it, but a real surge of sign-ups could still hit the cap.
 
 ## Production
 
-Host-agnostic: any machine with Docker and a TLS-terminating reverse proxy
-(Caddy, nginx, a platform load balancer, Cloudflare Tunnel) in front of
-`127.0.0.1:8000`. Where it runs is still undecided; nothing here assumes one.
+**Where it runs now:** GCP project `pacestreak`, VM `pacestreak-api`
+(us-central1-a, e2-micro, free tier: never change its config). The Swarm
+stack `pacestreak` (api, worker, cloudflared) is defined in `compose.gcp.yaml`;
+`deploy/gcp/autodeploy.{sh,service,timer}` pull `ghcr.io/pacestreak/api:latest`
+every two minutes and roll out a new digest start-first, and migrations run on
+boot (`RUN_MIGRATIONS=1`). Nothing in GitHub Actions touches the VM. To look:
+
+```bash
+gcloud compute ssh pacestreak-api --zone us-central1-a
+sudo docker service ps pacestreak_api
+```
+
+The images stay host-agnostic: `compose.prod.yaml` runs the same stack on
+any Docker host behind a TLS-terminating proxy in front of `127.0.0.1:8000`:
 
 ```bash
 cp .env.example .env && chmod 600 .env   # then fill in the required values
@@ -363,8 +365,8 @@ the API starts, never from every replica.
 implicit TLS on 465 (`SMTP_SSL=True`, `SMTP_STARTTLS=False`). Transient
 failures retry three times with backoff. Notification mail carries RFC 8058
 `List-Unsubscribe` headers, and mail clients' one-click POST goes to
-`/v1/notifications/unsubscribe/one-click`. The provider is still to be
-chosen; set up SPF, DKIM and DMARC for the sending domain when it is.
+`/v1/notifications/unsubscribe/one-click`. Production uses Brevo, with SPF
+and DKIM set for `pacestreak.com`.
 
 ### Admin accounts
 
@@ -396,8 +398,8 @@ Dumps are custom-format, checksummed and mode 0600 in `./backups` (git-ignored),
 kept for `BACKUP_KEEP_DAYS` (default 14). The newest is never pruned. Every
 backup is immediately test-restored into a throwaway database and compared
 against the live schema revision; a backup that has never been restored is not
-trusted. Schedule `make backup` daily (cron or a systemd timer) and copy
-`./backups` off the host. For production, prefix both with
+trusted. In production, Neon and Upstash provide managed point-in-time
+recovery; a scheduled dump copied off-provider is still to be set up. For production, prefix both with
 `COMPOSE="docker compose -f compose.yaml -f compose.prod.yaml"`.
 
 ## Local development

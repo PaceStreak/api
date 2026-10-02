@@ -7,8 +7,8 @@ How the API fits together and why. The feature list is in
 
 ```text
 www.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/web    the public site
-app.pacestreak.com     Cloudflare Pages (planned)  →  PaceStreak/app    the product
-api.pacestreak.com     THIS REPOSITORY             →  the backend
+app.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/app    the product
+api.pacestreak.com     GCP VM via CF Tunnel        →  THIS REPOSITORY   the backend
 blog.pacestreak.com    Cloudflare Pages (static)   →  PaceStreak/blog   the blog
 status.pacestreak.com  GitHub Pages (Upptime)      →  public status page
 ```
@@ -42,14 +42,18 @@ Cloudflare Workers** as a hosting target outright; and a health route
 typo (`/heatlth`) would have made monitoring report a permanent outage - the
 route is `/health` here.
 
-This means **hosting is still an open, unpaid decision** the rest of the org's
-infrastructure does not need: `web`, `blog` and `status` are static or
-Git-connected Pages projects with no server to run. This API needs a place to
-run a container plus a Postgres instance plus a Redis instance around the
-clock - Cloudflare Pages cannot do that. Fly.io, Railway, Render, or a small
-VPS are the shapes that fit `compose.yaml` most directly; whichever is chosen,
-`docker/entrypoint.sh` already reads `WEB_CONCURRENCY` and
-`FORWARDED_ALLOW_IPS` the way a container platform expects.
+Hosting was then **decided on 27 September 2026**: `web`, `blog` and `status`
+need no server, but this API needs a container, Postgres and Redis around the
+clock. It runs on a free-tier GCP e2-micro as a single-node Docker Swarm
+(`compose.gcp.yaml`: api, worker, cloudflared), with **Neon** for Postgres,
+**Upstash** for Redis and a **Cloudflare Tunnel** for ingress, so the VM has no
+open port. CI only publishes `ghcr.io/pacestreak/api:latest`; the VM's own
+`autodeploy.timer` (`deploy/gcp/`) pulls it and rolls it out start-first, so
+no deploy credential exists anywhere outside the VM. The full record, with the
+options rejected, is in
+[`infra/DECISIONS.md`](https://github.com/PaceStreak/infra/blob/main/DECISIONS.md).
+`docker/entrypoint.sh` still reads `WEB_CONCURRENCY` and `FORWARDED_ALLOW_IPS`
+the way any container platform expects, so moving host is configuration.
 
 ## Auth
 
@@ -129,5 +133,5 @@ platforms. Anyone on an active pause gets no nudges.
 
 ## What is deliberately not decided here
 
-Where this actually runs in production (see "Statelessness and deployment"
-above), and which email provider sends verification and reset mail.
+An AI vendor for the coach features (the owner deferred it), and the larger
+server the API will eventually move to.

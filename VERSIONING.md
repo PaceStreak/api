@@ -6,7 +6,7 @@ deliberately rather than guess.
 
 ## The strategy: URI path versioning
 
-Every route is mounted under `/v1/...`. `CLAUDE.md` and `README.md` already
+Every route is mounted under `/v1/...`. `AGENTS.md` and `README.md` already
 settled this before any code existed ("prefix routes with `/v1/`"); this
 document is about what happens *after* that prefix is in place.
 

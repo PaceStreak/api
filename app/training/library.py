@@ -981,6 +981,30 @@ EXERCISES: tuple[Exercise, ...] = (
     ),
 )
 
+
+def _from_catalog() -> tuple[Exercise, ...]:
+    from app.training.catalog import ROWS
+
+    return tuple(
+        Exercise(
+            id=row[0],
+            name=row[1],
+            pattern=row[2],
+            equipment=row[3],
+            primary=tuple(row[4].split()),
+            secondary=tuple(row[5].split()),
+            load_type=row[6],
+            rest_sec=row[7],
+            unilateral=row[8],
+            cue=row[9],
+            aliases=tuple(a.strip() for a in row[10].split(",") if a.strip()),
+        )
+        for row in ROWS
+    )
+
+
+EXERCISES = EXERCISES + _from_catalog()
+
 EXERCISE_BY_ID = {e.id: e for e in EXERCISES}
 CUSTOM_PREFIX = "custom-"
 
@@ -1112,6 +1136,230 @@ TEMPLATES: tuple[dict, ...] = (
         ],
     },
 )
+
+# The wider set behind the built-in plans (plan_templates.py). Shapes follow
+# well-documented beginner and intermediate programmes - linear 5x5,
+# power/hypertrophy upper-lower, dumbbell-only, kettlebell and calisthenics
+# progressions - described generically, never by a trademarked name.
+MORE_TEMPLATES: tuple[dict, ...] = (
+    {
+        "id": "tpl-5x5-a",
+        "name": "Five by five A",
+        "discipline": "strength",
+        "summary": "Squat, bench, row: five sets of five. Add 2.5 kg when all 25 reps go.",
+        "items": [
+            _item("back-squat", 5, 5, 5, 180),
+            _item("bench-press", 5, 5, 5, 180),
+            _item("barbell-row", 5, 5, 5, 150),
+        ],
+    },
+    {
+        "id": "tpl-5x5-b",
+        "name": "Five by five B",
+        "discipline": "strength",
+        "summary": "Squat, overhead press, one heavy set of deadlifts.",
+        "items": [
+            _item("back-squat", 5, 5, 5, 180),
+            _item("overhead-press", 5, 5, 5, 180),
+            _item("deadlift", 1, 5, 5, 180),
+        ],
+    },
+    {
+        "id": "tpl-upper-power",
+        "name": "Upper power",
+        "discipline": "strength",
+        "summary": "Heavy presses and rows, low reps, long rests.",
+        "items": [
+            _item("bench-press", 4, 3, 5, 180),
+            _item("pendlay-row", 4, 3, 5, 180),
+            _item("overhead-press", 3, 5, 8),
+            _item("pull-up", 3, 5, 8),
+            _item("ez-bar-curl", 2, 6, 10),
+            _item("skull-crusher", 2, 6, 10),
+        ],
+    },
+    {
+        "id": "tpl-lower-power",
+        "name": "Lower power",
+        "discipline": "strength",
+        "summary": "Heavy squat and deadlift, then hamstrings and calves.",
+        "items": [
+            _item("back-squat", 4, 3, 5, 180),
+            _item("deadlift", 3, 3, 5, 180),
+            _item("leg-press", 3, 8, 12),
+            _item("lying-leg-curl", 3, 6, 10),
+            _item("standing-calf-raise", 4, 6, 10),
+        ],
+    },
+    {
+        "id": "tpl-upper-hypertrophy",
+        "name": "Upper volume",
+        "discipline": "strength",
+        "summary": "Moderate weights, 8-15 reps, every angle of chest and back.",
+        "items": [
+            _item("incline-dumbbell-press", 4, 8, 12),
+            _item("chest-supported-dumbbell-row", 4, 8, 12),
+            _item("cable-fly", 3, 12, 15),
+            _item("wide-grip-pulldown", 3, 10, 12),
+            _item("lateral-raise", 3, 12, 20),
+            _item("incline-curl", 3, 10, 15),
+            _item("rope-pushdown", 3, 10, 15),
+        ],
+    },
+    {
+        "id": "tpl-lower-hypertrophy",
+        "name": "Lower volume",
+        "discipline": "strength",
+        "summary": "Front squat, hinge, single-leg work and isolation.",
+        "items": [
+            _item("front-squat", 3, 8, 10),
+            _item("romanian-deadlift", 3, 8, 12),
+            _item("bulgarian-split-squat", 3, 10, 12),
+            _item("leg-extension", 3, 12, 15),
+            _item("seated-leg-curl", 3, 12, 15),
+            _item("seated-calf-raise", 4, 12, 20),
+        ],
+    },
+    {
+        "id": "tpl-dumbbell-a",
+        "name": "Dumbbells only A",
+        "discipline": "strength",
+        "summary": "A pair of dumbbells and a bench: squat, press, row.",
+        "items": [
+            _item("goblet-squat", 3, 8, 15),
+            _item("dumbbell-bench-press", 3, 8, 12),
+            _item("dumbbell-row", 3, 8, 12),
+            _item("dumbbell-rdl", 3, 8, 12),
+            _item("lateral-raise", 2, 12, 20),
+            _item("dead-bug", 2, 8, 12),
+        ],
+    },
+    {
+        "id": "tpl-dumbbell-b",
+        "name": "Dumbbells only B",
+        "discipline": "strength",
+        "summary": "Lunge, overhead press, pullover, arms.",
+        "items": [
+            _item("reverse-lunge", 3, 8, 12),
+            _item("dumbbell-shoulder-press", 3, 8, 12),
+            _item("chest-supported-dumbbell-row", 3, 10, 12),
+            _item("dumbbell-hip-thrust", 3, 10, 15),
+            _item("dumbbell-pullover", 2, 10, 15),
+            _item("hammer-curl", 2, 10, 15),
+            _item("dumbbell-overhead-extension", 2, 10, 15),
+        ],
+    },
+    {
+        "id": "tpl-kettlebell",
+        "name": "Kettlebell basics",
+        "discipline": "strength",
+        "summary": "One or two bells: swing, squat, press, row, get-up.",
+        "items": [
+            _item("kettlebell-swing", 5, 10, 15, 60),
+            _item("kettlebell-goblet-squat", 3, 8, 12),
+            _item("kettlebell-press", 3, 5, 8),
+            _item("kettlebell-row", 3, 8, 12),
+            _item("turkish-get-up", 2, 1, 3),
+            _item("suitcase-carry", 2, 30, 45),
+        ],
+    },
+    {
+        "id": "tpl-calisthenics-a",
+        "name": "Bodyweight strength A",
+        "discipline": "strength",
+        "summary": "A bar and the floor. Pull, push, squat, hold.",
+        "items": [
+            _item("pull-up", 4, 3, 8, 150),
+            _item("dip", 3, 5, 12),
+            _item("pistol-squat", 3, 3, 8),
+            _item("pike-push-up", 3, 5, 10),
+            _item("hollow-hold", 3, 20, 40),
+        ],
+    },
+    {
+        "id": "tpl-calisthenics-b",
+        "name": "Bodyweight strength B",
+        "discipline": "strength",
+        "summary": "Rows, push-up variations, single-leg hinge, core.",
+        "items": [
+            _item("inverted-row", 4, 6, 12),
+            _item("archer-push-up", 3, 4, 8),
+            _item("nordic-curl", 3, 3, 6),
+            _item("cossack-squat", 3, 6, 10),
+            _item("hanging-leg-raise", 3, 6, 12),
+            _item("l-sit", 3, 10, 20),
+        ],
+    },
+    {
+        "id": "tpl-glutes",
+        "name": "Glutes and hamstrings",
+        "discipline": "strength",
+        "summary": "Thrust, hinge, split squat, abduction.",
+        "items": [
+            _item("hip-thrust", 4, 6, 10, 120),
+            _item("romanian-deadlift", 3, 8, 12),
+            _item("bulgarian-split-squat", 3, 8, 12),
+            _item("cable-kickback", 3, 12, 15),
+            _item("hip-abduction", 3, 15, 20),
+            _item("back-extension", 2, 12, 15),
+        ],
+    },
+    {
+        "id": "tpl-core",
+        "name": "Core",
+        "discipline": "strength",
+        "summary": "Anti-extension, anti-rotation, flexion, carries. Fifteen minutes.",
+        "items": [
+            _item("dead-bug", 3, 8, 12),
+            _item("pallof-press", 3, 10, 12),
+            _item("hanging-knee-raise", 3, 8, 15),
+            _item("side-plank", 2, 20, 45),
+            _item("suitcase-carry", 2, 30, 45),
+        ],
+    },
+    {
+        "id": "tpl-conditioning",
+        "name": "Conditioning circuit",
+        "discipline": "hiit",
+        "summary": "Work hard, rest, repeat. Scale anything; stop if it hurts.",
+        "items": [
+            _item("kettlebell-swing", 4, 15, 20, 45),
+            _item("burpee", 4, 8, 12, 45),
+            _item("box-jump", 4, 5, 8, 45),
+            _item("rowing-machine-sprint", 4, 20, 30, 60),
+            _item("mountain-climber", 4, 20, 30, 45),
+        ],
+    },
+    {
+        "id": "tpl-arms-shoulders",
+        "name": "Arms and shoulders",
+        "discipline": "strength",
+        "summary": "Pairs of biceps and triceps work, then delts.",
+        "items": [
+            _item("close-grip-bench-press", 3, 6, 10),
+            _item("ez-bar-curl", 3, 8, 12),
+            _item("rope-pushdown", 3, 10, 15),
+            _item("bayesian-curl", 3, 10, 15),
+            _item("cable-lateral-raise", 3, 12, 20),
+            _item("rear-delt-machine-fly", 3, 12, 20),
+        ],
+    },
+    {
+        "id": "tpl-machines",
+        "name": "Machine circuit",
+        "discipline": "strength",
+        "summary": "For a first month in a gym: every machine guides the movement.",
+        "items": [
+            _item("leg-press", 2, 10, 15),
+            _item("machine-chest-press", 2, 10, 15),
+            _item("machine-pulldown", 2, 10, 15),
+            _item("seated-leg-curl", 2, 10, 15),
+            _item("machine-shoulder-press", 2, 10, 15),
+            _item("machine-row", 2, 10, 15),
+        ],
+    },
+)
+TEMPLATES = TEMPLATES + MORE_TEMPLATES
 TEMPLATE_BY_ID = {t["id"]: t for t in TEMPLATES}
 
 

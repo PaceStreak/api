@@ -7,6 +7,13 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- The exercise library grows from 84 to 283: every common squat, hinge, lunge,
+  press, row, pulldown, raise, curl, extension, core, carry and conditioning
+  variation, each with muscles, a cue and search aliases.
+- 16 more starter routines (24) and 18 more built-in plans (22): five by five,
+  push/pull/legs, upper/lower, dumbbells, kettlebell, bodyweight, glutes,
+  lift-and-run, conditioning, core, cycling, swimming, rowing, mobility,
+  walking, first month in the gym, and coming back from a break.
 - Six cable exercises for the three common grips: V-handle, neutral-grip
   and wide neutral-grip, each as a pulldown and a seated row (84 in all).
 - Far more handles are reserved: about 280 words plus pattern rules, so

@@ -7,6 +7,8 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `terms_version` is `2026-10-02`, so every account accepts the revised terms
+  and privacy policy once.
 - `AGENTS.md` with this repository's commands and rules for coding agents; the
   README and architecture notes now describe the live deployment, not a plan.
 - Account recovery with a 2FA code, email change, terms versions.

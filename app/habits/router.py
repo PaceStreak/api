@@ -5,7 +5,7 @@ filled in or corrected up to BACKFILL_DAYS back, because a tracker that can't
 fix yesterday's missed tick is the most common complaint about these apps.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -16,6 +16,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
     status,
@@ -30,13 +31,17 @@ from app.common.limits import enforce
 from app.common.time import local_today, utcnow
 from app.database import get_db
 from app.game.service import recompute, weeks_payload
+from app.habits.actions import verify as verify_action
 from app.habits.catalog import TEMPLATE_BY_ID, catalog_payload
+from app.habits.engine import is_done
 from app.habits.importer import MAX_BYTES, HabitImportError, parse
 from app.habits.models import HABIT_CATEGORIES, Habit, HabitLog
 from app.habits.service import habit_summary, habit_views
 from app.profile.service import get_profile
+from app.ratelimit import limiter
 from app.training.models import StreakPause
 from app.training.pauses import Span, paused_days
+from app.trash.service import put_in_trash
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
@@ -393,15 +398,21 @@ async def unarchive_habit(
     return await _one(db, user, habit)
 
 
-@router.delete("/{habit_id}", status_code=204)
+@router.delete("/{habit_id}")
 async def delete_habit(
     habit_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
+    """To the trash, with its whole history, for 30 days."""
     habit = await _own(db, user, habit_id)
+    logs = (await db.execute(select(HabitLog).where(HabitLog.habit_id == habit.id))).scalars().all()
+    trash = await put_in_trash(
+        db, user.id, "habit", habit.id, f"{habit.emoji} {habit.name}", habit, {"habit_logs": logs}
+    )
     await db.delete(habit)
     await db.flush()
     await recompute(db, user.id, notify=False)
     await db.commit()
+    return {"trash_id": str(trash.id)}
 
 
 async def _day(db: AsyncSession, user: User, habit: Habit, day: date) -> HabitLog | None:
@@ -483,3 +494,129 @@ async def add_to_day(
     await recompute(db, user.id, notify=True)
     await db.commit()
     return await _one(db, user, habit)
+
+
+class BulkDay(BaseModel):
+    date: date
+    amount: float = Field(ge=0, le=100_000)
+
+
+class BulkIn(BaseModel):
+    days: list[BulkDay] = Field(min_length=1, max_length=BACKFILL_DAYS + 1)
+
+
+@router.put("/{habit_id}/days")
+async def set_days(
+    habit_id: UUID,
+    body: BulkIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fill in several days at once - "I did it all of last week" - with one
+    streak recompute. Each day is absolute, like the single-day PUT, so a
+    retry is harmless. Zero clears a day but keeps its note."""
+    habit = await _own(db, user, habit_id)
+    _, today, _ = await _context(db, user)
+    seen: set[date] = set()
+    for d in body.days:
+        if d.date in seen:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{d.date} appears twice")
+        seen.add(d.date)
+        _check_day(d.date, today)
+    existing = {
+        log.day: log
+        for log in (
+            await db.execute(
+                select(HabitLog).where(HabitLog.habit_id == habit.id, HabitLog.day.in_(seen))
+            )
+        ).scalars()
+    }
+    for d in body.days:
+        row = existing.get(d.date)
+        if d.amount <= 0:
+            if row is not None and not row.note:
+                await db.delete(row)
+            elif row is not None:
+                row.amount = 0
+            continue
+        if row is None:
+            db.add(HabitLog(habit_id=habit.id, user_id=user.id, day=d.date, amount=d.amount))
+        else:
+            row.amount = d.amount
+        habit.started_on = min(habit.started_on, d.date)
+    await db.flush()
+    await recompute(db, user.id, notify=True)
+    await db.commit()
+    return await _one(db, user, habit)
+
+
+class SnoozeIn(BaseModel):
+    minutes: int = Field(ge=15, le=240)
+
+
+async def _snooze(habit: Habit, minutes: int) -> datetime:
+    habit.snoozed_until = utcnow() + timedelta(minutes=minutes)
+    return habit.snoozed_until
+
+
+@router.post("/{habit_id}/snooze")
+async def snooze(
+    habit_id: UUID,
+    body: SnoozeIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remind again in a while, if it still isn't done then."""
+    habit = await _own(db, user, habit_id)
+    until = await _snooze(habit, body.minutes)
+    await db.commit()
+    return {"snoozed_until": until.isoformat()}
+
+
+@router.delete("/{habit_id}/snooze", status_code=204)
+async def unsnooze(
+    habit_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    habit = await _own(db, user, habit_id)
+    habit.snoozed_until = None
+    await db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/{habit_id}/action")
+@limiter.limit("30/minute")
+async def notification_action(
+    request: Request,
+    habit_id: UUID,
+    a: str,
+    u: UUID,
+    d: date,
+    e: int,
+    s: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """A reminder's "Done" or "Snooze" button, pressed in the notification
+    itself. No session: the signed link (app/habits/actions.py) is the
+    authorisation, and it covers only this habit, this action and this day."""
+    if not verify_action(u, habit_id, a, d.isoformat(), e, s):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This link has expired")
+    habit = await db.get(Habit, habit_id)
+    if habit is None or habit.user_id != u or habit.archived_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    if a == "snooze":
+        until = await _snooze(habit, 60)
+        await db.commit()
+        return {"snoozed_until": until.isoformat()}
+    row = (
+        await db.execute(select(HabitLog).where(HabitLog.habit_id == habit.id, HabitLog.day == d))
+    ).scalar_one_or_none()
+    goal = 1.0 if habit.kind == "check" else float(habit.daily_goal or 1)
+    if row is None:
+        db.add(HabitLog(habit_id=habit.id, user_id=u, day=d, amount=goal))
+    elif not is_done(habit.kind, row.amount, habit.daily_goal):
+        row.amount = goal
+    habit.snoozed_until = None
+    await db.flush()
+    await recompute(db, u, notify=True)
+    await db.commit()
+    return {"done": True}

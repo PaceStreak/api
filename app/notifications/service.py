@@ -39,9 +39,11 @@ CATEGORIES: dict[str, dict] = {
     "social": {"label": "Follows, kudos and comments", "push": True, "email": False},
     "groups": {"label": "Groups and challenges", "push": True, "email": False},
     # Opt-in on every channel: a monthly nudge to download a copy of your own
-    # data. It carries a link into the app, never the data or a download
-    # token, so nothing sensitive ever sits in an inbox.
-    "backup": {"label": "Monthly backup reminder", "push": False, "email": False},
+    # data, with a link into the app. The data itself is attached only with
+    # the separate backup_attachment opt-in (NotificationPreference), which
+    # the app asks someone to confirm with a plain warning; never a download
+    # token, so a forwarded email can't fetch anything later.
+    "backup": {"label": "Monthly backup", "push": False, "email": False},
     # Security notices always email and cannot be turned off - they are how
     # someone learns their account was touched by somebody else.
     "security": {"label": "Security", "push": True, "email": True, "locked": True},
@@ -240,6 +242,9 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
                 "url": note.url or "/",
                 "tag": note.kind,
                 "id": str(note.id),
+                # Notification buttons, each with a signed URL the service
+                # worker POSTs to (habit reminders' Done and Snooze).
+                "actions": (note.data or {}).get("actions", [])[:2],
             }
         )
         for sub in subs:
@@ -272,7 +277,20 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
             headers = (
                 list_headers(note.user_id, note.category) if note.category != "security" else None
             )
-            await send_email(user.email, note.title, _email_body(note), headers)
+            attachments = None
+            body = _email_body(note)
+            if (note.data or {}).get("export_attachment"):
+                from app.account.backup import export_attachment
+
+                attached = await export_attachment(db, note.user_id)
+                if attached:
+                    attachments = [attached]
+                    body = (
+                        "Your PaceStreak data for this month is attached as a zip: everything "
+                        "you've logged, in the same format as the export in the app. Keep it "
+                        "somewhere safe. It holds your habits, body, food and journal.\n\n" + body
+                    )
+            await send_email(user.email, note.title, body, headers, attachments=attachments)
 
 
 def _email_body(note: Notification) -> str:

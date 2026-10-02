@@ -46,7 +46,7 @@ def test_meals_round_trip_with_totals_and_target(client):
     assert client.get("/v1/nutrition/recent", headers=h).json()[0]["name"] in {"Oats", "Banana"}
 
     # Deleting the saved food keeps the logged numbers.
-    assert client.delete(f"/v1/nutrition/foods/{oats['id']}", headers=h).status_code == 204
+    assert client.delete(f"/v1/nutrition/foods/{oats['id']}", headers=h).json()["trash_id"]
     assert client.get(f"/v1/nutrition/days/{day}", headers=h).json()["totals"]["kcal"] == 405
 
     exported = client.get("/v1/me/export?format=json", headers=h).json()

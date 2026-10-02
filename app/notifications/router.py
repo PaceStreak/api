@@ -96,12 +96,15 @@ async def mark_read(
 async def get_preferences(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    prefs = (
+    row = (
         await db.execute(
-            select(NotificationPreference.channels).where(NotificationPreference.user_id == user.id)
+            select(NotificationPreference).where(NotificationPreference.user_id == user.id)
         )
     ).scalar_one_or_none()
+    prefs = row.channels if row else None
     return {
+        "habit_summary_hour": row.habit_summary_hour if row else None,
+        "backup_attachment": bool(row and row.backup_attachment),
         "categories": [
             {
                 "id": key,
@@ -116,25 +119,50 @@ async def get_preferences(
 
 
 class PreferencesIn(BaseModel):
-    channels: dict[str, dict[str, bool]]
+    """Either half may be sent alone; what's left out is kept."""
+
+    channels: dict[str, dict[str, bool]] | None = None
+    # One evening summary of open habits at this hour, instead of a reminder
+    # per habit. Null turns it off.
+    habit_summary_hour: int | None = Field(default=None, ge=0, le=23)
+    # Attach the export to the monthly backup email. The app shows what that
+    # puts in an inbox and asks for confirmation before sending True.
+    backup_attachment: bool | None = None
 
 
 @router.put("/preferences")
 async def put_preferences(
     body: PreferencesIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    clean = {
-        cat: {k: bool(v) for k, v in chans.items() if k in ("push", "email")}
-        for cat, chans in body.channels.items()
-        if cat in CATEGORIES and not CATEGORIES[cat].get("locked")
-    }
-    await db.execute(
-        insert(NotificationPreference)
-        .values(user_id=user.id, channels=clean)
-        .on_conflict_do_update(
-            index_elements=[NotificationPreference.user_id], set_={"channels": clean}
+    updates: dict = {}
+    if body.channels is not None:
+        # Merged into what's stored, per category and channel, so a client
+        # changing one switch can never reset the others to their defaults.
+        current = (
+            await db.execute(
+                select(NotificationPreference.channels).where(
+                    NotificationPreference.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none() or {}
+        merged = {cat: dict(chans) for cat, chans in current.items()}
+        for cat, chans in body.channels.items():
+            if cat not in CATEGORIES or CATEGORIES[cat].get("locked"):
+                continue
+            merged.setdefault(cat, {}).update(
+                {k: bool(v) for k, v in chans.items() if k in ("push", "email")}
+            )
+        updates["channels"] = merged
+    if "habit_summary_hour" in body.model_fields_set:
+        updates["habit_summary_hour"] = body.habit_summary_hour
+    if body.backup_attachment is not None:
+        updates["backup_attachment"] = body.backup_attachment
+    if updates:
+        await db.execute(
+            insert(NotificationPreference)
+            .values(user_id=user.id, **({"channels": {}} | updates))
+            .on_conflict_do_update(index_elements=[NotificationPreference.user_id], set_=updates)
         )
-    )
     await db.commit()
     return await get_preferences(user, db)
 

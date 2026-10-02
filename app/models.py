@@ -16,3 +16,4 @@ import app.ops.models  # noqa: F401
 import app.profile.models  # noqa: F401
 import app.social.models  # noqa: F401
 import app.training.models  # noqa: F401
+import app.trash.models  # noqa: F401

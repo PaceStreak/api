@@ -5,9 +5,9 @@ from collections import defaultdict
 from dataclasses import asdict
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -20,6 +20,7 @@ from app.insights.models import JournalDay
 from app.nutrition.models import MealEntry
 from app.profile.service import get_profile
 from app.training.models import BodyMetric, Readiness, Workout
+from app.trash.service import put_in_trash
 
 router = APIRouter(tags=["insights"])
 
@@ -88,13 +89,22 @@ async def put_journal(
     return _journal_out(row)
 
 
-@router.delete("/journal/{day}", status_code=204)
+@router.delete("/journal/{day}")
 async def delete_journal(
     day: date, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    await db.execute(delete(JournalDay).where(JournalDay.user_id == user.id, JournalDay.day == day))
+    """Idempotent; the app queues it offline."""
+    row = (
+        await db.execute(
+            select(JournalDay).where(JournalDay.user_id == user.id, JournalDay.day == day)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return {"trash_id": None}
+    trash = await put_in_trash(db, user.id, "journal", row.id, f"Journal, {day.isoformat()}", row)
+    await db.delete(row)
     await db.commit()
-    return Response(status_code=204)
+    return {"trash_id": str(trash.id)}
 
 
 async def build_series(db: AsyncSession, user_id, today: date) -> dict[str, dict[date, float]]:

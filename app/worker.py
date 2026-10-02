@@ -36,6 +36,7 @@ from app.game.models import UserStats
 from app.game.recap import build_recap, digest_lines
 from app.game.service import recompute, snapshot
 from app.groups.router import resolve_finished
+from app.habits.actions import action_url
 from app.habits.engine import is_done
 from app.habits.models import Habit, HabitLog
 from app.notifications.models import Notification, NotificationPreference
@@ -46,6 +47,7 @@ from app.ops.service import sweep as sweep_ops
 from app.profile.models import Profile
 from app.training.models import BodyPhoto, StreakPause
 from app.training.pauses import Span
+from app.trash.models import TrashItem
 
 logger = logging.getLogger("app.worker")
 settings = get_settings()
@@ -308,7 +310,11 @@ async def monthly_backup() -> list[UUID]:
     async with AsyncSessionLocal() as db:
         rows = (
             await db.execute(
-                select(Profile, NotificationPreference.channels)
+                select(
+                    Profile,
+                    NotificationPreference.channels,
+                    NotificationPreference.backup_attachment,
+                )
                 .join(User, User.id == Profile.user_id)
                 .join(NotificationPreference, NotificationPreference.user_id == Profile.user_id)
                 .where(
@@ -320,7 +326,7 @@ async def monthly_backup() -> list[UUID]:
                 .limit(5000)
             )
         ).all()
-    for profile, prefs in rows:
+    for profile, prefs, attach in rows:
         wanted = channels_for(prefs, "backup")
         if not (wanted["email"] or wanted["push"]):
             continue
@@ -334,9 +340,14 @@ async def monthly_backup() -> list[UUID]:
                 kind="monthly_backup",
                 category="backup",
                 title="Your monthly PaceStreak backup",
-                body="A new month. Download a copy of everything you've logged - "
-                "one tap, and it's yours to keep.",
+                body=(
+                    "A new month, and a copy of everything you've logged."
+                    if attach and wanted["email"]
+                    else "A new month. Download a copy of everything you've logged - "
+                    "one tap, and it's yours to keep."
+                ),
                 url="/settings/data?backup=1",
+                data={"export_attachment": True} if attach and wanted["email"] else None,
                 dedupe_key=f"backup:{now:%Y-%m}",
             )
             await db.commit()
@@ -375,6 +386,7 @@ async def housekeeping() -> None:
         await db.execute(
             delete(Notification).where(Notification.created_at < utcnow() - timedelta(days=180))
         )
+        await db.execute(delete(TrashItem).where(TrashItem.purge_after < utcnow()))
         await sweep_expired_challenges(db)
         await sweep_ops(db)
         await db.commit()
@@ -387,12 +399,98 @@ async def resolve_challenges() -> list[UUID]:
     return ids
 
 
+async def _paused(db, user_id, today) -> bool:
+    pauses = (await db.execute(select(StreakPause).where(StreakPause.user_id == user_id))).scalars()
+    return any(Span(p.starts_on, p.ends_on).is_active(today) for p in pauses)
+
+
+async def _done_today(db, habit: Habit, today) -> bool:
+    logged = (
+        await db.execute(
+            select(HabitLog.amount).where(HabitLog.habit_id == habit.id, HabitLog.day == today)
+        )
+    ).scalar_one_or_none()
+    return logged is not None and is_done(habit.kind, logged, habit.daily_goal)
+
+
+async def _remind(db, habit: Habit, profile: Profile, today, dedupe_key: str) -> UUID | None:
+    goal = (
+        f" {habit.daily_goal:g} {habit.unit or ''}".rstrip()
+        if habit.kind in ("duration", "count") and habit.daily_goal
+        else ""
+    )
+    day = today.isoformat()
+    return await notify(
+        db,
+        profile.user_id,
+        kind="habit_reminder",
+        category="habits",
+        title=f"{habit.emoji} {habit.name}".strip(),
+        body=(habit.cue + ". " if habit.cue else "")
+        + (f"Today's goal:{goal}." if goal else "One tap when it's done."),
+        url=f"/habits/{habit.id}",
+        # Buttons on the push itself; signed, since the service worker that
+        # handles them has no session (app/habits/actions.py).
+        data={
+            "actions": [
+                {
+                    "action": "done",
+                    "title": "Done",
+                    "url": action_url(profile.user_id, habit.id, "done", day),
+                },
+                {
+                    "action": "snooze",
+                    "title": "In 1 hour",
+                    "url": action_url(profile.user_id, habit.id, "snooze", day),
+                },
+            ]
+        },
+        dedupe_key=dedupe_key,
+    )
+
+
 async def habit_reminders() -> list[UUID]:
     """At the hour someone chose for a habit, if it isn't done yet today. Not
     for habits being broken - "don't smoke" at 6pm is a prompt, not a help -
     and not during a pause. Quiet hours and the reminder category's settings
     apply as for every other nudge, via notify(), in its own "habits"
-    category so it can be turned off separately."""
+    category so it can be turned off separately. People who chose one evening
+    summary instead (habit_summary_hour) get that, from habit_summary()."""
+    note_ids: list[UUID] = []
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Habit, Profile)
+                .join(Profile, Profile.user_id == Habit.user_id)
+                .join(User, User.id == Habit.user_id)
+                .outerjoin(NotificationPreference, NotificationPreference.user_id == Habit.user_id)
+                .where(
+                    Habit.remind_hour.is_not(None),
+                    Habit.archived_at.is_(None),
+                    Habit.kind != "quit",
+                    Profile.onboarded_at.is_not(None),
+                    Profile.deletion_scheduled_at.is_(None),
+                    User.is_active.is_(True),
+                    NotificationPreference.habit_summary_hour.is_(None),
+                    _local_hour_is(Habit.remind_hour),
+                )
+                .limit(BATCH * 10)
+            )
+        ).all()
+        for habit, profile in rows:
+            today = local_today(profile.timezone)
+            if await _paused(db, profile.user_id, today) or await _done_today(db, habit, today):
+                continue
+            nid = await _remind(db, habit, profile, today, f"habit:{habit.id}:{today.isoformat()}")
+            if nid:
+                note_ids.append(nid)
+        await db.commit()
+    return note_ids
+
+
+async def snoozed_reminders() -> list[UUID]:
+    """A snooze that has run out: remind again if it still isn't done, then
+    clear it, so each snooze fires at most once."""
     note_ids: list[UUID] = []
     async with AsyncSessionLocal() as db:
         rows = (
@@ -401,48 +499,87 @@ async def habit_reminders() -> list[UUID]:
                 .join(Profile, Profile.user_id == Habit.user_id)
                 .join(User, User.id == Habit.user_id)
                 .where(
-                    Habit.remind_hour.is_not(None),
-                    Habit.archived_at.is_(None),
-                    Habit.kind != "quit",
-                    Profile.onboarded_at.is_not(None),
-                    Profile.deletion_scheduled_at.is_(None),
+                    Habit.snoozed_until.is_not(None),
+                    Habit.snoozed_until <= utcnow(),
                     User.is_active.is_(True),
-                    _local_hour_is(Habit.remind_hour),
+                    Profile.deletion_scheduled_at.is_(None),
                 )
                 .limit(BATCH * 10)
             )
         ).all()
         for habit, profile in rows:
+            due = habit.snoozed_until
+            habit.snoozed_until = None
             today = local_today(profile.timezone)
-            pauses = (
-                await db.execute(select(StreakPause).where(StreakPause.user_id == profile.user_id))
-            ).scalars()
-            if any(Span(p.starts_on, p.ends_on).is_active(today) for p in pauses):
+            if habit.archived_at is not None or habit.kind == "quit":
                 continue
-            logged = (
+            if await _paused(db, profile.user_id, today) or await _done_today(db, habit, today):
+                continue
+            nid = await _remind(
+                db, habit, profile, today, f"habit-snooze:{habit.id}:{due.isoformat()}"
+            )
+            if nid:
+                note_ids.append(nid)
+        await db.commit()
+    return note_ids
+
+
+async def habit_summary() -> list[UUID]:
+    """One notification at the hour someone chose, instead of one per habit:
+    how many are still open today. A count, never names - it shows on a lock
+    screen, and a habit's name is nobody else's business."""
+    note_ids: list[UUID] = []
+    async with AsyncSessionLocal() as db:
+        rows = (
+            (
                 await db.execute(
-                    select(HabitLog.amount).where(
-                        HabitLog.habit_id == habit.id, HabitLog.day == today
+                    select(Profile)
+                    .join(User, User.id == Profile.user_id)
+                    .join(NotificationPreference, NotificationPreference.user_id == Profile.user_id)
+                    .where(
+                        NotificationPreference.habit_summary_hour.is_not(None),
+                        Profile.onboarded_at.is_not(None),
+                        Profile.deletion_scheduled_at.is_(None),
+                        User.is_active.is_(True),
+                        _local_hour_is(NotificationPreference.habit_summary_hour),
+                    )
+                    .limit(BATCH * 10)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for profile in rows:
+            today = local_today(profile.timezone)
+            if await _paused(db, profile.user_id, today):
+                continue
+            habits = (
+                (
+                    await db.execute(
+                        select(Habit).where(
+                            Habit.user_id == profile.user_id,
+                            Habit.archived_at.is_(None),
+                            Habit.kind != "quit",
+                            Habit.started_on <= today,
+                        )
                     )
                 )
-            ).scalar_one_or_none()
-            if logged is not None and is_done(habit.kind, logged, habit.daily_goal):
-                continue
-            goal = (
-                f" {habit.daily_goal:g} {habit.unit or ''}".rstrip()
-                if habit.kind in ("duration", "count") and habit.daily_goal
-                else ""
+                .scalars()
+                .all()
             )
+            open_ = [h for h in habits if not await _done_today(db, h, today)]
+            if not open_:
+                continue
+            n = len(open_)
             nid = await notify(
                 db,
                 profile.user_id,
-                kind="habit_reminder",
+                kind="habit_summary",
                 category="habits",
-                title=f"{habit.emoji} {habit.name}".strip(),
-                body=(habit.cue + ". " if habit.cue else "")
-                + (f"Today's goal:{goal}." if goal else "One tap when it's done."),
-                url=f"/habits/{habit.id}",
-                dedupe_key=f"habit:{habit.id}:{today.isoformat()}",
+                title=f"{n} habit{'' if n == 1 else 's'} still open today",
+                body="A few minutes now keeps the week on track.",
+                url="/habits",
+                dedupe_key=f"habit-summary:{today.isoformat()}",
             )
             if nid:
                 note_ids.append(nid)
@@ -463,6 +600,8 @@ async def tick() -> None:
         ("stats", refresh_stale_stats),
         ("nudges", streak_nudges),
         ("habits", habit_reminders),
+        ("habit_snoozes", snoozed_reminders),
+        ("habit_summary", habit_summary),
         ("digest", weekly_digest),
         ("challenges", resolve_challenges),
         ("backup", monthly_backup),

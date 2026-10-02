@@ -87,6 +87,9 @@ class Habit(Base):
     started_on: Mapped[date] = mapped_column(Date, nullable=False)
     position: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A snoozed reminder: the worker reminds again once this passes, if the
+    # habit still isn't done, then clears it.
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class HabitLog(Base):

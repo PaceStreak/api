@@ -227,7 +227,8 @@ def test_habit_lifecycle(client):
     client.post(f"/v1/habits/{custom['id']}/archive", headers=h)
     assert [x["id"] for x in client.get("/v1/habits", headers=h).json()] == [read["id"]]
     assert len(client.get("/v1/habits?archived=true", headers=h).json()) == 2
-    assert client.delete(f"/v1/habits/{custom['id']}", headers=h).status_code == 204
+    deleted = client.delete(f"/v1/habits/{custom['id']}", headers=h)
+    assert deleted.status_code == 200 and deleted.json()["trash_id"]
 
     other = bearer(person(client, "nosyhabit@example.com", "nosyhabit"))
     assert client.get(f"/v1/habits/{read['id']}", headers=other).status_code == 404

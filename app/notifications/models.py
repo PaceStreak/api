@@ -1,7 +1,18 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,6 +54,16 @@ class NotificationPreference(Base):
     # {"streak_risk": {"push": true, "email": false}, ...}. Absent keys fall
     # back to DEFAULTS in app/notifications/service.py.
     channels: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Set: habit reminders arrive as one summary at this local hour instead
+    # of one notification per habit. Null: one per habit, at its own hour.
+    habit_summary_hour: Mapped[int | None] = mapped_column(SmallInteger)
+    # Opt-in, off by default: the monthly backup email carries the export
+    # itself (a zip) instead of only a link. That puts every habit - quit
+    # habits included - weight, food and journal into an inbox, so the app
+    # makes someone confirm exactly that before it can be switched on.
+    backup_attachment: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
 
 class PushSubscription(Base):

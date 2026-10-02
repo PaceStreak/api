@@ -22,6 +22,7 @@ from app.notifications.router import router as notifications_router
 from app.nutrition.router import router as nutrition_router
 from app.ops.router import router as ops_router
 from app.profile.router import router as profile_router
+from app.search.router import router as search_router
 from app.social.buddies import router as buddies_router
 from app.social.router import router as social_router
 from app.training.gear import router as gear_router
@@ -30,6 +31,7 @@ from app.training.personal import router as personal_router
 from app.training.photos import router as photos_router
 from app.training.plans import router as plans_router
 from app.training.router import router as training_router
+from app.trash.router import router as trash_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -54,5 +56,7 @@ router.include_router(buddies_router)
 router.include_router(groups_router)
 router.include_router(leaderboards_router)
 router.include_router(notifications_router)
+router.include_router(search_router)
+router.include_router(trash_router)
 router.include_router(admin_router)
 router.include_router(ops_router)

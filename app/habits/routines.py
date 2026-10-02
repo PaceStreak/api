@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.database import get_db
 from app.habits.models import Habit, HabitRoutine
+from app.trash.service import put_in_trash
 
 router = APIRouter(prefix="/habit-routines", tags=["habits"])
 
@@ -104,10 +105,14 @@ async def update_routine(
     return _out(routine, live)
 
 
-@router.delete("/{routine_id}", status_code=204)
+@router.delete("/{routine_id}")
 async def delete_routine(
     routine_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     routine = await _own(db, user, routine_id)
+    trash = await put_in_trash(
+        db, user.id, "habit_routine", routine.id, f"{routine.emoji} {routine.name}", routine
+    )
     await db.delete(routine)
     await db.commit()
+    return {"trash_id": str(trash.id)}

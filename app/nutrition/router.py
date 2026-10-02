@@ -6,9 +6,9 @@ from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -21,6 +21,7 @@ from app.nutrition.models import Food, MealEntry, NutritionTarget, Recipe
 from app.profile.service import get_profile
 from app.ratelimit import limiter
 from app.training.models import WeighIn, WeightGoal
+from app.trash.service import put_in_trash
 
 router = APIRouter(prefix="/nutrition", tags=["nutrition"])
 
@@ -225,15 +226,19 @@ async def put_entry(
     return _entry_out(entry)
 
 
-@router.delete("/entries/{entry_id}", status_code=204)
+@router.delete("/entries/{entry_id}")
 async def delete_entry(
     entry_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    await db.execute(
-        delete(MealEntry).where(MealEntry.id == entry_id, MealEntry.user_id == user.id)
-    )
+    """Idempotent, because the app queues it offline: deleting something
+    already gone succeeds with no trash entry."""
+    entry = await db.get(MealEntry, entry_id)
+    if entry is None or entry.user_id != user.id:
+        return {"trash_id": None}
+    trash = await put_in_trash(db, user.id, "meal", entry.id, entry.name, entry)
+    await db.delete(entry)
     await db.commit()
-    return Response(status_code=204)
+    return {"trash_id": str(trash.id)}
 
 
 @router.post("/copy", status_code=201)
@@ -354,14 +359,17 @@ async def update_food(
     return _food_out(food)
 
 
-@router.delete("/foods/{food_id}", status_code=204)
+@router.delete("/foods/{food_id}")
 async def delete_food(
     food_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    """Logged meals keep their numbers; they just stop pointing here."""
+    """Logged meals keep their numbers; they just stop pointing here (and
+    point again if the food is restored, since it keeps its id)."""
     food = await _own_food(db, user, food_id)
+    trash = await put_in_trash(db, user.id, "food", food.id, food.name, food)
     await db.delete(food)
     await db.commit()
+    return {"trash_id": str(trash.id)}
 
 
 @router.get("/barcode/{code}")
@@ -498,13 +506,15 @@ async def update_recipe(
     return _recipe_out(recipe)
 
 
-@router.delete("/recipes/{recipe_id}", status_code=204)
+@router.delete("/recipes/{recipe_id}")
 async def delete_recipe(
     recipe_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     recipe = await _own_recipe(db, user, recipe_id)
+    trash = await put_in_trash(db, user.id, "recipe", recipe.id, recipe.name, recipe)
     await db.delete(recipe)
     await db.commit()
+    return {"trash_id": str(trash.id)}
 
 
 # --- adaptive expenditure ------------------------------------------------------------

@@ -50,6 +50,7 @@ def build_message(
     body: str,
     headers: dict[str, str] | None = None,
     html: str | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ):
     """Build the message. `body` is always the plain-text part.
 
@@ -74,6 +75,9 @@ def build_message(
     message.set_content(body)
     if html is not None:
         message.add_alternative(html, subtype="html")
+    for filename, data, mime in attachments or []:
+        maintype, _, subtype = mime.partition("/")
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
     return message
 
 
@@ -116,16 +120,24 @@ async def send_email(
     body: str,
     headers: dict[str, str] | None = None,
     html: str | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> None:
     try:
         if settings.email_backend == "smtp":
-            message = build_message(to, subject, body, headers, html=html)
+            message = build_message(to, subject, body, headers, html=html, attachments=attachments)
             # smtplib is blocking; keep it off the event loop.
             await anyio.to_thread.run_sync(_send_smtp, message)
         else:
             # Console backend logs the plain-text part only - readable in a
             # terminal, and it's the same wording the HTML part carries.
-            logger.info("[email:console] to=%s subject=%s\n%s", to, subject, body)
+            names = ", ".join(f"{n} ({len(d)} bytes)" for n, d, _ in attachments or [])
+            logger.info(
+                "[email:console] to=%s subject=%s%s\n%s",
+                to,
+                subject,
+                f" attachments={names}" if names else "",
+                body,
+            )
     except Exception:
         # The address is deliberately not logged at error level with the body:
         # the body can hold a live reset link.

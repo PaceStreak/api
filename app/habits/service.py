@@ -71,6 +71,7 @@ def habit_summary(h: Habit, v: HabitView, today: date, logs: list[HabitDay] = ()
         "why": h.why,
         "total_goal": h.total_goal,
         "remind_hour": h.remind_hour,
+        "snoozed_until": h.snoozed_until.isoformat() if h.snoozed_until else None,
         "template_id": h.template_id,
         "started_on": h.started_on.isoformat(),
         "archived": h.archived_at is not None,

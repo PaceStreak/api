@@ -80,6 +80,8 @@ from app.training.schemas import (
     WorkoutOut,
     check_requirements,
 )
+from app.trash.models import TrashItem
+from app.trash.service import put_in_trash
 
 router = APIRouter(tags=["training"])
 
@@ -200,6 +202,16 @@ async def _apply_put(
         db.add(workout)
     else:
         workout.seq = sync_seq.next_value()
+        if workout.deleted_at is not None:
+            # Brought back by a newer save (the app's Undo): it is no longer
+            # in the trash.
+            await db.execute(
+                delete(TrashItem).where(
+                    TrashItem.user_id == user.id,
+                    TrashItem.kind == "workout",
+                    TrashItem.item_id == workout.id,
+                )
+            )
 
     workout.discipline = body.discipline
     workout.title = body.title
@@ -241,6 +253,11 @@ async def _apply_delete(db: AsyncSession, user: User, workout_id: UUID, at: date
         return False
     if workout.client_updated_at > at:
         return False
+    if workout.deleted_at is None:
+        # Restorable for 30 days. The row itself stays (soft delete, for
+        # sync), so the trash entry needs no snapshot.
+        label = f"{workout.title or workout.discipline.title()}, {workout.local_date.isoformat()}"
+        await put_in_trash(db, user.id, "workout", workout.id, label)
     workout.deleted_at = utcnow()
     workout.client_updated_at = at
     workout.seq = sync_seq.next_value()

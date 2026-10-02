@@ -438,7 +438,8 @@ kept for `BACKUP_KEEP_DAYS` (default 14). The newest is never pruned. Every
 backup is immediately test-restored into a throwaway database and compared
 against the live schema revision; a backup that has never been restored is not
 trusted. In production, Neon and Upstash provide managed point-in-time
-recovery; a scheduled dump copied off-provider is still to be set up. For production, prefix both with
+recovery (Neon's is a 6-hour restore history); off-provider dumps were
+considered and declined by the owner, and `/privacy` says so. For production, prefix both with
 `COMPOSE="docker compose -f compose.yaml -f compose.prod.yaml"`.
 
 ## Local development

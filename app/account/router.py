@@ -584,11 +584,10 @@ async def build_export(db: AsyncSession, user: User) -> dict:
     }
 
 
-
 def _date_or_none(value) -> date | None:
     try:
         return date.fromisoformat(value) if value else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

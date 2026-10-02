@@ -146,6 +146,47 @@ def test_monthly_backup_reminder_is_opt_in_and_monthly(client, monkeypatch):
     assert run(worker.monthly_backup) == []
 
 
+def test_weekly_backup_arrives_on_the_first_day_of_the_week(client, monkeypatch):
+    from sqlalchemy import true
+
+    import app.worker as worker
+
+    token = person(client, "weekly@example.com", "weeklybacker")
+    prefs = client.put(
+        "/v1/notifications/preferences",
+        json={"channels": {"backup": {"email": True}}, "backup_frequency": "weekly"},
+        headers=bearer(token),
+    )
+    assert prefs.status_code == 200, prefs.text
+    assert prefs.json()["backup_frequency"] == "weekly"
+    monkeypatch.setattr(worker, "_local_hour_is", lambda _column: true())
+    # 2026-10-05 is a Monday, the default first day of the week.
+    monkeypatch.setattr(worker, "local_now", lambda _tz: datetime(2026, 10, 5, 9, 5, tzinfo=UTC))
+    assert len(run(worker.monthly_backup)) == 1
+    assert run(worker.monthly_backup) == []  # once per week
+    # Thursday the 1st: a weekly person gets nothing on the 1st.
+    monkeypatch.setattr(worker, "local_now", lambda _tz: datetime(2026, 10, 1, 9, 5, tzinfo=UTC))
+    assert run(worker.monthly_backup) == []
+    # The next Monday is a new week.
+    monkeypatch.setattr(worker, "local_now", lambda _tz: datetime(2026, 10, 12, 9, 5, tzinfo=UTC))
+    assert len(run(worker.monthly_backup)) == 1
+
+
+def test_quiet_days_hold_nudges_back_from_push_and_email():
+    from types import SimpleNamespace
+
+    import app.notifications.service as service
+
+    every_day = SimpleNamespace(quiet_days=0b1111111, timezone="UTC")
+    assert service._quiet_day(every_day, "habits")
+    assert service._quiet_day(every_day, "streak_risk")
+    # Not a nudge: security, social and backups are never held.
+    assert not service._quiet_day(every_day, "security")
+    assert not service._quiet_day(every_day, "social")
+    assert not service._quiet_day(SimpleNamespace(quiet_days=None, timezone="UTC"), "habits")
+    assert not service._quiet_day(SimpleNamespace(quiet_days=0, timezone="UTC"), "habits")
+
+
 def test_smart_reminders_nudge_at_the_learned_hour(client):
     token = person(client, "smartnudge@example.com", "smartnudge", weekly_target=7)
     now = datetime.now(UTC)

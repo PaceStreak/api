@@ -127,6 +127,9 @@ class Profile(Base):
     learned_reminder_hour: Mapped[int | None] = mapped_column(SmallInteger)
     quiet_start: Mapped[int] = mapped_column(SmallInteger, default=22, nullable=False)
     quiet_end: Mapped[int] = mapped_column(SmallInteger, default=7, nullable=False)
+    # Whole days without nudges (Monday = bit 0), e.g. weekends off. Reminders
+    # still land in the inbox; they just don't push or email.
+    quiet_days: Mapped[int | None] = mapped_column(SmallInteger)
 
     def age_in(self, year: int) -> int | None:
         return None if self.birth_year is None else year - self.birth_year

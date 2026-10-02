@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -105,6 +106,7 @@ async def get_preferences(
     return {
         "habit_summary_hour": row.habit_summary_hour if row else None,
         "backup_attachment": bool(row and row.backup_attachment),
+        "backup_frequency": row.backup_frequency if row else "monthly",
         "categories": [
             {
                 "id": key,
@@ -128,6 +130,7 @@ class PreferencesIn(BaseModel):
     # Attach the export to the monthly backup email. The app shows what that
     # puts in an inbox and asks for confirmation before sending True.
     backup_attachment: bool | None = None
+    backup_frequency: Literal["monthly", "weekly"] | None = None
 
 
 @router.put("/preferences")
@@ -157,6 +160,8 @@ async def put_preferences(
         updates["habit_summary_hour"] = body.habit_summary_hour
     if body.backup_attachment is not None:
         updates["backup_attachment"] = body.backup_attachment
+    if body.backup_frequency is not None:
+        updates["backup_frequency"] = body.backup_frequency
     if updates:
         await db.execute(
             insert(NotificationPreference)

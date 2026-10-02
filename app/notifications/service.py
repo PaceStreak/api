@@ -146,6 +146,16 @@ def _in_quiet_hours(profile: Profile | None) -> bool:
     return start <= hour < end
 
 
+# Nudges, which quiet days hold back from push and email.
+NUDGE_CATEGORIES = frozenset({"streak_risk", "reminder", "habits"})
+
+
+def _quiet_day(profile: Profile | None, category: str) -> bool:
+    if profile is None or not profile.quiet_days or category not in NUDGE_CATEGORIES:
+        return False
+    return bool(profile.quiet_days >> local_now(profile.timezone).weekday() & 1)
+
+
 @dataclass
 class _Push:
     subscription_id: UUID
@@ -225,6 +235,7 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
         channels["push"]
         and vapid_key()
         and (note.category == "security" or not _in_quiet_hours(profile))
+        and not _quiet_day(profile, note.category)
     ):
         subs = (
             (
@@ -265,7 +276,7 @@ async def _deliver_one(db: AsyncSession, note: Notification) -> None:
                 if sub.failures >= 10:
                     await db.delete(sub)
 
-    if channels["email"]:
+    if channels["email"] and not _quiet_day(profile, note.category):
         user = await db.get(User, note.user_id)
         if (
             user is not None

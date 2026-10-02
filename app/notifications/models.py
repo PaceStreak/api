@@ -64,6 +64,11 @@ class NotificationPreference(Base):
     backup_attachment: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )
+    # How often the backup arrives: "monthly" (the 1st) or "weekly" (the
+    # first day of the person's week). Both at 09:00 local.
+    backup_frequency: Mapped[str] = mapped_column(
+        String(8), default="monthly", server_default="monthly", nullable=False
+    )
 
 
 class PushSubscription(Base):

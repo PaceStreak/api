@@ -303,8 +303,9 @@ async def buddy_nudges() -> list[UUID]:
 
 
 async def monthly_backup() -> list[UUID]:
-    """09:00 local on the 1st: remind the people who opted in to download a
-    copy of their data. Nothing is created for anyone who has not opted in,
+    """09:00 local on the 1st (or, for people who chose weekly, on the first
+    day of their week): remind the people who opted in to download a copy of
+    their data. Nothing is created for anyone who has not opted in,
     so the inbox never fills with a reminder nobody asked for."""
     note_ids: list[UUID] = []
     async with AsyncSessionLocal() as db:
@@ -314,6 +315,7 @@ async def monthly_backup() -> list[UUID]:
                     Profile,
                     NotificationPreference.channels,
                     NotificationPreference.backup_attachment,
+                    NotificationPreference.backup_frequency,
                 )
                 .join(User, User.id == Profile.user_id)
                 .join(NotificationPreference, NotificationPreference.user_id == Profile.user_id)
@@ -326,29 +328,36 @@ async def monthly_backup() -> list[UUID]:
                 .limit(5000)
             )
         ).all()
-    for profile, prefs, attach in rows:
+    for profile, prefs, attach, frequency in rows:
         wanted = channels_for(prefs, "backup")
         if not (wanted["email"] or wanted["push"]):
             continue
         now = local_now(profile.timezone)
-        if now.day != 1:
+        weekly = frequency == "weekly"
+        # week_starts_on uses date.weekday()'s numbering (Monday = 0).
+        if weekly and now.weekday() != profile.week_starts_on:
             continue
+        if not weekly and now.day != 1:
+            continue
+        period = f"{now:%G-W%V}" if weekly else f"{now:%Y-%m}"
+        word = "weekly" if weekly else "monthly"
         async with AsyncSessionLocal() as db:
             nid = await notify(
                 db,
                 profile.user_id,
                 kind="monthly_backup",
                 category="backup",
-                title="Your monthly PaceStreak backup",
+                title=f"Your {word} PaceStreak backup",
                 body=(
-                    "A new month, and a copy of everything you've logged."
+                    f"A new {'week' if weekly else 'month'}, "
+                    "and a copy of everything you've logged."
                     if attach and wanted["email"]
-                    else "A new month. Download a copy of everything you've logged - "
-                    "one tap, and it's yours to keep."
+                    else f"A new {'week' if weekly else 'month'}. Download a copy of everything "
+                    "you've logged - one tap, and it's yours to keep."
                 ),
                 url="/settings/data?backup=1",
                 data={"export_attachment": True} if attach and wanted["email"] else None,
-                dedupe_key=f"backup:{now:%Y-%m}",
+                dedupe_key=f"backup:{period}",
             )
             await db.commit()
             note_ids += [nid] if nid else []

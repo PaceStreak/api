@@ -64,6 +64,7 @@ def profile_out(p: Profile) -> dict:
         "learned_reminder_hour": p.learned_reminder_hour,
         "quiet_start": p.quiet_start,
         "quiet_end": p.quiet_end,
+        "quiet_days": p.quiet_days,
     }
 
 
@@ -230,6 +231,7 @@ class ProfilePatch(BaseModel):
     reminder_mode: str | None = Field(default=None, pattern="^(fixed|smart)$")
     quiet_start: int | None = Field(default=None, ge=0, le=23)
     quiet_end: int | None = Field(default=None, ge=0, le=23)
+    quiet_days: int | None = Field(default=None, ge=0, le=127)
     weekly_target: int | None = Field(default=None, ge=1, le=7)
 
     @field_validator("display_name", "bio")

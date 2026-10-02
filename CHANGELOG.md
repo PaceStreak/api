@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `backup_frequency` (monthly or weekly) for the backup email, and
+  `quiet_days` on the profile: nudges stay in the inbox but don't push or
+  email on those weekdays.
 - Habits can be planned for chosen weekdays (`days_mask`): the target follows
   the days, reminders fire only on them, and an off-plan day still counts.
 - Pause one habit (`POST /habits/{id}/pause`, `/resume`): its streak neither

@@ -3,8 +3,8 @@
 Backend for [PaceStreak](https://www.pacestreak.com), a habit and streak
 tracker. **Live at `api.pacestreak.com`.**
 
-About 260 routes under `/v1`, a background worker, and a test suite of about
-260 tests that runs against real Postgres and Redis. It runs on a free-tier
+About 265 routes under `/v1`, a background worker, and a test suite of about
+285 tests that runs against real Postgres and Redis. It runs on a free-tier
 GCP e2-micro as a Docker Swarm stack behind a Cloudflare Tunnel, with Neon
 Postgres, Upstash Redis and Brevo for mail; see
 [ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).

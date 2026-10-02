@@ -33,6 +33,9 @@ upgrade head`, `alembic check` and `pytest`; all must pass.
 - Habits never reach a feed, profile, group or leaderboard.
 - Bump `TERMS_VERSION` in the same change as a material edit to `/terms` or
   `/privacy` on `www`.
+- `scripts/loadtest.py` runs full load only against a local stack; against
+  production use `--health-only` and nothing heavier. Its accounts, rate
+  limits and free-tier quotas are real.
 - Production config is checked at startup (`_check_production_config` in
   `app/main.py`); new required settings go there and in `compose.prod.yaml`.
 

@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `scripts/loadtest.py`: signed-in virtual users against a local stack
+  (production only gets `--health-only`); first capacity numbers in the
+  README.
 - Admins get one email, at most hourly, listing new kinds of app crash;
   each crash group is reported once (`client_errors.alerted_at`).
 - `GET /v1/coaching`: everyone sharing with a coach across all their

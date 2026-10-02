@@ -405,6 +405,26 @@ Point the status page at `/health/ready` (API and database) and
 `/health/worker` (reminders, digests and purges actually running). The admin
 Metrics tab shows each job's last result.
 
+### Capacity (measured 2026-10-02)
+
+`scripts/loadtest.py` runs signed-in users through what the app does all
+day (open, sync, log a session, read habits and the feed) against a local
+stack, and only a gentle `/health` read against production.
+
+| Where | Load | Throughput | p50 / p95 | Errors |
+| --- | --- | --- | --- | --- |
+| Local, one process | 10 users | 38 req/s | 130-520 / 180-1000 ms | none |
+| Local, one process | 30 users | 45 req/s | 400-1230 / 630-1940 ms | none |
+| Production `/health` | 5 req/s | - | 373 / 3568 ms | none |
+
+One API process saturates at about 40-45 requests a second; more users
+only add queueing. Saving a session is the costliest call because it
+recomputes streaks and stats. From India, about 340 ms of every production
+request is the round trip to us-central1; on the VM `/health` takes about
+45 ms. The p95 spikes are the e2-micro's shared burstable CPU running one
+process (`WEB_CONCURRENCY=1`, 384 MB). The planned larger server is the
+fix: re-run the script there with `WEB_CONCURRENCY` set to its cores.
+
 ### Backups
 
 ```bash

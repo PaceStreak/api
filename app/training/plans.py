@@ -313,9 +313,26 @@ async def templates():
             "weeks_count": len(t["weeks"]),
             "per_week": max(len(w) for w in t["weeks"]),
             "disciplines": sorted({s["discipline"] for w in t["weeks"] for s in w}),
+            "equipment": _template_equipment(t),
         }
         for t in PLAN_TEMPLATES
     ]
+
+
+def _template_equipment(template: dict) -> list[str]:
+    """Every kind of equipment the plan's routines use; empty for plans that
+    need none (runs, walks, bodyweight). Lets the app say whether a plan fits
+    the gym someone trains at."""
+    from app.training.library import EXERCISE_BY_ID, TEMPLATE_BY_ID
+
+    kinds = {
+        EXERCISE_BY_ID[item["exercise_id"]].equipment
+        for week in template["weeks"]
+        for session in week
+        if session.get("routine_template") in TEMPLATE_BY_ID
+        for item in TEMPLATE_BY_ID[session["routine_template"]]["items"]
+    }
+    return sorted(kinds - {"bodyweight"})
 
 
 @router.get("")

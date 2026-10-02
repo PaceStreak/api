@@ -27,7 +27,11 @@ def test_every_plan_template_starts_and_links_its_routines(client):
     from tests.conftest import bearer, person
 
     h = bearer(person(client, "plans@example.com", "allplans"))
-    listed = {t["id"] for t in client.get("/v1/plans/templates", headers=h).json()}
+    templates = client.get("/v1/plans/templates", headers=h).json()
+    listed = {t["id"] for t in templates}
+    by_id = {t["id"]: t for t in templates}
+    assert by_id["plan-run-from-zero"]["equipment"] == []
+    assert by_id["plan-five-by-five"]["equipment"] == ["barbell"]
     assert listed == {t["id"] for t in PLAN_TEMPLATES}
     for template in PLAN_TEMPLATES:
         made = client.post("/v1/plans", json={"template_id": template["id"]}, headers=h)

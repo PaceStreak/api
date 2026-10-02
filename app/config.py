@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field, model_validator
@@ -5,8 +6,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # PACESTREAK_ENV_FILE="" reads no file at all: the test suite sets it so a
+    # developer's .env (real SMTP, Turnstile, stricter flags) never changes
+    # what the tests see, and a test run can never send real email.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=os.environ.get("PACESTREAK_ENV_FILE", ".env") or None,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     app_name: str = Field(default="PaceStreak API")

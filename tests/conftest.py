@@ -12,7 +12,14 @@ against a local Postgres/Redis with `uv run pytest`.
 
 import asyncio
 import logging
+import os
 import re
+
+# Before anything imports the app: ignore the developer's .env (see
+# app/config.py), and default to email that is printed, never sent.
+os.environ["PACESTREAK_ENV_FILE"] = ""
+os.environ.setdefault("EMAIL_BACKEND", "console")
+os.environ.setdefault("TURNSTILE_SECRET_KEY", "")
 
 import pytest
 from fastapi.testclient import TestClient

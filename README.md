@@ -155,6 +155,15 @@ GPX/FIT tracks produce kilometre `splits`. Plans export and import as
 (`POST /v1/groups/{id}/members/{uid}/plan`, consent required) reuse the same
 helpers. Group owners and admins post `/v1/groups/{id}/announcements`.
 
+### Merging accounts
+
+`POST /v1/admin/users/{id}/merge` (admin only, audited) moves everything one
+account owns into another (`into`) and deletes it; the source's email must be
+typed back as `confirm_email`. Tables come from Postgres's foreign keys at run
+time, so new tables are covered. Sign-in material is not moved, self-links
+(following yourself) are dropped, and on a collision the destination's row
+wins unless `keep_source_profile` is set. Stats are recomputed afterwards.
+
 ### Official accounts
 
 `POST /v1/admin/users/{id}/official` (admin only, audited) is the only way a
@@ -315,6 +324,9 @@ REDIS_URL=redis://localhost:6379/15 uv run alembic upgrade head
 DATABASE_URL=postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test \
 REDIS_URL=redis://localhost:6379/15 uv run pytest
 ```
+
+The suite never reads `.env` (`tests/conftest.py` sets `PACESTREAK_ENV_FILE=""`),
+so local runs match CI and can't send real email or need Turnstile.
 
 Nothing is mocked: the behaviour under test is mostly about transactions,
 rotation and revocation, which a mock would not exercise. Every test starts

@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Admin account merge (`POST /v1/admin/users/{id}/merge`), audited, driven by
+  the database's own foreign keys.
+- The test suite ignores `.env`, so local runs match CI and never send mail.
 - The exercise library grows from 84 to 283: every common squat, hinge, lunge,
   press, row, pulldown, raise, curl, extension, core, carry and conditioning
   variation, each with muscles, a cue and search aliases.

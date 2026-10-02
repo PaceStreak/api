@@ -362,6 +362,58 @@ async def set_official(
     return {"official": profile.is_official, "handle": profile.handle}
 
 
+class MergeIn(BaseModel):
+    into: UUID
+    # The source account's email, typed back: the source is deleted.
+    confirm_email: str = Field(min_length=3, max_length=320)
+    keep_source_profile: bool = False
+
+
+@router.post("/users/{user_id}/merge")
+async def merge_user(
+    user_id: UUID,
+    body: MergeIn,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move everything one account owns into another and delete it. For an
+    owner consolidating two of their own accounts; never between people."""
+    from app.admin.merge import merge_accounts
+    from app.auth.cache import invalidate_user
+    from app.game.service import recompute
+
+    if user_id == body.into:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Pick two different accounts")
+    if user_id == admin.id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Sign in as another admin to merge this account away"
+        )
+    source = await db.get(User, user_id)
+    dest = await db.get(User, body.into)
+    if source is None or dest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    if body.confirm_email.strip().lower() != source.email.lower():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Type the source account's email to confirm"
+        )
+    source_email = source.email
+    moved = await merge_accounts(db, user_id, body.into, body.keep_source_profile)
+    await audit(
+        db,
+        admin,
+        "user.merge",
+        "user",
+        str(body.into),
+        {"source": str(user_id), "source_email": source_email, "moved": moved},
+    )
+    await db.commit()
+    await recompute(db, body.into, notify=False)
+    await db.commit()
+    for uid in (user_id, body.into):
+        await invalidate_user(uid)
+    return {"merged_into": str(body.into), "moved": moved}
+
+
 @router.get("/audit")
 async def audit_log(mod: User = Depends(require_moderator), db: AsyncSession = Depends(get_db)):
     rows = (

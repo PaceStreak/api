@@ -34,13 +34,27 @@ from app.profile.service import (
 )
 from app.social.models import ActivityEvent
 from app.social.service import emit_event
-from app.training.importers import MAX_BYTES, ImportFormatError, check, parse, zone_seconds
+from app.training.importers import (
+    MAX_BYTES,
+    MAX_SESSIONS,
+    ImportFormatError,
+    check,
+    parse,
+    zone_seconds,
+)
 from app.training.library import (
     CUSTOM_PREFIX,
     DISCIPLINES,
     EXERCISE_BY_ID,
     TEMPLATE_BY_ID,
     library_payload,
+)
+from app.training.lifting_import import (
+    LiftingFormatError,
+    guess_pattern,
+    is_lifting_csv,
+    match_exercise,
+    parse_lifting,
 )
 from app.training.models import (
     METRIC_FIELDS,
@@ -1047,10 +1061,12 @@ DUPLICATE_WINDOW = timedelta(minutes=3)
 async def import_file(
     file: UploadFile = File(...),
     discipline: str | None = Form(default=None),
+    unit: str | None = Form(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import sessions from a GPX, FIT or CSV file.
+    """Import sessions from a GPX, FIT or CSV file, or a set-by-set export
+    from Strong, Hevy or FitNotes (`unit` is Strong's weight unit).
 
     Imported sessions count for the personal streak and history but are
     marked `source="import"`: they never count for challenges, never post to
@@ -1061,6 +1077,10 @@ async def import_file(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown discipline")
     data = await file.read(MAX_BYTES + 1)
     profile = await get_profile(db, user.id)
+    if unit is not None and unit not in ("kg", "lb"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unit is kg or lb")
+    if (file.filename or "").lower().endswith(".csv") and is_lifting_csv(data):
+        return await _import_lifting(db, user, profile, data, unit or profile.weight_unit)
     try:
         parsed = parse(file.filename or "", data, profile.timezone, discipline)
     except ImportFormatError as error:
@@ -1135,6 +1155,156 @@ async def import_file(
         "found": len(parsed.sessions),
         "imported": imported,
         "duplicates": duplicates,
+        "problems": problems[:50],
+        "more_problems": max(0, len(problems) - 50),
+    }
+
+
+async def _import_lifting(
+    db: AsyncSession, user: User, profile: Profile, data: bytes, unit: str
+) -> dict:
+    """Strong, Hevy and FitNotes exports: one row per set, regrouped into
+    sessions. Names the library knows map to it; every other name becomes one
+    custom exercise (reused across the file and across re-imports), so no set
+    is dropped. Same rules as other imports: `source="import"`, idempotent
+    ids, nothing earned on boards or challenges."""
+    if len(data) > MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "That file is larger than 15 MB."
+        )
+    try:
+        parsed = parse_lifting(data, profile.timezone, unit)
+    except LiftingFormatError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    if len(parsed.sessions) > MAX_SESSIONS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"One upload can hold at most {MAX_SESSIONS} sessions.",
+        )
+
+    customs = list(
+        (
+            await db.execute(select(CustomExercise).where(CustomExercise.user_id == user.id))
+        ).scalars()
+    )
+    by_name = {c.name.strip().lower(): f"{CUSTOM_PREFIX}{c.id}" for c in customs}
+    resolved: dict[str, str] = {}
+    created: list[str] = []
+    library = list(EXERCISE_BY_ID.values())
+
+    async def exercise_id(name: str) -> str:
+        if name in resolved:
+            return resolved[name]
+        found = match_exercise(name, library) or by_name.get(name.strip().lower()[:60])
+        if found is None:
+            if len(customs) + len(created) >= 300:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "This file has more new exercises than your custom-exercise limit (300).",
+                )
+            pattern, equipment, muscles = guess_pattern(name)
+            custom = CustomExercise(
+                user_id=user.id,
+                name=name.strip()[:60],
+                pattern=pattern,
+                equipment=equipment,
+                primary=muscles,
+                secondary=[],
+                load_type="weight",
+                rest_sec=90,
+                unilateral=False,
+                cue="Imported - edit it to set the muscles and cue.",
+            )
+            db.add(custom)
+            await db.flush()
+            found = f"{CUSTOM_PREFIX}{custom.id}"
+            by_name[name.strip().lower()[:60]] = found
+            created.append(custom.name)
+        resolved[name] = found
+        return found
+
+    now = utcnow()
+    problems = list(parsed.problems)
+    imported = duplicates = sets_imported = 0
+    for session in parsed.sessions:
+        if session.started_at > now + timedelta(minutes=10) or session.started_at.year < 1990:
+            problems.append(
+                f"Session on {session.started_at.date().isoformat()} has an impossible date."
+            )
+            continue
+        workout_id = uuid5(
+            IMPORT_NAMESPACE, f"{user.id}:strength:{session.started_at.astimezone(UTC).isoformat()}"
+        )
+        existing = await db.get(Workout, workout_id)
+        clash = (
+            await db.execute(
+                select(Workout.id).where(
+                    Workout.user_id == user.id,
+                    Workout.deleted_at.is_(None),
+                    Workout.discipline == "strength",
+                    Workout.started_at.between(
+                        session.started_at - DUPLICATE_WINDOW, session.started_at + DUPLICATE_WINDOW
+                    ),
+                )
+            )
+        ).first()
+        if clash is not None or (existing is not None and existing.deleted_at is None):
+            duplicates += 1
+            continue
+        # Exercise names first: creating a custom exercise flushes the session,
+        # which must happen before this workout is added to it.
+        positions: dict[str, int] = {}
+        rows = []
+        for st in session.sets:
+            ex = await exercise_id(st.exercise)
+            position = positions.setdefault(ex, len(positions))
+            rows.append(
+                WorkoutSet(
+                    user_id=user.id,
+                    exercise_id=ex,
+                    position=position,
+                    set_index=st.set_index,
+                    superset=st.superset,
+                    kind=st.kind if st.kind in ("work", "warmup", "drop", "failure") else "work",
+                    weight_kg=round(st.weight_kg, 3) if st.weight_kg is not None else None,
+                    reps=st.reps,
+                    rpe=st.rpe,
+                    duration_sec=st.duration_sec,
+                    distance_m=st.distance_m,
+                    completed=True,
+                )
+            )
+        workout = existing or Workout(id=workout_id, user_id=user.id)
+        if existing is None:
+            db.add(workout)
+        else:
+            workout.seq = sync_seq.next_value()
+        workout.discipline = "strength"
+        workout.title = session.title
+        workout.notes = session.notes
+        workout.started_at = session.started_at
+        workout.local_date = local_date(session.started_at, profile.timezone)
+        workout.duration_sec = session.duration_sec
+        workout.distance_m = None
+        workout.elevation_m = None
+        workout.source = "import"
+        workout.client_updated_at = now
+        workout.deleted_at = None
+        workout.sets = rows
+        await db.flush()
+        imported += 1
+        sets_imported += len(rows)
+
+    if imported:
+        await recompute(db, user.id, notify=False)
+    await db.commit()
+    return {
+        "format": parsed.format,
+        "found": len(parsed.sessions),
+        "imported": imported,
+        "duplicates": duplicates,
+        "sets": sets_imported,
+        "new_exercises": created[:50],
         "problems": problems[:50],
         "more_problems": max(0, len(problems) - 50),
     }

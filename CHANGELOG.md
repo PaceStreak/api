@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Import set-by-set history from Strong, Hevy and FitNotes CSV exports.
+  Names map to the library (equipment-aware); unknown ones become custom
+  exercises. Idempotent, `source="import"`.
 - Admin account merge (`POST /v1/admin/users/{id}/merge`), audited, driven by
   the database's own foreign keys.
 - The test suite ignores `.env`, so local runs match CI and never send mail.

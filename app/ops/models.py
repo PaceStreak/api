@@ -48,6 +48,8 @@ class ClientError(Base):
     count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # When admins were emailed about this group; each is reported once.
+    alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuthFailure(Base):

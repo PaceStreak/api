@@ -26,7 +26,7 @@ from sqlalchemy import and_, case, delete, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app import storage
-from app.auth.models import User
+from app.auth.models import User, UserRole
 from app.auth.passkeys import sweep_expired_challenges
 from app.cache import close_cache, get_client, init_cache
 from app.common.time import local_now, local_today, utcnow, week_start
@@ -622,6 +622,70 @@ async def habit_summary() -> list[UUID]:
     return note_ids
 
 
+ERROR_ALERT_GAP = timedelta(hours=1)
+
+
+async def error_alerts() -> int:
+    """Email admins, at most once an hour, about crash groups they haven't
+    heard about. Each group is reported once however often it recurs, and
+    only groups first seen in the last day, so a deploy never replays the
+    archive. Anonymous like the reports themselves: message, path, count."""
+    from app.email import send_email
+    from app.ops.models import ClientError
+
+    now = utcnow()
+    try:
+        if not await get_client().set(
+            "worker:error-alert", "1", nx=True, ex=int(ERROR_ALERT_GAP.total_seconds())
+        ):
+            return 0
+    except RedisError:
+        pass
+    async with AsyncSessionLocal() as db:
+        new = (
+            (
+                await db.execute(
+                    select(ClientError)
+                    .where(
+                        ClientError.alerted_at.is_(None),
+                        ClientError.first_seen >= now - timedelta(days=1),
+                    )
+                    .order_by(ClientError.count.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not new:
+            return 0
+        admins = (
+            (
+                await db.execute(
+                    select(User.email).where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        lines = [
+            f"- {e.message[:200]}\n  at {e.path or '?'} - {e.count} time(s), "
+            f"first {e.first_seen:%Y-%m-%d %H:%M} UTC"
+            for e in new
+        ]
+        body = (
+            f"{len(new)} new kind(s) of error in the app since the last alert:\n\n"
+            + "\n".join(lines)
+            + "\n\nDetails: Admin > Ops in the app."
+        )
+        for email in admins:
+            await send_email(email, f"PaceStreak: {len(new)} new app error(s)", body)
+        for e in new:
+            e.alerted_at = now
+        await db.commit()
+        return len(new)
+
+
 async def tick() -> None:
     try:
         got = await get_client().set(
@@ -643,6 +707,7 @@ async def tick() -> None:
         ("buddies", buddy_nudges),
         ("purge", purge_deleted_accounts),
         ("housekeeping", housekeeping),
+        ("error_alerts", error_alerts),
     )
     started = time.monotonic()
     report: dict[str, dict] = {}

@@ -7,6 +7,8 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Admins get one email, at most hourly, listing new kinds of app crash;
+  each crash group is reported once (`client_errors.alerted_at`).
 - `GET /v1/coaching`: everyone sharing with a coach across all their
   coaching groups, flagged when a week is at risk or nothing was logged for
   7 days. Same consent rules as the per-group view.

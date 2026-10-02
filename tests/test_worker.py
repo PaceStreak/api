@@ -222,3 +222,30 @@ async def _clear_notes():
     async with AsyncSessionLocal() as db:
         await db.execute(delete(Notification))
         await db.commit()
+
+
+def test_new_app_errors_email_admins_once(client, sent):
+    import app.worker as worker
+    from tests.conftest import register
+    from tests.test_social import make_role
+
+    register(client, "alerts@example.com")
+    make_role("alerts@example.com", "admin")
+    body = {
+        "message": "TypeError: plates is undefined",
+        "stack": "at render (index.js:1:1)",
+        "url": "https://app.pacestreak.com/workouts/live?x=SECRET",
+    }
+    for _ in range(4):
+        assert client.post("/v1/client-errors", json=body).status_code == 202
+
+    before = len(sent)
+    assert run(worker.error_alerts) == 1
+    mail = [m for m in sent[before:] if "new app error" in m]
+    assert len(mail) == 1 and "alerts@example.com" in mail[0]
+    assert "/workouts/live" in mail[0] and "SECRET" not in mail[0]
+    assert "4 time(s)" in mail[0]
+
+    # Reported once: a later run, even past the hourly gap, sends nothing.
+    run(lambda: cache.get_client().delete("worker:error-alert"))
+    assert run(worker.error_alerts) == 0

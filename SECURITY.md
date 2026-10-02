@@ -6,9 +6,9 @@
 found, how to reproduce it, and the impact. You will get an acknowledgement
 within 72 hours. There is no bug bounty; what you will get is a straight answer.
 
-This file exists per-repository because community health files in a **public**
-`.github` repository do not apply to **private** ones, and this repository is
-private.
+This file is kept per-repository, alongside the organisation-wide copy in
+[PaceStreak/.github](https://github.com/PaceStreak/.github), so the policy
+travels with the code if this repository is forked or mirrored.
 
 ## Scope
 

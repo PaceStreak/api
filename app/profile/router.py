@@ -18,6 +18,7 @@ from app.game.service import recompute
 from app.notifications.models import Notification
 from app.notifications.service import vapid_public_key
 from app.profile.models import MIN_AGE, SOCIAL_MIN_AGE, Profile
+from app.profile.reserved import RESERVED, is_reserved, mentions_brand  # noqa: F401
 from app.profile.service import get_chains, get_profile, set_chain_target
 from app.social.models import Follow
 
@@ -25,55 +26,6 @@ settings = get_settings()
 router = APIRouter(tags=["me"])
 
 HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
-# Handles that would read as official, or collide with an app route.
-RESERVED = frozenset(
-    {
-        "admin",
-        "administrator",
-        "api",
-        "app",
-        "blog",
-        "feed",
-        "help",
-        "me",
-        "mod",
-        "moderator",
-        "pacestreak",
-        "privacy",
-        "root",
-        "security",
-        "settings",
-        "staff",
-        "status",
-        "support",
-        "system",
-        "team",
-        "terms",
-        "www",
-        "official",
-        "null",
-        "undefined",
-    }
-)
-
-
-BRAND = "pacestreak"
-# Look-alike characters folded back before the brand check, so "Pace5treak",
-# "pace_streak" and "PACE.STREAK" read as what they are.
-_CONFUSABLES = str.maketrans(
-    {"0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "$": "s", "@": "a", "|": "l"}
-)
-
-
-def mentions_brand(text: str) -> bool:
-    folded = text.lower().translate(_CONFUSABLES)
-    return BRAND in "".join(ch for ch in folded if ch.isalpha())
-
-
-def is_reserved(handle: str) -> bool:
-    """Handles only an official account may hold: the reserved words, and
-    anything that spells the brand however it is dressed up."""
-    return handle in RESERVED or mentions_brand(handle)
 
 
 def check_display_name(name: str | None, profile: Profile) -> None:

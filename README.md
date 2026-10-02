@@ -162,6 +162,13 @@ reserved handle such as `pacestreak` can be assigned. Non-official accounts
 cannot use the brand anywhere in a handle or display name, including with
 separators or look-alike digits.
 
+The rules are in `app/profile/reserved.py`: about 280 exact words (staff and
+authority, mail conventions, hosts, app routes, placeholders), the same list
+after folding look-alikes (`adm1n`), words like `moderator` anywhere,
+`admin`/`official`/`verified` at either end (`admin_user`, but not
+`badminton`), and whole words such as `mod` or `staff` (`run_mod_42`, but not
+`model`). Existing handles are never re-checked.
+
 ## Auth endpoints
 
 All under `/v1/auth`, per the versioning rule below.

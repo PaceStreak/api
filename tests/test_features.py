@@ -154,7 +154,7 @@ def test_pause_lifecycle(client):
 
 
 def test_pauses_are_private(client):
-    a = person(client, "a@example.com", "alpha")
+    a = person(client, "a@example.com", "alfie")
     b = person(client, "b@example.com", "bravo")
     pause = client.post(
         "/v1/pauses", json={"starts_on": datetime.now(UTC).date().isoformat()}, headers=bearer(a)
@@ -167,7 +167,7 @@ def test_pauses_are_private(client):
 
 
 def test_recap_reports_attendance_not_volume(client):
-    token = person(client, "recap@example.com", "recap")
+    token = person(client, "recap@example.com", "rosa")
     h = bearer(token)
     started = datetime.now(UTC) - timedelta(hours=2)
     client.put(
@@ -317,6 +317,25 @@ def test_brand_names_are_reserved_however_they_are_spelled(client):
     assert name.status_code == 409
 
 
+def test_authority_handles_are_reserved_however_they_are_dressed_up():
+    from app.profile.reserved import is_reserved
+
+    for handle in (
+        "admin", "admin_user", "the_admin", "adm1n", "admin2", "_admin_",
+        "real_moderator", "run_mod_42", "staff_sam", "support_team", "noreply",
+        "webmaster3", "official_runner", "officia1", "unverified", "sysadmin_bob",
+        "root", "null", "deleted_user", "me", "settings",
+    ):  # fmt: skip
+        assert is_reserved(handle), handle
+    # Ordinary words and names that merely contain one must stay available.
+    for handle in (
+        "badminton", "padmini", "model", "modern", "dev", "su_lin", "judge_dredd",
+        "team_tri", "safety_first_runner", "rootsrunner", "supporter",
+        "staffordshire", "lily1", "mike_2024", "8888",
+    ):  # fmt: skip
+        assert not is_reserved(handle), handle
+
+
 def test_only_an_admin_can_grant_official_status(client):
     brand = person(client, "brand@example.com", "brandteam")
     admin = person(client, "boss@example.com", "boss")
@@ -357,7 +376,7 @@ def test_only_an_admin_can_grant_official_status(client):
 
 
 def test_year_review_and_record_history(client):
-    token = person(client, "review@example.com", "reviewer")
+    token = person(client, "review@example.com", "rhea")
     today = datetime.now(UTC)
     for days_ago, kg in ((20, 60), (10, 65), (1, 70)):
         when = today - timedelta(days=days_ago)

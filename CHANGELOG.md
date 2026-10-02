@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Far more handles are reserved: about 280 words plus pattern rules, so
+  `admin_user`, `the_admin`, `adm1n` and `run_mod_42` are refused while
+  `badminton` and `model` stay available.
 - `terms_version` is `2026-10-02`, so every account accepts the revised terms
   and privacy policy once.
 - `AGENTS.md` with this repository's commands and rules for coding agents; the

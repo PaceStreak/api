@@ -56,7 +56,7 @@ def test_meals_round_trip_with_totals_and_target(client):
 
 
 def test_meals_are_private_and_validated(client):
-    h = bearer(person(client, "own@example.com", "owner"))
+    h = bearer(person(client, "own@example.com", "olive"))
     other = bearer(person(client, "nosy@example.com", "nosy"))
     day = _today()
     eid = uuid4()

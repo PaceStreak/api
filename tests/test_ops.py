@@ -26,7 +26,7 @@ def test_outgoing_mail_carries_the_headers_providers_expect():
 
 
 def test_one_click_unsubscribe(client):
-    token = person(client, "mail@example.com", "mailer")
+    token = person(client, "mail@example.com", "mila")
     me = client.get("/v1/me", headers=bearer(token)).json()["user"]["id"]
     headers = unsubscribe.list_headers(me, "digest")
     assert headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"

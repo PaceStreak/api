@@ -91,7 +91,7 @@ def test_a_failing_job_is_reported_and_counted(client, monkeypatch):
     run(lambda: worker.get_client().delete("worker:tick"))
     run(worker.tick)
 
-    admin = person(client, "ops@example.com", "opsadmin")
+    admin = person(client, "ops@example.com", "opsboss")
 
     async def promote():
         async with AsyncSessionLocal() as db:

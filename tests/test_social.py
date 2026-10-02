@@ -173,7 +173,7 @@ def test_unverified_email_cannot_follow(client):
     token = login(client, "unverified@example.com")
     client.post(
         "/v1/me/onboarding",
-        json={"handle": "unverified", "birth_year": 1990, "accept_terms": True},
+        json={"handle": "newcomer", "birth_year": 1990, "accept_terms": True},
         headers=bearer(token),
     )
     assert client.post("/v1/people/target/follow", headers=bearer(token)).status_code == 403
@@ -318,7 +318,7 @@ def test_notification_preferences_and_unsubscribe(client):
 
 
 def test_muting_a_group_keeps_its_notifications_in_the_inbox(client):
-    owner = person(client, "own@example.com", "owner")
+    owner = person(client, "own@example.com", "olive")
     joiner = person(client, "join@example.com", "joiner")
     group = client.post("/v1/groups", json={"name": "Quiet"}, headers=bearer(owner)).json()
     muted = client.patch(

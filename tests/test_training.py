@@ -255,7 +255,7 @@ def test_older_edit_arriving_late_is_ignored(client):
 
 
 def test_cannot_touch_someone_elses_workout(client):
-    owner = person(client, "owner@example.com", "owner")
+    owner = person(client, "owner@example.com", "olive")
     other = person(client, "other@example.com", "other")
     wid = str(uuid4())
     client.put(f"/v1/workouts/{wid}", json=workout(), headers=bearer(owner))

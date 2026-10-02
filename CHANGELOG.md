@@ -7,6 +7,8 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Six cable exercises for the three common grips: V-handle, neutral-grip
+  and wide neutral-grip, each as a pulldown and a seated row (84 in all).
 - Far more handles are reserved: about 280 words plus pattern rules, so
   `admin_user`, `the_admin`, `adm1n` and `run_mod_42` are refused while
   `badminton` and `model` stay available.

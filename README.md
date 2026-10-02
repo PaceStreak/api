@@ -48,7 +48,7 @@ make clean         # stop and delete both data volumes (Postgres and Redis)
 | --- | --- | --- |
 | Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes, **passkeys (WebAuthn)** |
 | Profile | `app/profile/` | Onboarding, age gates (13 / 16), settings, reserved handles and brand-impersonation checks |
-| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 78-exercise library, routines, custom exercises, body metrics, streak chains with **requirements**, repairs, **pauses** (incl. travel), **GPX/FIT/CSV file import**, **tags**, **gear**, **training plans** |
+| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 84-exercise library, routines, custom exercises, body metrics, streak chains with **requirements**, repairs, **pauses** (incl. travel), **GPX/FIT/CSV file import**, **tags**, **gear**, **training plans** |
 | Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 29 achievements, 5 opt-in leaderboards, **weekly quests**, **weekly recap**, **year review**, **record history**, **joint (buddy/group) streaks** |
 | Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports, **buddy streaks**, **preset encouragement**; visibility checked at emit and at read |
 | Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges, mute, **group streak** |

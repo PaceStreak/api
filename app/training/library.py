@@ -562,6 +562,36 @@ EXERCISES: tuple[Exercise, ...] = (
         cue="Chest proud, row to the stomach, reach long on the return.",
     ),
     _x(
+        "v-handle-cable-row",
+        "V-handle cable row",
+        "pull_h",
+        "cable",
+        ("lats", "upper_back"),
+        ("biceps", "rear_delts"),
+        rest_sec=120,
+        cue="Close neutral grip: row to the belly button, elbows tight, a long reach forward.",
+    ),
+    _x(
+        "neutral-bar-cable-row",
+        "Neutral-grip bar cable row",
+        "pull_h",
+        "cable",
+        ("upper_back", "lats"),
+        ("biceps", "rear_delts"),
+        rest_sec=120,
+        cue="Shoulder-width parallel handles: row to the lower ribs, squeeze the shoulder blades.",
+    ),
+    _x(
+        "wide-neutral-cable-row",
+        "Wide neutral-grip cable row",
+        "pull_h",
+        "cable",
+        ("upper_back", "rear_delts"),
+        ("lats", "traps"),
+        rest_sec=120,
+        cue="Wide parallel handles: elbows out a little, row to the chest, pinch the upper back.",
+    ),
+    _x(
         "chest-supported-row",
         "Chest-supported row",
         "pull_h",
@@ -634,6 +664,45 @@ EXERCISES: tuple[Exercise, ...] = (
         ("biceps", "upper_back"),
         rest_sec=120,
         cue="Drive the elbows down to your sides, pause with the bar at the collarbone.",
+    ),
+    _x(
+        "v-handle-pulldown",
+        "V-handle pulldown",
+        "pull_v",
+        "cable",
+        ("lats",),
+        ("biceps", "upper_back"),
+        rest_sec=120,
+        cue=(
+            "Close neutral grip, lean back a little, pull to the upper chest with the "
+            "elbows by your sides: biases the lower lats."
+        ),
+    ),
+    _x(
+        "neutral-grip-pulldown",
+        "Neutral-grip pulldown",
+        "pull_v",
+        "cable",
+        ("lats", "upper_back"),
+        ("biceps",),
+        rest_sec=120,
+        cue=(
+            "Shoulder-width parallel handles, chest up, drive the elbows down and "
+            "back: works the whole back."
+        ),
+    ),
+    _x(
+        "wide-neutral-pulldown",
+        "Wide neutral-grip pulldown",
+        "pull_v",
+        "cable",
+        ("upper_back", "lats"),
+        ("rear_delts", "biceps"),
+        rest_sec=120,
+        cue=(
+            "Wide parallel handles, elbows flared a little, pull to the collarbone: "
+            "biases the upper back."
+        ),
     ),
     _x(
         "assisted-pull-up",

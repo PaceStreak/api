@@ -2,6 +2,7 @@
 
 import unicodedata
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -536,6 +537,7 @@ async def _feed_page(
     rows = (await db.execute(stmt.order_by(ActivityEvent.created_at.desc()).limit(26))).all()
     more = len(rows) > 25
     rows = rows[:25]
+    reactions = await _reactions(db, viewer, [e.id for e, *_ in rows])
     return {
         "events": [
             {
@@ -549,6 +551,7 @@ async def _feed_page(
                 "comments": c,
                 "kudoed": bool(m),
                 "mine": e.user_id == viewer,
+                **reactions.get(e.id, {"reactions": {}, "my_reaction": None}),
             }
             for e, p, k, c, m in rows
         ],
@@ -583,24 +586,57 @@ async def _visible_event(db: AsyncSession, viewer: UUID, event_id: UUID) -> Acti
     return row
 
 
+async def _reactions(db: AsyncSession, viewer: UUID, event_ids: list[UUID]) -> dict:
+    """Per event: how many of each preset reaction, and the viewer's own."""
+    out: dict = {}
+    if not event_ids:
+        return out
+    rows = (
+        await db.execute(
+            select(Kudos.event_id, Kudos.reaction, func.count())
+            .where(Kudos.event_id.in_(event_ids))
+            .group_by(Kudos.event_id, Kudos.reaction)
+        )
+    ).all()
+    for event_id, reaction, n in rows:
+        out.setdefault(event_id, {"reactions": {}, "my_reaction": None})["reactions"][reaction] = n
+    for event_id, reaction in (
+        await db.execute(
+            select(Kudos.event_id, Kudos.reaction).where(
+                Kudos.event_id.in_(event_ids), Kudos.user_id == viewer
+            )
+        )
+    ).all():
+        out.setdefault(event_id, {"reactions": {}, "my_reaction": None})["my_reaction"] = reaction
+    return out
+
+
+class KudosIn(BaseModel):
+    reaction: Literal["kudos", "fire", "strong", "star", "heart"] = "kudos"
+
+
 @router.post("/events/{event_id}/kudos")
 async def give_kudos(
     event_id: UUID,
     background: BackgroundTasks,
+    body: KudosIn | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Kudos, as one of the preset reactions. Choosing another switches it;
+    the author is told once, on the first."""
+    reaction = body.reaction if body else "kudos"
     me = await require_social(db, user)
     await enforce("kudos", user.id, 300, 3600)
     event = await _visible_event(db, user.id, event_id)
-    exists_ = (
-        await db.execute(
-            select(Kudos.id).where(Kudos.event_id == event_id, Kudos.user_id == user.id)
-        )
+    existing = (
+        await db.execute(select(Kudos).where(Kudos.event_id == event_id, Kudos.user_id == user.id))
     ).scalar_one_or_none()
     nid = None
-    if not exists_:
-        db.add(Kudos(event_id=event_id, user_id=user.id))
+    if existing is not None:
+        existing.reaction = reaction
+    else:
+        db.add(Kudos(event_id=event_id, user_id=user.id, reaction=reaction))
         if event.user_id != user.id:
             nid = await notify(
                 db,
@@ -615,7 +651,8 @@ async def give_kudos(
     await db.commit()
     background.add_task(deliver, [nid] if nid else [])
     count = (await db.execute(select(func.count()).where(Kudos.event_id == event_id))).scalar_one()
-    return {"kudos": count, "kudoed": True}
+    mine = await _reactions(db, user.id, [event_id])
+    return {"kudos": count, "kudoed": True, **mine.get(event_id, {})}
 
 
 @router.delete("/events/{event_id}/kudos")
@@ -625,7 +662,14 @@ async def take_kudos(
     await db.execute(delete(Kudos).where(Kudos.event_id == event_id, Kudos.user_id == user.id))
     await db.commit()
     count = (await db.execute(select(func.count()).where(Kudos.event_id == event_id))).scalar_one()
-    return {"kudos": count, "kudoed": False}
+    rest = await _reactions(db, user.id, [event_id])
+    return {
+        "kudos": count,
+        "kudoed": False,
+        "reactions": {},
+        "my_reaction": None,
+        **rest.get(event_id, {}),
+    }
 
 
 @router.get("/events/{event_id}")
@@ -656,6 +700,9 @@ async def get_event(
             "comments": 0,
             "kudoed": bool(mine),
             "mine": event.user_id == user.id,
+            **(await _reactions(db, user.id, [event_id])).get(
+                event_id, {"reactions": {}, "my_reaction": None}
+            ),
         }
     kudos_people = (
         (

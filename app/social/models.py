@@ -82,6 +82,11 @@ class ActivityEvent(Base):
     hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+# Preset reactions only: nothing typed, so nothing to moderate. Each still
+# counts as kudos; one per person per post.
+REACTIONS = ("kudos", "fire", "strong", "star", "heart")
+
+
 class Kudos(Base):
     __tablename__ = "kudos"
     __table_args__ = (UniqueConstraint("event_id", "user_id", name="uq_kudos_pair"),)
@@ -91,6 +96,9 @@ class Kudos(Base):
     )
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    reaction: Mapped[str] = mapped_column(
+        String(10), default="kudos", server_default="kudos", nullable=False
     )
 
 

@@ -7,6 +7,8 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Kudos can be one of five preset reactions (kudos, fire, strong, star,
+  heart); one per person per post, switchable, still counted as kudos.
 - `backup_frequency` (monthly or weekly) for the backup email, and
   `quiet_days` on the profile: nudges stay in the inbox but don't push or
   email on those weekdays.

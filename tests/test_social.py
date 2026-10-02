@@ -331,3 +331,34 @@ def test_muting_a_group_keeps_its_notifications_in_the_inbox(client):
     inbox = client.get("/v1/notifications", headers=bearer(owner)).json()
     items = inbox["items"] if isinstance(inbox, dict) else inbox
     assert any(n["kind"] == "group_join" for n in items)
+
+
+def test_reactions_are_presets_one_per_person_and_switchable(client):
+    ana = person(client, "ana@example.com", "anaruns")
+    ben = person(client, "ben@example.com", "benlifts")
+    cy = person(client, "cy@example.com", "cyrides")
+    for fan in (ben, cy):
+        client.post("/v1/people/anaruns/follow", headers=bearer(fan))
+    log_session(client, ana)
+    event = next(
+        e
+        for e in client.get("/v1/feed", headers=bearer(ben)).json()["events"]
+        if e["kind"] == "workout"
+    )
+    url = f"/v1/events/{event['id']}/kudos"
+    first = client.post(url, json={"reaction": "fire"}, headers=bearer(ben)).json()
+    assert (first["kudos"], first["my_reaction"], first["reactions"]) == (1, "fire", {"fire": 1})
+    # Switching replaces it: still one kudos from ben, and no second notice.
+    switched = client.post(url, json={"reaction": "strong"}, headers=bearer(ben)).json()
+    assert (switched["kudos"], switched["reactions"]) == (1, {"strong": 1})
+    client.post(url, headers=bearer(cy))  # no body: plain kudos
+    seen = client.get(f"/v1/events/{event['id']}", headers=bearer(ana)).json()
+    assert seen["reactions"] == {"strong": 1, "kudos": 1}
+    assert seen["my_reaction"] is None
+    notices = client.get("/v1/notifications", headers=bearer(ana)).json()
+    items = notices["items"] if isinstance(notices, dict) else notices
+    assert sum(1 for n in items if n["kind"] == "kudos") == 2
+    # Only the presets: free text is refused.
+    assert client.post(url, json={"reaction": "lol nice"}, headers=bearer(cy)).status_code == 422
+    gone = client.delete(url, headers=bearer(cy)).json()
+    assert (gone["kudos"], gone["reactions"], gone["my_reaction"]) == (1, {"strong": 1}, None)

@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- `GET /v1/coaching`: everyone sharing with a coach across all their
+  coaching groups, flagged when a week is at risk or nothing was logged for
+  7 days. Same consent rules as the per-group view.
 - Kudos can be one of five preset reactions (kudos, fire, strong, star,
   heart); one per person per post, switchable, still counted as kudos.
 - `backup_frequency` (monthly or weekly) for the backup email, and

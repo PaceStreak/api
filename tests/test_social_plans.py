@@ -27,9 +27,9 @@ def run(fn):
     return asyncio.run(go())
 
 
-def _group(client, owner, kind="crew"):
+def _group(client, owner, kind="crew", name="Crew"):
     return client.post(
-        "/v1/groups", json={"name": "Crew", "kind": kind}, headers=bearer(owner)
+        "/v1/groups", json={"name": name, "kind": kind}, headers=bearer(owner)
     ).json()
 
 
@@ -170,3 +170,35 @@ def test_buddy_nudge_fires_once_near_the_end_of_the_week(client, monkeypatch):
     again = run(worker.buddy_nudges)
     assert len(first) == 2  # both are one short: each hears about the other
     assert again == []
+
+
+def test_coaching_overview_spans_groups_and_respects_consent(client):
+    from tests.test_social import log_session
+
+    coach = person(client, "head@example.com", "headcoach")
+    keen = person(client, "keen@example.com", "keenone")
+    quiet = person(client, "quiet@example.com", "quietone")
+    shy = person(client, "shy@example.com", "shyone")
+    groups = [_group(client, coach, kind="coaching", name=n) for n in ("Mornings", "Evenings")]
+    for g, members in zip(groups, ((keen, quiet), (keen, shy)), strict=True):
+        code = client.get(f"/v1/groups/{g['id']}", headers=bearer(coach)).json()["invite_code"]
+        for m in members:
+            client.post("/v1/groups/join", json={"code": code}, headers=bearer(m))
+            if m is not shy:  # shy never shares
+                client.patch(
+                    f"/v1/groups/{g['id']}/me", json={"shares_with_coach": True}, headers=bearer(m)
+                )
+    log_session(client, keen)
+
+    overview = client.get("/v1/coaching", headers=bearer(coach)).json()
+    assert [g["name"] for g in overview["groups"]] == ["Evenings", "Mornings"]
+    by_handle = {p["handle"]: p for p in overview["people"]}
+    assert set(by_handle) == {"keenone", "quietone"}  # no consent, no row
+    assert sorted(g["name"] for g in by_handle["keenone"]["groups"]) == ["Evenings", "Mornings"]
+    # Nothing logged: flagged, and listed first.
+    assert by_handle["quietone"]["attention"] is True
+    assert overview["people"][0]["handle"] == "quietone"
+    assert by_handle["keenone"]["last_session"] is not None
+
+    # Someone who coaches nobody gets an empty overview, not an error.
+    assert client.get("/v1/coaching", headers=bearer(shy)).json() == {"groups": [], "people": []}

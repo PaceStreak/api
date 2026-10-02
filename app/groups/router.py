@@ -412,6 +412,48 @@ async def set_consent(
     return {"shares_with_coach": me.shares_with_coach, "muted": me.muted}
 
 
+@router.get("/coaching")
+async def coaching_overview(
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Everyone who shares their training with this coach, across all their
+    coaching groups, quietest first. Built from the same per-group view, so
+    consent is checked exactly as there: no share, no row."""
+    groups = (
+        (
+            await db.execute(
+                select(Group)
+                .join(GroupMember, GroupMember.group_id == Group.id)
+                .where(
+                    GroupMember.user_id == user.id,
+                    GroupMember.role.in_(("owner", "admin", "coach")),
+                    Group.kind == "coaching",
+                )
+                .order_by(Group.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    people: dict[str, dict] = {}
+    for group in groups:
+        for row in (await coach_view(group.id, user, db))["members"]:
+            key = row.get("handle") or row.get("id")
+            entry = people.setdefault(key, row | {"groups": []})
+            entry["groups"].append({"id": str(group.id), "name": group.name})
+    today = date.today()
+    rows = []
+    for entry in people.values():
+        last = max((r["date"] for r in entry.get("recent", [])), default=None)
+        quiet_days = (today - date.fromisoformat(last)).days if last else None
+        entry["last_session"] = last
+        # A nudge-worthy row: a week at risk, or nothing logged for a week.
+        entry["attention"] = bool(entry.get("at_risk")) or quiet_days is None or quiet_days >= 7
+        rows.append(entry)
+    rows.sort(key=lambda r: (not r["attention"], r["last_session"] or ""))
+    return {"groups": [{"id": str(g.id), "name": g.name} for g in groups], "people": rows}
+
+
 @router.get("/groups/{group_id}/coach")
 async def coach_view(
     group_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)

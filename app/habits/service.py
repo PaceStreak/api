@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.habits.engine import HabitDay, HabitView, view_habit
+from app.habits.engine import HabitDay, HabitView, pause_days, scheduled, view_habit
 from app.habits.models import Habit, HabitLog
 
 
@@ -45,7 +45,8 @@ async def habit_views(
                 logs=logs[h.id],
                 today=today,
                 week_starts_on=week_starts_on,
-                paused_days=paused,
+                paused_days=paused | pause_days(h.paused_from, h.paused_until, today),
+                days_mask=h.days_mask,
             ),
             logs[h.id],
         )
@@ -71,6 +72,13 @@ def habit_summary(h: Habit, v: HabitView, today: date, logs: list[HabitDay] = ()
         "why": h.why,
         "total_goal": h.total_goal,
         "remind_hour": h.remind_hour,
+        "days_mask": h.days_mask,
+        "scheduled_today": scheduled(h.days_mask, today),
+        "paused_from": h.paused_from.isoformat() if h.paused_from else None,
+        "paused_until": h.paused_until.isoformat() if h.paused_until else None,
+        "paused": h.paused_from is not None
+        and h.paused_from <= today
+        and (h.paused_until is None or today <= h.paused_until),
         "snoozed_until": h.snoozed_until.isoformat() if h.snoozed_until else None,
         "template_id": h.template_id,
         "started_on": h.started_on.isoformat(),

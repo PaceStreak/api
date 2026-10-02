@@ -90,6 +90,14 @@ class Habit(Base):
     # A snoozed reminder: the worker reminds again once this passes, if the
     # habit still isn't done, then clears it.
     snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Which weekdays the habit is planned for, Monday = bit 0 ... Sunday =
+    # bit 6. None means any day. Only shapes reminders and Today; a day done
+    # off-plan still counts toward the week.
+    days_mask: Mapped[int | None] = mapped_column(SmallInteger)
+    # A pause for this habit alone: its streak neither breaks nor grows and
+    # it sends no reminders. paused_until None means until resumed.
+    paused_from: Mapped[date | None] = mapped_column(Date)
+    paused_until: Mapped[date | None] = mapped_column(Date)
 
 
 class HabitLog(Base):

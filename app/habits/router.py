@@ -65,6 +65,8 @@ class HabitIn(BaseModel):
     why: str | None = Field(default=None, max_length=200)
     total_goal: float | None = Field(default=None, gt=0, le=10_000_000)
     remind_hour: int | None = Field(default=None, ge=0, le=23)
+    # Planned weekdays, Monday = bit 0. None = any day.
+    days_mask: int | None = Field(default=None, ge=1, le=127)
 
     @field_validator("category")
     @classmethod
@@ -196,15 +198,31 @@ async def create_habit(
         why=(data.get("why") or "").strip() or None,
         total_goal=data.get("total_goal") if kind in ("duration", "count") else None,
         remind_hour=data.get("remind_hour"),
+        days_mask=data.get("days_mask") if kind != "quit" else None,
         template_id=body.template_id,
         started_on=today,
         position=count,
     )
+    _fit_schedule(habit, explicit_target="weekly_target" in data)
     db.add(habit)
     await db.flush()
     await recompute(db, user.id, notify=False)
     await db.commit()
     return await _one(db, user, habit)
+
+
+def _fit_schedule(habit: Habit, explicit_target: bool) -> None:
+    """A habit planned for Mon/Wed/Fri can't be asked to happen five times a
+    week. Picking days sets the target to their count unless a smaller one
+    was chosen; a quit habit has no schedule (every clean day counts)."""
+    if habit.kind == "quit":
+        habit.days_mask = None
+        return
+    if habit.days_mask is None:
+        return
+    planned = bin(habit.days_mask).count("1")
+    if not explicit_target or habit.weekly_target > planned:
+        habit.weekly_target = planned
 
 
 class OrderIn(BaseModel):
@@ -371,6 +389,10 @@ async def update_habit(
         if isinstance(value, str):
             value = value.strip() or None
         setattr(habit, key, value)
+    if "days_mask" in data:
+        _fit_schedule(habit, explicit_target="weekly_target" in data)
+    elif "weekly_target" in data:
+        _fit_schedule(habit, explicit_target=True)
     await db.flush()
     await recompute(db, user.id, notify=False)
     await db.commit()
@@ -384,6 +406,65 @@ async def archive_habit(
     """Stop tracking without losing the history. XP already earned stays."""
     habit = await _own(db, user, habit_id)
     habit.archived_at = habit.archived_at or utcnow()
+    await db.commit()
+    return await _one(db, user, habit)
+
+
+class PauseIn(BaseModel):
+    # Default today; may start up to 14 days back (people open the app after
+    # the fact) or 60 ahead.
+    start: date | None = None
+    until: date | None = None
+
+
+@router.post("/{habit_id}/pause")
+async def pause_habit(
+    habit_id: UUID,
+    body: PauseIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause one habit: travel without the gym kit, a cold that stops the
+    morning run. Its streak neither breaks nor grows, and it sends no
+    reminders. Other habits and the training streak carry on."""
+    habit = await _own(db, user, habit_id)
+    _, today, _ = await _context(db, user)
+    start = body.start or today
+    if not today - timedelta(days=14) <= start <= today + timedelta(days=60):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "A pause can start up to 14 days back or 60 ahead.",
+        )
+    if body.until is not None and body.until < start:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "It ends before it starts")
+    if body.until is not None and (body.until - start).days > 180:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Pause for six months at most; archive a habit you're done with.",
+        )
+    habit.paused_from = max(start, habit.started_on)
+    habit.paused_until = body.until
+    await db.flush()
+    await recompute(db, user.id, notify=False)
+    await db.commit()
+    return await _one(db, user, habit)
+
+
+@router.post("/{habit_id}/resume")
+async def resume_habit(
+    habit_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """End the pause today. Days already paused stay sheltered; a pause that
+    hadn't begun yet is simply removed."""
+    habit = await _own(db, user, habit_id)
+    _, today, _ = await _context(db, user)
+    if habit.paused_from is not None:
+        if habit.paused_from >= today:
+            habit.paused_from = habit.paused_until = None
+        else:
+            habit.paused_until = today - timedelta(days=1)
+    await db.flush()
+    await recompute(db, user.id, notify=False)
     await db.commit()
     return await _one(db, user, habit)
 

@@ -7,6 +7,10 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- Habits can be planned for chosen weekdays (`days_mask`): the target follows
+  the days, reminders fire only on them, and an off-plan day still counts.
+- Pause one habit (`POST /habits/{id}/pause`, `/resume`): its streak neither
+  breaks nor grows and it sends no reminders. Exported and imported.
 - A refresh token reused within 30 seconds of its rotation, while its
   successor is still live, continues the session instead of revoking it:
   two quick reloads or two tabs no longer sign people out.

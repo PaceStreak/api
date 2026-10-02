@@ -371,6 +371,9 @@ async def build_export(db: AsyncSession, user: User) -> dict:
                 "why": h.why,
                 "total_goal": h.total_goal,
                 "remind_hour": h.remind_hour,
+                "days_mask": h.days_mask,
+                "paused_from": h.paused_from.isoformat() if h.paused_from else None,
+                "paused_until": h.paused_until.isoformat() if h.paused_until else None,
                 "template_id": h.template_id,
                 "started_on": h.started_on.isoformat(),
                 "archived_at": _iso(h.archived_at),
@@ -579,6 +582,14 @@ async def build_export(db: AsyncSession, user: User) -> dict:
         },
         "notification_preferences": prefs or {},
     }
+
+
+
+def _date_or_none(value) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except (TypeError, ValueError):
+        return None
 
 
 @router.get("/export")
@@ -1141,6 +1152,9 @@ async def import_data(
                 why=spec.why,
                 total_goal=spec.total_goal,
                 remind_hour=spec.remind_hour,
+                days_mask=spec.days_mask if kind != "quit" else None,
+                paused_from=_date_or_none(item.get("paused_from")),
+                paused_until=_date_or_none(item.get("paused_until")),
                 started_on=started,
                 archived_at=utcnow() if item.get("archived_at") else None,
             )

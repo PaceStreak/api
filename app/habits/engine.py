@@ -71,13 +71,31 @@ def done_days(
     return out
 
 
-def first_week_target(weekly_target: int, started_on: date, week: date) -> int:
+def scheduled(days_mask: int | None, day: date) -> bool:
+    """Whether a habit is planned for this day (Monday = bit 0)."""
+    return days_mask is None or bool(days_mask >> day.weekday() & 1)
+
+
+def first_week_target(
+    weekly_target: int, started_on: date, week: date, days_mask: int | None = None
+) -> int:
     """A habit started mid-week can only be done on the days left in that
-    week, so its first week asks for no more than those. Without this a habit
-    begun on a Friday with a daily target fails its first week by design."""
+    week, so its first week asks for no more than those - counting only
+    planned days when the habit has a schedule. Without this a habit begun on
+    a Friday with a daily target fails its first week by design."""
     if week <= started_on < week + timedelta(days=7):
-        return max(1, min(weekly_target, 7 - (started_on - week).days))
+        left = [started_on + timedelta(days=i) for i in range(7 - (started_on - week).days)]
+        possible = sum(1 for d in left if scheduled(days_mask, d))
+        return max(1, min(weekly_target, possible or 1))
     return weekly_target
+
+
+def pause_days(paused_from: date | None, paused_until: date | None, today: date) -> set[date]:
+    """The days a single-habit pause covers, up to today."""
+    if paused_from is None:
+        return set()
+    end = min(paused_until or today, today)
+    return {paused_from + timedelta(days=i) for i in range((end - paused_from).days + 1)}
 
 
 def strength(weeks: list[WeekCell]) -> int:
@@ -109,13 +127,14 @@ def view_habit(
     today: date,
     week_starts_on: int,
     paused_days: set[date],
+    days_mask: int | None = None,
 ) -> HabitView:
     done = done_days(kind, daily_goal, logs, started_on, today)
     chain = compute_chain(
         done,
         today,
         week_starts_on,
-        lambda week: first_week_target(weekly_target, started_on, week),
+        lambda week: first_week_target(weekly_target, started_on, week, days_mask),
         paused_days=paused_days,
     )
     by_day = {entry.day: entry.amount for entry in logs}

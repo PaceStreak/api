@@ -404,6 +404,20 @@ async def _paused(db, user_id, today) -> bool:
     return any(Span(p.starts_on, p.ends_on).is_active(today) for p in pauses)
 
 
+def _habit_off_today(habit: Habit, today) -> bool:
+    """Not a day to nudge about this habit: it isn't planned for today, or
+    it's paused on its own."""
+    from app.habits.engine import scheduled
+
+    if not scheduled(habit.days_mask, today):
+        return True
+    return (
+        habit.paused_from is not None
+        and habit.paused_from <= today
+        and (habit.paused_until is None or today <= habit.paused_until)
+    )
+
+
 async def _done_today(db, habit: Habit, today) -> bool:
     logged = (
         await db.execute(
@@ -479,7 +493,11 @@ async def habit_reminders() -> list[UUID]:
         ).all()
         for habit, profile in rows:
             today = local_today(profile.timezone)
-            if await _paused(db, profile.user_id, today) or await _done_today(db, habit, today):
+            if (
+                _habit_off_today(habit, today)
+                or await _paused(db, profile.user_id, today)
+                or await _done_today(db, habit, today)
+            ):
                 continue
             nid = await _remind(db, habit, profile, today, f"habit:{habit.id}:{today.isoformat()}")
             if nid:
@@ -513,7 +531,11 @@ async def snoozed_reminders() -> list[UUID]:
             today = local_today(profile.timezone)
             if habit.archived_at is not None or habit.kind == "quit":
                 continue
-            if await _paused(db, profile.user_id, today) or await _done_today(db, habit, today):
+            if (
+                _habit_off_today(habit, today)
+                or await _paused(db, profile.user_id, today)
+                or await _done_today(db, habit, today)
+            ):
                 continue
             nid = await _remind(
                 db, habit, profile, today, f"habit-snooze:{habit.id}:{due.isoformat()}"
@@ -567,7 +589,11 @@ async def habit_summary() -> list[UUID]:
                 .scalars()
                 .all()
             )
-            open_ = [h for h in habits if not await _done_today(db, h, today)]
+            open_ = [
+                h
+                for h in habits
+                if not _habit_off_today(h, today) and not await _done_today(db, h, today)
+            ]
             if not open_:
                 continue
             n = len(open_)

@@ -93,6 +93,12 @@ async def login_user(
     return access_token, refresh_token, expires_in
 
 
+# How long after rotation the previous refresh token may still be presented
+# (see rotate_refresh_token). Long enough for a reload race, too short to be
+# a useful window for a stolen token.
+REUSE_GRACE = timedelta(seconds=30)
+
+
 async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> tuple[str, str, int]:
     token_hash = hash_refresh_token(raw_token)
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
@@ -104,6 +110,23 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> tuple[str, s
         )
 
     now = utcnow()
+
+    # A benign race, not theft: a page reloaded (or a second tab opened)
+    # while a refresh was in flight, so the browser presents the token just
+    # rotated away before the new cookie landed. Within a short window, and
+    # only while the token it became is still the live one, continue the
+    # session from that live token instead of burning the family. Outside the
+    # window, reuse is treated as theft exactly as before.
+    tip = old_token
+    for _ in range(5):  # several overlapping reloads rotate it more than once
+        if tip.revoked_at is None or tip.replaced_by is None or now - tip.revoked_at > REUSE_GRACE:
+            break
+        successor = await db.get(RefreshToken, tip.replaced_by)
+        if successor is None:
+            break
+        tip = successor
+    if tip is not old_token and tip.revoked_at is None and tip.expires_at > now:
+        old_token = tip
 
     if old_token.revoked_at is not None:
         # A token that has already been rotated away is being presented again

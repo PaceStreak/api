@@ -7,6 +7,9 @@ This project will use [Semantic Versioning](https://semver.org/) once it ships.
 
 ### Added
 
+- A refresh token reused within 30 seconds of its rotation, while its
+  successor is still live, continues the session instead of revoking it:
+  two quick reloads or two tabs no longer sign people out.
 - Import set-by-set history from Strong, Hevy and FitNotes CSV exports.
   Names map to the library (equipment-aware); unknown ones become custom
   exercises. Idempotent, `source="import"`.

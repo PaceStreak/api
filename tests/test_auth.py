@@ -96,7 +96,11 @@ def test_refresh_rotates_the_token(client):
     assert me.status_code == 200
 
 
-def test_refresh_reuse_of_a_rotated_token_burns_the_session(client):
+def test_refresh_reuse_of_a_rotated_token_burns_the_session(client, monkeypatch):
+    # Past the reload-race grace window (tested separately below).
+    from datetime import timedelta
+
+    monkeypatch.setattr("app.auth.service.REUSE_GRACE", timedelta(seconds=-1))
     email, password = register(client, "reuse@example.com")
     login(client, email, password)
     stale_refresh_cookie = client.cookies.get("refresh_token")
@@ -121,6 +125,35 @@ def test_refresh_reuse_of_a_rotated_token_burns_the_session(client):
     # confirming the rejection wasn't a one-shot "already rotated" check.
     refresh_again = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": stale_csrf_cookie})
     assert refresh_again.status_code == 401
+
+
+def test_a_reload_race_reusing_the_previous_token_keeps_the_session(client):
+    """Two overlapping reloads present the token that was just rotated away.
+    Within the grace window that continues the session instead of ending it."""
+    email, password = register(client, "race@example.com")
+    login(client, email, password)
+    stale_refresh = client.cookies.get("refresh_token")
+    stale_csrf = client.cookies.get("csrf_token")
+    assert client.post("/v1/auth/refresh", headers=csrf_headers(client)).status_code == 200
+    current_refresh = client.cookies.get("refresh_token")
+    current_csrf = client.cookies.get("csrf_token")
+
+    for _ in range(2):  # the stale token twice: both follow the chain to its tip
+        client.cookies.set("refresh_token", stale_refresh)
+        client.cookies.set("csrf_token", stale_csrf)
+        raced = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": stale_csrf})
+        assert raced.status_code == 200, raced.text
+        assert (
+            client.get("/v1/auth/me", headers=bearer(raced.json()["access_token"])).status_code
+            == 200
+        )
+
+    # The tab that had received the first rotation is still signed in too.
+    client.cookies.set("refresh_token", current_refresh)
+    client.cookies.set("csrf_token", current_csrf)
+    assert (
+        client.post("/v1/auth/refresh", headers={"X-CSRF-Token": current_csrf}).status_code == 200
+    )
 
 
 def test_logout_ends_the_session(client):

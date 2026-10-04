@@ -213,3 +213,13 @@ def test_routine_items_keep_a_starting_weight(client):
         headers=bearer(token),
     )
     assert bad.status_code == 422
+
+
+def test_a_template_reuses_one_of_several_same_named_routines(client):
+    # Routine names aren't unique; two "Push" routines used to 500 the create.
+    token = person(client, "plandup@example.com", "plandup")
+    for _ in range(2):
+        r = client.post("/v1/routines", json={"name": "Push", "items": []}, headers=bearer(token))
+        assert r.status_code == 201, r.text
+    plan = client.post("/v1/plans", json={"template_id": "plan-ppl-six"}, headers=bearer(token))
+    assert plan.status_code == 201, plan.text

@@ -278,9 +278,13 @@ async def _from_template(db: AsyncSession, user: User, template: dict) -> list[l
                     rt = TEMPLATE_BY_ID[tpl]
                     existing = (
                         await db.execute(
-                            select(Routine).where(
-                                Routine.user_id == user.id, Routine.name == rt["name"]
-                            )
+                            select(Routine)
+                            .where(Routine.user_id == user.id, Routine.name == rt["name"])
+                            # Names aren't unique (two plans can share a routine
+                            # template, or the person made one by hand), so take
+                            # the oldest rather than demanding exactly one.
+                            .order_by(Routine.created_at, Routine.id)
+                            .limit(1)
                         )
                     ).scalar_one_or_none()
                     if existing is None:

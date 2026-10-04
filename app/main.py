@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy.exc import IntegrityError
 
 from app.auth.router import CSRF_HEADER
 from app.cache import close_cache, init_cache
@@ -107,6 +109,29 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+
+    # Innermost, so an unhandled error still leaves through CORSMiddleware.
+    # Starlette's own 500 is produced outside it, without
+    # Access-Control-Allow-Origin, so the browser hid the response and the
+    # app reported every server bug as "you're offline".
+    @app.middleware("http")
+    async def server_error_as_json(request, call_next):
+        try:
+            return await call_next(request)
+        except IntegrityError:
+            # Most writes check-then-insert; a double tap can lose the race to
+            # a unique constraint. Nothing was written, so retrying is safe.
+            return JSONResponse(
+                {"detail": "That was saved twice at once. Try again."}, status_code=409
+            )
+        except Exception:
+            logging.getLogger("app").exception(
+                "Unhandled error on %s %s", request.method, request.url.path
+            )
+            return JSONResponse(
+                {"detail": "Something went wrong on our side. Try again in a moment."},
+                status_code=500,
+            )
 
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

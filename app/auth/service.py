@@ -288,16 +288,18 @@ async def issue_one_time_token(
     return raw
 
 
-async def _user_awaiting_code(db: AsyncSession, purpose: TokenPurpose, email: str) -> User | None:
-    """Which user a code for this purpose should be checked against.
+async def _users_awaiting_code(db: AsyncSession, purpose: TokenPurpose, email: str) -> list[User]:
+    """Which users a code for this purpose should be checked against.
 
     Email change is the one purpose where the code is sent to an address the
     account doesn't have yet, so it's looked up by pending_email rather than
     email - everything else looks up by the account's current address.
+    pending_email isn't unique (two accounts may ask for the same address,
+    and only one can win), so this can be more than one user.
     """
     column = User.pending_email if purpose is TokenPurpose.EMAIL_CHANGE else User.email
-    result = await db.execute(select(User).where(column == email))
-    return result.scalar_one_or_none()
+    result = await db.execute(select(User).where(column == email, User.is_active.is_(True)))
+    return list(result.scalars())
 
 
 async def consume_one_time_token(
@@ -318,30 +320,29 @@ async def consume_one_time_token(
         status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code"
     )
 
-    user = await _user_awaiting_code(db, purpose, email.lower())
-    if user is None or not user.is_active:
-        raise invalid
+    candidates: list[tuple[User, OneTimeToken]] = []
+    for user in await _users_awaiting_code(db, purpose, email.lower()):
+        result = await db.execute(
+            select(OneTimeToken)
+            .where(OneTimeToken.user_id == user.id)
+            .where(OneTimeToken.purpose == purpose)
+            .where(OneTimeToken.used_at.is_(None))
+            .where(OneTimeToken.expires_at > utcnow())
+            .order_by(OneTimeToken.created_at.desc())
+            .limit(1)
+        )
+        token = result.scalar_one_or_none()
+        if token is not None and token.attempts < MAX_OTP_ATTEMPTS:
+            candidates.append((user, token))
 
-    result = await db.execute(
-        select(OneTimeToken)
-        .where(OneTimeToken.user_id == user.id)
-        .where(OneTimeToken.purpose == purpose)
-        .where(OneTimeToken.used_at.is_(None))
-        .where(OneTimeToken.expires_at > utcnow())
-        .order_by(OneTimeToken.created_at.desc())
-        .limit(1)
-    )
-    token = result.scalar_one_or_none()
-
-    if token is None or token.attempts >= MAX_OTP_ATTEMPTS:
-        raise invalid
-
-    if token.token_hash != hash_one_time_token(raw_code):
+    digest = hash_one_time_token(raw_code)
+    for user, token in candidates:
+        if token.token_hash == digest:
+            token.used_at = utcnow()
+            return user
+    for _, token in candidates:
         token.attempts += 1
-        raise invalid
-
-    token.used_at = utcnow()
-    return user
+    raise invalid
 
 
 # ---------------------------------------------------------------------------

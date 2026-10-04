@@ -202,3 +202,25 @@ def test_coaching_overview_spans_groups_and_respects_consent(client):
 
     # Someone who coaches nobody gets an empty overview, not an error.
     assert client.get("/v1/coaching", headers=bearer(shy)).json() == {"groups": [], "people": []}
+
+
+def test_joining_a_plan_challenge_with_same_named_routines(client):
+    # Routine names aren't unique; a duplicate "Full body A" used to 500 the join.
+    a = person(client, "pcd-a@example.com", "pcda")
+    b = person(client, "pcd-b@example.com", "pcdb")
+    for _ in range(2):
+        client.post("/v1/routines", json={"name": "Full body A", "items": []}, headers=bearer(b))
+    today = datetime.now(UTC).date()
+    c = client.post(
+        "/v1/challenges",
+        json={
+            "title": "Lift together",
+            "kind": "plan_sessions",
+            "plan_template_id": "plan-strength-foundations",
+            "starts_on": today.isoformat(),
+            "ends_on": today.isoformat(),
+        },
+        headers=bearer(a),
+    ).json()
+    joined = client.post("/v1/challenges/join", json={"code": c["invite_code"]}, headers=bearer(b))
+    assert joined.status_code == 200, joined.text

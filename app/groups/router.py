@@ -441,7 +441,8 @@ async def coaching_overview(
             key = row.get("handle") or row.get("id")
             entry = people.setdefault(key, row | {"groups": []})
             entry["groups"].append({"id": str(group.id), "name": group.name})
-    today = date.today()
+    # The coach's own day, not the server's (UTC).
+    today = local_today((await get_profile(db, user.id)).timezone)
     rows = []
     for entry in people.values():
         last = max((r["date"] for r in entry.get("recent", [])), default=None)
@@ -479,11 +480,14 @@ async def coach_view(
         main = snap.chains[0].result
         running = (
             await db.execute(
-                select(TrainingPlan).where(
+                select(TrainingPlan)
+                .where(
                     TrainingPlan.user_id == m.user_id,
                     TrainingPlan.started_on.is_not(None),
                     TrainingPlan.finished_at.is_(None),
                 )
+                .order_by(TrainingPlan.started_on.desc(), TrainingPlan.id.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         plan_progress = None
@@ -708,9 +712,10 @@ async def _plan_score(db: AsyncSession, c: Challenge, user_id: UUID, profile: Pr
     week, the same forgiveness plans always give. A deleted copy scores 0."""
     plan = (
         await db.execute(
-            select(TrainingPlan).where(
-                TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id
-            )
+            select(TrainingPlan)
+            .where(TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id)
+            .order_by(TrainingPlan.created_at, TrainingPlan.id)
+            .limit(1)
         )
     ).scalar_one_or_none()
     if plan is None or plan.started_on is None:
@@ -728,9 +733,10 @@ async def _join_plan(db: AsyncSession, c: Challenge, user_id: UUID) -> None:
     profile = await get_profile(db, user_id)
     plan = (
         await db.execute(
-            select(TrainingPlan).where(
-                TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id
-            )
+            select(TrainingPlan)
+            .where(TrainingPlan.user_id == user_id, TrainingPlan.challenge_id == c.id)
+            .order_by(TrainingPlan.created_at, TrainingPlan.id)
+            .limit(1)
         )
     ).scalar_one_or_none()
     if plan is None:

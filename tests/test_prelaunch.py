@@ -199,3 +199,22 @@ def test_crash_reports_are_bounded(client, monkeypatch):
     assert client.post("/v1/client-errors", json={"message": "Error 0"}).json() == {
         "received": True
     }
+
+
+def test_two_accounts_asking_for_the_same_new_address(client, sent):
+    # pending_email isn't unique; a second pending claim used to 500 the confirm.
+    for who in ("first", "second"):
+        email, _ = register(client, f"{who}@example.com")
+        r = client.post(
+            "/v1/auth/change-email",
+            json={"password": PASSWORD, "new_email": "wanted@example.com"},
+            headers=bearer(login(client, email)),
+        )
+        assert r.status_code == 200
+    confirmed = client.post(
+        "/v1/auth/confirm-email-change",
+        json={"email": "wanted@example.com", "code": otp_code("confirm-email")},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    me = client.post("/v1/auth/login", json={"email": "wanted@example.com", "password": PASSWORD})
+    assert me.status_code == 200

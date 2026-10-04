@@ -366,11 +366,16 @@ async def active_plan(user: User = Depends(get_current_user), db: AsyncSession =
     profile = await get_profile(db, user.id)
     plan = (
         await db.execute(
-            select(TrainingPlan).where(
+            select(TrainingPlan)
+            .where(
                 TrainingPlan.user_id == user.id,
                 TrainingPlan.started_on.is_not(None),
                 TrainingPlan.finished_at.is_(None),
             )
+            # run_only keeps one running, but nothing in the schema does: two
+            # concurrent starts can leave two, which must not 500 every load.
+            .order_by(TrainingPlan.started_on.desc(), TrainingPlan.id.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
     if plan is None:
@@ -601,9 +606,11 @@ async def materialize(
                 if key not in made:
                     existing = (
                         await db.execute(
-                            select(Routine).where(
-                                Routine.user_id == user_id, func.lower(Routine.name) == key
-                            )
+                            select(Routine)
+                            .where(Routine.user_id == user_id, func.lower(Routine.name) == key)
+                            # Names aren't unique; see _from_template.
+                            .order_by(Routine.created_at, Routine.id)
+                            .limit(1)
                         )
                     ).scalar_one_or_none()
                     if existing is None:

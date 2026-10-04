@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.common.limits import enforce
+from app.common.net import is_safe_public_url
 from app.common.time import utcnow
 from app.database import get_db
 from app.notifications import unsubscribe
@@ -197,6 +198,9 @@ async def subscribe(
     p256dh, auth = body.keys.get("p256dh"), body.keys.get("auth")
     if not p256dh or not auth or len(p256dh) > 200 or len(auth) > 100:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Malformed subscription")
+    # The worker POSTs to this endpoint later; keep it off our own network.
+    if not is_safe_public_url(body.endpoint):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unusable push endpoint")
     count = (
         await db.execute(select(func.count()).where(PushSubscription.user_id == user.id))
     ).scalar_one()

@@ -11,6 +11,10 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
+# Named rather than inlined: ruff 0.16.5's formatter rewrites an inline
+# `except (A, B):` into the invalid `except A, B:` (see app/turnstile.py).
+_LOOKUP_ERRORS = (socket.gaierror, UnicodeError, OSError)
+
 
 def _is_public_ip(ip: str) -> bool:
     try:
@@ -37,7 +41,7 @@ def is_safe_public_url(url: str) -> bool:
         pass
     try:
         infos = socket.getaddrinfo(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, UnicodeError, OSError):
+    except _LOOKUP_ERRORS:
         return False
     if not infos:
         return False

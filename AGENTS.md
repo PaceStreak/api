@@ -41,12 +41,14 @@ upgrade head`, `alembic check` and `pytest`; all must pass.
 
 ## Deploying
 
-Push to `main`. CI publishes `ghcr.io/pacestreak/api:latest`; the GCP VM's
-`autodeploy.timer` (`deploy/gcp/`) rolls it out within about two minutes and
-migrations run on boot. Never change the VM's machine type or config (free
-tier). Check a rollout with
-`gcloud compute ssh pacestreak-api --zone us-central1-a` then
-`sudo docker service ps pacestreak_api`.
+Push to `main`. FastAPI Cloud's GitHub integration deploys the API (about two
+minutes; `fastapi cloud deployments list` shows the result). `migrate.yml`
+applies migrations when `alembic/**` changed, and it races the deploy, so keep
+every migration compatible with the code still running (add, switch, drop
+later). `publish.yml` pushes the image the five-minute `worker.yml` tick runs.
+The VM and GCP project are gone; do not reintroduce a host-specific deploy.
+Environment changes are `fastapi cloud env set NAME --value-stdin`, and the
+worker needs the same value in the `WORKER_ENV_JSON` secret.
 
 ## Commits
 

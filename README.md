@@ -425,11 +425,12 @@ stack, and only a gentle `/health` read against production.
 
 One API process saturates at about 40-45 requests a second; more users
 only add queueing. Saving a session is the costliest call because it
-recomputes streaks and stats. From India, about 340 ms of every production
-request is the round trip to us-central1; on the VM `/health` takes about
-45 ms. The p95 spikes are the e2-micro's shared burstable CPU running one
-process (`WEB_CONCURRENCY=1`, 384 MB). The planned larger server is the
-fix: re-run the script there with `WEB_CONCURRENCY` set to its cores.
+recomputes streaks and stats. The production numbers above were measured
+on the previous GCP e2-micro (about 340 ms of every request from India was
+the round trip to us-central1, and the p95 spikes were its shared burstable
+CPU). The API now runs on FastAPI Cloud's free plan (0.1 vCPU, bursting to
+0.5, scale-to-zero, us-east-1), so re-run `scripts/loadtest.py --health-only`
+against it before quoting any figure.
 
 ### Backups
 

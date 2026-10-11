@@ -8,7 +8,7 @@ How the API fits together and why. The feature list is in
 ```text
 www.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/web    the public site
 app.pacestreak.com     Cloudflare Pages (static)   →  PaceStreak/app    the product
-api.pacestreak.com     GCP VM via CF Tunnel        →  THIS REPOSITORY   the backend
+api.pacestreak.com     FastAPI Cloud (custom domain) →  THIS REPOSITORY   the backend
 blog.pacestreak.com    Cloudflare Pages (static)   →  PaceStreak/blog   the blog
 status.pacestreak.com  GitHub Pages (Upptime)      →  public status page
 ```
@@ -44,12 +44,15 @@ route is `/health` here.
 
 Hosting was then **decided on 27 September 2026**: `web`, `blog` and `status`
 need no server, but this API needs a container, Postgres and Redis around the
-clock. It runs on a free-tier GCP e2-micro as a single-node Docker Swarm
-(`compose.gcp.yaml`: api, worker, cloudflared), with **Neon** for Postgres,
-**Upstash** for Redis and a **Cloudflare Tunnel** for ingress, so the VM has no
-open port. CI only publishes `ghcr.io/pacestreak/api:latest`; the VM's own
-`autodeploy.timer` (`deploy/gcp/`) pulls it and rolls it out start-first, so
-no deploy credential exists anywhere outside the VM. The full record, with the
+clock. It first ran on a free-tier GCP e2-micro as a
+single-node Docker Swarm behind a Cloudflare Tunnel, and moved on **11 October
+2026** to **FastAPI Cloud** (free plan) after the VM's public IPv4 address
+turned out not to be free. The scheduler tick (`python -m app.worker --once`)
+runs from a scheduled GitHub Actions workflow instead of an always-on process.
+**Neon** (Postgres), **Upstash** (Redis), **R2** and **Brevo** are unchanged,
+which is what made the move cheap: the API holds no state. CI publishes
+`ghcr.io/pacestreak/api:latest` for the worker and for self-hosting; FastAPI
+Cloud deploys the API itself from the repository. The full record, with the
 options rejected, is in
 [`infra/DECISIONS.md`](https://github.com/PaceStreak/infra/blob/main/DECISIONS.md).
 `docker/entrypoint.sh` still reads `WEB_CONCURRENCY` and `FORWARDED_ALLOW_IPS`

@@ -4,9 +4,9 @@ Backend for [PaceStreak](https://www.pacestreak.com), a habit and streak
 tracker. **Live at `api.pacestreak.com`.**
 
 About 265 routes under `/v1`, a background worker, and a test suite of about
-285 tests that runs against real Postgres and Redis. It runs on a free-tier
-GCP e2-micro as a Docker Swarm stack behind a Cloudflare Tunnel, with Neon
-Postgres, Upstash Redis and Brevo for mail; see
+285 tests that runs against real Postgres and Redis. It runs on FastAPI
+Cloud's free plan, with a scheduled GitHub Actions workflow as the worker, Neon
+Postgres, Upstash Redis, Cloudflare R2 and Brevo for mail; see
 [ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
 
 Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE) — anyone
@@ -17,11 +17,11 @@ their users. That is the point of AGPL over GPL for a hosted service.
 
 | | |
 | --- | --- |
-| Stack | FastAPI, PostgreSQL, Redis; Docker Compose locally, Docker Swarm in production |
-| Hostname | `api.pacestreak.com`, through a Cloudflare Tunnel (no open port) |
+| Stack | FastAPI, PostgreSQL, Redis; Docker Compose locally, FastAPI Cloud in production |
+| Hostname | `api.pacestreak.com`, a FastAPI Cloud custom domain (DNS-only CNAME in Cloudflare) |
 | Consumers | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
 | Tests | ~260, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
-| Deploys | Push to `main` → GHCR image → the VM's `autodeploy.timer` rolls it out within ~2 minutes |
+| Deploys | Push to `main` → FastAPI Cloud's GitHub integration deploys the API; `migrate.yml` applies migrations; `publish.yml` builds the image the worker runs |
 | Monitoring | `/health` on [`status.pacestreak.com`](https://status.pacestreak.com) |
 
 ## Quick start
@@ -345,17 +345,23 @@ from an empty database and a flushed Redis.
 
 ## Production
 
-**Where it runs now:** GCP project `pacestreak`, VM `pacestreak-api`
-(us-central1-a, e2-micro, free tier: never change its config). The Swarm
-stack `pacestreak` (api, worker, cloudflared) is defined in `compose.gcp.yaml`;
-`deploy/gcp/autodeploy.{sh,service,timer}` pull `ghcr.io/pacestreak/api:latest`
-every two minutes and roll out a new digest start-first, and migrations run on
-boot (`RUN_MIGRATIONS=1`). Nothing in GitHub Actions touches the VM. To look:
+**Where it runs now:**
 
-```bash
-gcloud compute ssh pacestreak-api --zone us-central1-a
-sudo docker service ps pacestreak_api
-```
+- **API:** FastAPI Cloud (app `pacestreak-api`, team `PaceStreak`), deployed by
+  its GitHub integration on every push to `main`. The entrypoint comes from
+  `[tool.fastapi]` in `pyproject.toml`; configuration is the app's environment
+  variables there (`fastapi cloud env list`). There is no migration step on
+  boot.
+- **Migrations:** `.github/workflows/migrate.yml` runs `alembic upgrade head`
+  against Neon when `alembic/**` changes on `main` (or on manual dispatch). It
+  races the deploy by about a minute, so a migration must stay compatible with
+  the code that is still running: add first, switch the code, drop later.
+- **Worker:** `.github/workflows/worker.yml` runs `python -m app.worker --once`
+  from `ghcr.io/pacestreak/api:latest` every five minutes. Its environment is
+  the `WORKER_ENV_JSON` secret, and GitHub disables schedules after 60 days
+  without repository activity.
+- **Secrets:** the same values live in FastAPI Cloud's environment and in the
+  `WORKER_ENV_JSON` secret; rotate both together.
 
 The images stay host-agnostic: `compose.prod.yaml` runs the same stack on
 any Docker host behind a TLS-terminating proxy in front of `127.0.0.1:8000`:

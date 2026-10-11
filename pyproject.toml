@@ -57,3 +57,9 @@ testpaths = ["tests"]
 
 [tool.ty.environment]
 python-version = "3.14"
+
+[tool.fastapi]
+# No app/__init__.py, so the CLI cannot infer the package path on its own
+# (FastAPI Cloud ran app/main.py as a script and every `from app...` failed).
+# The Docker entrypoint passes the same value with --entrypoint.
+entrypoint = "app.main:app"

@@ -17,7 +17,8 @@ export interface Violation {
   detail: string;
 }
 
-const IMPORT_RE = /(?:^|[\s;])(?:import|export)\s[^'"]*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']/gm;
+const IMPORT_RE =
+  /(?:^|[\s;])(?:import|export)\s[^'"]*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']/gm;
 const RAW_DB_RE = /\benv\s*\.\s*DB\b|\[\s*["']DB["']\s*\]/;
 const PURE_DIRS = ["lib", "db", "catalog", "heavy"];
 
@@ -63,7 +64,12 @@ export function checkTree(root: string): Violation[] {
       const line = lineOf(text, m.index + (m[0].length - m[0].trimStart().length));
       const where = path.relative(root, file);
       if (PURE_DIRS.includes(area)) {
-        violations.push({ file: where, line, rule: "pure-imports-module", detail: `${area}/ imports ${spec}` });
+        violations.push({
+          file: where,
+          line,
+          rule: "pure-imports-module",
+          detail: `${area}/ imports ${spec}`,
+        });
       } else if (ownModule !== undefined && targetModule !== ownModule) {
         const isService = targetRel.length === 2 && targetRel[1] === "service.ts";
         if (!isService) {

@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: F1 full Drizzle schema + 0000_init.sql (F0 scaffold landed).
+Next step: F2 core pipeline (env, ctx, errors, CORS, validation hook, AuthedBatch, helpers); F0 and F1 landed.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -9,8 +9,8 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 
 | Unit | State |
 | --- | --- |
-| F0 | done |
-| F1 F2 F3 | in progress |
+| F0 F1 | done |
+| F2 F3 | in progress |
 | P1-CRYPTO P1-GUARD P1-MAIL P1-PUSH P1-R2 P1-JOBS P1-HEAVY P1-CATALOG | todo |
 | AUTH NOTIF OPS-ADMIN | todo |
 | GAME | todo |
@@ -48,6 +48,25 @@ Recorded by the implementing agent; each says why.
    not what this branch ships. Runs from the pinned container image, no licence key needed.
 8. **The Python tree is deleted on `next`**; `docs/rewrite/python-tests/` keeps a copy of the pytest suite for the
    name-parity script and as porting reference. Old code: `git show main:<path>`.
+
+9. **Schema (F1)**: 69 tables = the 60 ported + `sessions`, `rate_counters`, `job_leases`, `import_jobs`,
+   `export_jobs`, `stat_days`, `stat_weeks`, `records_best`, `sync_seq`. Column names are snake_case through Drizzle's
+   `casing: "snake_case"` (set once in `drizzle.config.ts` and `src/db/client.ts`).
+10. **No `WITHOUT ROWID`**: drizzle-kit cannot emit it, and hand-editing generated migrations would break the drift
+    check. `stat_days`, `stat_weeks`, `records_best` are rowid tables with a composite PRIMARY KEY (one extra
+    autoindex per table; lookups still use the PK index).
+11. **`user_stats.rev` is both the recompute concurrency token and the ETag version** (DESIGN named two columns
+    that always change together).
+12. **Auth tables are redesigned, not ported** (no data to keep): `refresh_tokens` hangs off `sessions`
+    (cascade), `one_time_tokens.code_hmac` and `recovery_codes.code_hmac` hold HMACs, `users.totp_secret` holds
+    AES-GCM `v1.<iv>.<ct>`.
+13. **`sync_seq` and `job_leases` are self-seeding UPSERTs**; no seed migration. `stat_days`/`stat_weeks`
+    `chain_id` is a chain id or `""` for the whole-life aggregate, so it is not a foreign key.
+14. **Indexes**: per-user name lookups use composite `(user_id, name_fold)` indexes instead of a lone `user_id`
+    index; a schema test asserts every foreign key column leads some index and every fold column (except
+    `journal_days.note_fold`, which is only searched with `contains`) is indexed.
+15. **D1 refuses pragma table-valued functions** (`pragma_foreign_key_list(x)` in a join gives `SQLITE_AUTH`);
+    plain `PRAGMA foreign_key_list("x")` statements work, so the schema tests batch one per table.
 
 ## Test counts (vs 285 pytest)
 

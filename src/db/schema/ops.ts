@@ -162,3 +162,14 @@ export const exportJobs = sqliteTable(
     enumCheck("ck_export_jobs_status", t.status, JOB_STATUSES),
   ],
 );
+
+/**
+ * Never holds a row. A guarded write batch starts with
+ * `INSERT INTO batch_guards (session, rate_limit) SELECT NULL, 0 WHERE NOT EXISTS (<live session>)`: when the
+ * session is gone the NOT NULL constraint fails, and D1 rolls back the whole batch atomically. The error message
+ * names the column, so `AuthedBatch` maps it to the right 401/429 (src/db/batch.ts).
+ */
+export const batchGuards = sqliteTable("batch_guards", {
+  session: integer().notNull(),
+  rateLimit: integer().notNull(),
+});

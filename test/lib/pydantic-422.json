@@ -1,0 +1,162 @@
+{
+  "missing": {
+    "type": "missing",
+    "loc": ["body", "name"],
+    "msg": "Field required"
+  },
+  "string_too_short_1": {
+    "type": "string_too_short",
+    "loc": ["body", "name"],
+    "msg": "String should have at least 1 character"
+  },
+  "string_too_short_3": {
+    "type": "string_too_short",
+    "loc": ["body", "name"],
+    "msg": "String should have at least 3 characters"
+  },
+  "string_too_long_1": {
+    "type": "string_too_long",
+    "loc": ["body", "name"],
+    "msg": "String should have at most 1 character"
+  },
+  "string_too_long_5": {
+    "type": "string_too_long",
+    "loc": ["body", "name"],
+    "msg": "String should have at most 5 characters"
+  },
+  "ge": {
+    "type": "greater_than_equal",
+    "loc": ["body", "n"],
+    "msg": "Input should be greater than or equal to 1"
+  },
+  "gt": {
+    "type": "greater_than",
+    "loc": ["body", "n"],
+    "msg": "Input should be greater than 0"
+  },
+  "le": {
+    "type": "less_than_equal",
+    "loc": ["body", "n"],
+    "msg": "Input should be less than or equal to 10"
+  },
+  "lt": {
+    "type": "less_than",
+    "loc": ["body", "n"],
+    "msg": "Input should be less than 10"
+  },
+  "int_from_float": {
+    "type": "int_from_float",
+    "loc": ["body", "n"],
+    "msg": "Input should be a valid integer, got a number with a fractional part"
+  },
+  "int_parsing": {
+    "type": "int_parsing",
+    "loc": ["body", "n"],
+    "msg": "Input should be a valid integer, unable to parse string as an integer"
+  },
+  "int_type": {
+    "type": "int_type",
+    "loc": ["body", "n"],
+    "msg": "Input should be a valid integer"
+  },
+  "float_parsing": {
+    "type": "float_parsing",
+    "loc": ["body", "x"],
+    "msg": "Input should be a valid number, unable to parse string as a number"
+  },
+  "float_type": {
+    "type": "float_type",
+    "loc": ["body", "x"],
+    "msg": "Input should be a valid number"
+  },
+  "bool_parsing": {
+    "type": "bool_parsing",
+    "loc": ["body", "b"],
+    "msg": "Input should be a valid boolean, unable to interpret input"
+  },
+  "bool_type": {
+    "type": "bool_type",
+    "loc": ["body", "b"],
+    "msg": "Input should be a valid boolean"
+  },
+  "string_type": {
+    "type": "string_type",
+    "loc": ["body", "name"],
+    "msg": "Input should be a valid string"
+  },
+  "list_type": {
+    "type": "list_type",
+    "loc": ["body", "items"],
+    "msg": "Input should be a valid list"
+  },
+  "list_item": {
+    "type": "int_parsing",
+    "loc": ["body", "items", 0],
+    "msg": "Input should be a valid integer, unable to parse string as an integer"
+  },
+  "too_short": {
+    "type": "too_short",
+    "loc": ["body", "items"],
+    "msg": "List should have at least 1 item after validation, not 0"
+  },
+  "too_long": {
+    "type": "too_long",
+    "loc": ["body", "items"],
+    "msg": "List should have at most 2 items after validation, not 3"
+  },
+  "literal_3": {
+    "type": "literal_error",
+    "loc": ["body", "kind"],
+    "msg": "Input should be 'a', 'b' or 'c'"
+  },
+  "literal_2": {
+    "type": "literal_error",
+    "loc": ["body", "kind"],
+    "msg": "Input should be 'a' or 'b'"
+  },
+  "literal_num": {
+    "type": "literal_error",
+    "loc": ["body", "n"],
+    "msg": "Input should be 1 or 2"
+  },
+  "email_no_at": {
+    "type": "value_error",
+    "loc": ["body", "email"],
+    "msg": "value is not a valid email address: An email address must have an @-sign."
+  },
+  "email_no_local": {
+    "type": "value_error",
+    "loc": ["body", "email"],
+    "msg": "value is not a valid email address: There must be something before the @-sign."
+  },
+  "email_no_period": {
+    "type": "value_error",
+    "loc": ["body", "email"],
+    "msg": "value is not a valid email address: The part after the @-sign is not valid. It should have a period."
+  },
+  "custom": {
+    "type": "value_error",
+    "loc": ["body", "name"],
+    "msg": "Value error, bad thing"
+  },
+  "nested_missing": {
+    "type": "missing",
+    "loc": ["body", "inner", "x"],
+    "msg": "Field required"
+  },
+  "model_type": {
+    "type": "model_type",
+    "loc": ["body"],
+    "msg": "Input should be a valid dictionary or instance of Name"
+  },
+  "multiple_of": {
+    "type": "multiple_of",
+    "loc": ["body", "n"],
+    "msg": "Input should be a multiple of 5"
+  },
+  "pattern": {
+    "type": "string_pattern_mismatch",
+    "loc": ["body", "code"],
+    "msg": "String should match pattern '^\\d+$'"
+  }
+}

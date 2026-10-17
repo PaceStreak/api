@@ -565,6 +565,11 @@ CREATE INDEX `ix_auth_failures_created` ON `auth_failures` (`created_at`);--> st
 CREATE INDEX `ix_auth_failures_ip_address` ON `auth_failures` (`ip_address`);--> statement-breakpoint
 CREATE INDEX `ix_auth_failures_email_hash` ON `auth_failures` (`email_hash`);--> statement-breakpoint
 CREATE INDEX `ix_auth_failures_user_id` ON `auth_failures` (`user_id`);--> statement-breakpoint
+CREATE TABLE `batch_guards` (
+	`session` integer NOT NULL,
+	`rate_limit` integer NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `client_errors` (
 	`id` text PRIMARY KEY NOT NULL,
 	`created_at` integer NOT NULL,

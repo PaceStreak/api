@@ -46,8 +46,8 @@ describe("schema", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name",
     );
     expect(rows.map((r) => r.name)).toEqual(tables);
-    // 60 tables ported from Postgres plus the 9 new ones from DESIGN.md §4.
-    expect(tables).toHaveLength(69);
+    // 60 tables ported from Postgres plus the 10 new ones from DESIGN.md §4.
+    expect(tables).toHaveLength(70);
   });
 
   it("fk-users.gen.ts equals pragma_foreign_key_list", async () => {

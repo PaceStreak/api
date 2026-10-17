@@ -393,12 +393,14 @@ describe("auth (rewrite)", () => {
   });
 
   it("per-IP limit on login answers slowapi's 429", async () => {
+    // 21 calls cross at most one fixed-window boundary, so one window sees at least 11 of them.
     const client = new Client();
-    let last: Response | undefined;
-    for (let i = 0; i < 11; i++) {
-      last = await client.call("/v1/auth/login", { json: { email: uniqueEmail(), password: PASSWORD } });
+    let limited: Response | undefined;
+    for (let i = 0; i < 21 && limited === undefined; i++) {
+      const res = await client.call("/v1/auth/login", { json: { email: uniqueEmail(), password: PASSWORD } });
+      if (res.status === 429) limited = res;
     }
-    expect(last?.status).toBe(429);
-    expect(await last?.json()).toEqual({ error: "Rate limit exceeded: 10 per 1 minute" });
+    expect(limited?.status).toBe(429);
+    expect(await limited?.json()).toEqual({ error: "Rate limit exceeded: 10 per 1 minute" });
   });
 });

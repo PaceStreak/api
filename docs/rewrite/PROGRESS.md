@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: AUTH unit (then NOTIF + OPS-ADMIN in parallel, then GAME). P1 libraries are merged; module agents read docs/rewrite/CONVENTIONS.md.
+Next step: NOTIF + OPS-ADMIN, then GAME. AUTH is done; module agents read docs/rewrite/CONVENTIONS.md and mount behind `auth()` from src/modules/auth/service.ts.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -11,7 +11,7 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | --- | --- |
 | F0 F1 F2 F3 | done |
 | P1-CRYPTO P1-GUARD P1-MAIL P1-PUSH P1-R2 P1-JOBS P1-HEAVY P1-CATALOG | done (328 tests on next) |
-| AUTH | in progress |
+| AUTH | done (29 routes; test_auth 20 + test_passkeys 10 ported) |
 | NOTIF OPS-ADMIN | todo |
 | GAME | todo |
 | PROFILE-ACCOUNT TRAINING HABITS NUTRITION SOCIAL | todo |
@@ -110,6 +110,7 @@ Recorded by the implementing agent; each says why.
 | Date | vitest tests | pytest names ported | dropped | missing |
 | --- | --- | --- | --- | --- |
 | 2026-10-18 (foundation) | 109 | 2 | 0 | 291 |
+| 2026-10-18 (AUTH) | 366 | 52 | 0 | 241 |
 
 ## Owner to-do
 
@@ -126,3 +127,29 @@ Recorded by the implementing agent; each says why.
 - Jobs: one lease per trigger (240 s), shared `scheduler` heartbeat; stale threshold 900 s (was 360 s).
 - Heavy: all readers resumable from any byte offset with JSON state; FIT errors keep partial data.
 - Catalog: data generated from Python modules and verified deep-equal.
+
+### AUTH decisions (2026-10-18)
+- **`abortUnless(db, cond)`** (src/db/batch.ts) + `batch_guards.cond` column (migration 0001): a guard statement placed
+  before the writes it protects in one atomic batch. D1 runs a batch serially, so check-then-act is race free. Used for
+  single-use email codes, WebAuthn challenges, the TOTP replay step, recovery codes and refresh rotation;
+  `isCondAbort(err)` maps it to the route's own 400/401.
+- **Refresh**: one read (presented token + session + user, and the session's live tip), one guarded write. Inside the
+  30 s grace a used token rotates from the live tip; after it the session is burned. A lost concurrent rotation retries
+  once through the grace path (4 round trips, rare).
+- **Role gates**: `moderator()` / `admin()` pass a check to `AuthedBatch`, applied to the auth row of every `read`
+  (404 "Not found", as the Python admin router). Role-gated handlers must read before they write.
+- **`optionalAuth()`** sets `c.var.authed` for a well-formed token; the handler treats a 401 from its read as anonymous.
+- **Login failures are recorded inline** (one extra write on the failure path only), not deferred: keeps the round-trip
+  header deterministic and slows guessing slightly.
+- **New-device notification**: the inbox row is written in the sign-in batch; delivery is `dispatchDeliver` via
+  `ctx.defer` (NOTIF registers the `deliver` consumer).
+- **Codes**: email codes HMAC(PEPPER, `purpose|user|code`); recovery codes HMAC(PEPPER, `recovery|user|normalised`)
+  (hyphen still significant, Python parity); TOTP secrets AES-GCM with AAD `totp|<user id>`.
+- **Passkeys**: `generateRegistrationOptions` with residentKey/UV required and simplewebauthn's default algorithms
+  (-8, -7, -257) instead of py_webauthn's longer list; the app parses options generically. Passkey sign-in spends 3
+  round trips (challenge + credential read, history read, write); not on a budget.
+- **pending_email** got a partial index (confirm-email-change looks users up by it).
+- **Tests**: `api()` sends a random `CF-Connecting-IP` per call so the real per-IP limits never couple tests; the
+  `Client` fixture is a cookie jar; codes are read from the console mailer (same isolate). Bundle 336 KiB gz of 400.
+- Left for other units: `/v1/me/security-events` (PROFILE-ACCOUNT), challenge sweep job wiring
+  (`sweepExpiredChallenges` exported, JOBS-12), Turnstile route tests beyond the lib-level port.

@@ -1,0 +1,44 @@
+{
+  "name": "pacestreak-api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "check:deps": "tsx scripts/check-module-deps.ts",
+    "check:parity": "tsx scripts/test-parity.ts",
+    "build": "wrangler deploy --dry-run --outdir dist && tsx scripts/check-bundle-size.ts dist",
+    "types": "wrangler types --env-file .dev.vars.example",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
+    "db:fk-users": "tsx scripts/gen-fk-users.ts",
+    "seed:heavy": "tsx scripts/seed-heavy.ts",
+    "types:check": "wrangler types --env-file .dev.vars.example --check"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "0.9.1",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.13",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@cloudflare/vitest-plugin": "1.4.4",
+    "@types/node": "26.6.5",
+    "drizzle-kit": "0.31.11",
+    "fast-check": "4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "wrangler": "4.151.1"
+  }
+}

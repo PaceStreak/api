@@ -1,0 +1,122 @@
+// PaceStreak API on Cloudflare Workers. DESIGN.md §2, adapted by OWNER-DECISIONS.md
+// (Workers Paid plan, Cloudflare Email Service, D1 in apac).
+//
+// Resource ids below are placeholders until the cutover unit creates the resources:
+//   wrangler d1 create pacestreak --location apac
+//   wrangler d1 create pacestreak-staging --location apac
+// D1 has no location field in this file: the hint is given once, at creation.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pacestreak-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "api.pacestreak.com", "custom_domain": true }],
+  "placement": { "mode": "smart" },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "limits": { "cpu_ms": 30000 },
+  "upload_source_maps": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pacestreak",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "pacestreak-photos" },
+    { "binding": "STAGING", "bucket_name": "pacestreak-staging" }
+  ],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "pacestreak-jobs" }],
+    "consumers": [
+      {
+        "queue": "pacestreak-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 5,
+        "dead_letter_queue": "pacestreak-jobs-dlq"
+      }
+    ]
+  },
+  "send_email": [{ "name": "EMAIL" }],
+  "ratelimits": [
+    { "name": "RL_SIGNUP", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
+    { "name": "RL_LOGIN", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_MFA", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_PWMAIL", "namespace_id": "1004", "simple": { "limit": 3, "period": 60 } },
+    { "name": "RL_30", "namespace_id": "1005", "simple": { "limit": 30, "period": 60 } },
+    { "name": "RL_SEARCH", "namespace_id": "1006", "simple": { "limit": 60, "period": 60 } }
+  ],
+  "triggers": { "crons": ["*/5 * * * *", "2,17,32,47 * * * *", "23 3 * * *"] },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "MAILER": "cloudflare",
+    "COOKIE_DOMAIN": "pacestreak.com",
+    "CORS_ORIGINS": "https://app.pacestreak.com",
+    "FRONTEND_URL": "https://app.pacestreak.com",
+    "PUBLIC_API_URL": "https://api.pacestreak.com",
+    "R2_ACCOUNT_HOST": "fef2509f0377fba1f3201a655090ec0a.r2.cloudflarestorage.com",
+    "MAIL_FROM": "PaceStreak <hello@pacestreak.com>",
+    "VAPID_SUBJECT": "mailto:hello@pacestreak.com",
+    "PUSH_HOST_ALLOWLIST": "fcm.googleapis.com,push.apple.com,push.services.mozilla.com,notify.windows.com,push.vivaldi.net"
+  },
+  "env": {
+    "staging": {
+      "name": "pacestreak-api-staging",
+      "workers_dev": true,
+      "preview_urls": true,
+      "routes": [],
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
+      "limits": { "cpu_ms": 30000 },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "pacestreak-staging",
+          "database_id": "00000000-0000-0000-0000-000000000001",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "PHOTOS", "bucket_name": "pacestreak-photos-staging" },
+        { "binding": "STAGING", "bucket_name": "pacestreak-staging-staging" }
+      ],
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "pacestreak-jobs-staging" }],
+        "consumers": [
+          {
+            "queue": "pacestreak-jobs-staging",
+            "max_batch_size": 10,
+            "max_batch_timeout": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "pacestreak-jobs-staging-dlq"
+          }
+        ]
+      },
+      "send_email": [{ "name": "EMAIL" }],
+      "ratelimits": [
+        { "name": "RL_SIGNUP", "namespace_id": "2001", "simple": { "limit": 5, "period": 60 } },
+        { "name": "RL_LOGIN", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } },
+        { "name": "RL_MFA", "namespace_id": "2003", "simple": { "limit": 10, "period": 60 } },
+        { "name": "RL_PWMAIL", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } },
+        { "name": "RL_30", "namespace_id": "2005", "simple": { "limit": 30, "period": 60 } },
+        { "name": "RL_SEARCH", "namespace_id": "2006", "simple": { "limit": 60, "period": 60 } }
+      ],
+      "triggers": { "crons": ["*/5 * * * *", "2,17,32,47 * * * *", "23 3 * * *"] },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "MAILER": "cloudflare",
+        "COOKIE_DOMAIN": "",
+        "CORS_ORIGINS": "http://localhost:5173,https://staging.pacestreak-app.pages.dev",
+        "FRONTEND_URL": "https://staging.pacestreak-app.pages.dev",
+        "PUBLIC_API_URL": "https://pacestreak-api-staging.workers.dev",
+        "R2_ACCOUNT_HOST": "fef2509f0377fba1f3201a655090ec0a.r2.cloudflarestorage.com",
+        "MAIL_FROM": "PaceStreak <hello@pacestreak.com>",
+        "VAPID_SUBJECT": "mailto:hello@pacestreak.com",
+        "PUSH_HOST_ALLOWLIST": "fcm.googleapis.com,push.apple.com,push.services.mozilla.com,notify.windows.com,push.vivaldi.net"
+      }
+    }
+  }
+}

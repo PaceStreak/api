@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "14 days",
+  "internalChecksFilter": "strict",
+  "schedule": ["before 6am on monday"],
+  "timezone": "Asia/Kolkata",
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
+  "packageRules": [
+    { "matchUpdateTypes": ["minor", "patch"], "groupName": "weekly minor and patch" },
+    {
+      "matchPackageNames": ["wrangler", "@cloudflare/vitest-plugin", "vitest"],
+      "groupName": "workers toolchain"
+    },
+    { "matchPackageNames": ["drizzle-orm", "drizzle-kit"], "groupName": "drizzle" }
+  ]
+}

@@ -1,0 +1,16 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Names only: never commit values.
+# Generate local values with: pnpm tsx scripts/dev-secrets.ts
+ENVIRONMENT=development
+MAILER=console
+COOKIE_DOMAIN=
+CORS_ORIGINS=http://localhost:5173
+FRONTEND_URL=http://localhost:5173
+PUBLIC_API_URL=http://localhost:8787
+JWT_KEYS=
+PEPPER=
+DATA_KEY=
+VAPID_PRIVATE_JWK=
+VAPID_PUBLIC_KEY=
+TURNSTILE_SECRET_KEY=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=

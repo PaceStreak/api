@@ -1,12 +1,11 @@
-# Fails a pull request before it reaches main. It does not deploy anything -
-# that's FastAPI Cloud's GitHub integration (the API), migrate.yml (the
-# schema) and publish.yml (the image the worker runs).
+# Fails a pull request before it reaches main. It deploys nothing and needs no secrets:
+# deploys are Workers Builds' job (DESIGN.md §16).
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, next]
 
 permissions:
   contents: read
@@ -16,62 +15,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          python-version: "3.14"
-      - run: uv sync --locked
-      - run: uv run ruff check app tests
-      - run: uv run ruff format --check app tests
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Runtime types are current
+        run: pnpm types:check
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint and format
+        run: pnpm biome ci .
+      - name: Module boundaries
+        run: pnpm check:deps
+      - name: Migrations match the schema
+        run: |
+          pnpm drizzle-kit check
+          pnpm drizzle-kit generate --name ci-drift-probe
+          git diff --exit-code -- migrations || { echo "schema changed without a migration"; exit 1; }
+          test -z "$(git status --porcelain -- migrations)" || { echo "schema changed without a migration"; exit 1; }
+          pnpm db:fk-users
+          git diff --exit-code -- src/db/fk-users.gen.ts
+      - name: Tests
+        run: pnpm vitest run
+      - name: Ported test names (pytest parity)
+        run: pnpm check:parity
+      - name: Bundle builds within budget
+        run: pnpm build
 
-  test:
-    runs-on: ubuntu-latest
-    # The suite runs against real Postgres and Redis; nothing is mocked.
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: pacestreak
-          POSTGRES_PASSWORD: pacestreak
-          POSTGRES_DB: pacestreak_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U pacestreak -d pacestreak_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: redis:8-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 3s --health-retries 10
-    env:
-      DATABASE_URL: postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test
-      REDIS_URL: redis://localhost:6379/0
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.14"
-      - run: uv sync --locked
-      - name: Generate throwaway signing keys
-        run: make keys vapid
-      - run: uv run alembic upgrade head
-      - name: Migrations match the models
-        run: uv run alembic check
-      - run: uv run pytest -q
-
-  image:
+  secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - name: Production image builds
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - uses: actions/checkout@v7
+      - name: gitleaks (working tree)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            dir /repo --redact --no-banner --exit-code 1

@@ -1,5 +1,10 @@
 # PaceStreak API
 
+> **Branch `next`** holds the TypeScript rewrite (Hono on Cloudflare Workers,
+> D1, Drizzle, Zod). The Python service described below still runs from `main`
+> until cutover. See [`AGENTS.md`](./AGENTS.md) for commands and
+> [`docs/rewrite/`](./docs/rewrite/) for the design.
+
 Backend for [PaceStreak](https://www.pacestreak.com), a habit and streak
 tracker. **Live at `api.pacestreak.com`.**
 

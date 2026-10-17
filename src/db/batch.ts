@@ -9,7 +9,7 @@
  * - `withFold` / `withFoldPatch`: the only way to write `*_fold` columns.
  * - `toWire(ms)`: the only timestamp format on the wire.
  */
-import { and, eq, getTableName, sql } from "drizzle-orm";
+import { and, eq, getTableName, type SQL, sql } from "drizzle-orm";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Ctx } from "../ctx.ts";
@@ -134,6 +134,21 @@ export function rateLimitGuard(key: string, limit: number) {
     SELECT 0, NULL WHERE (SELECT count FROM rate_counters WHERE key = ${key}) > ${limit}`;
 }
 
+/**
+ * Aborts the whole batch unless `cond` holds when this statement runs. D1 runs a batch serially and atomically, so
+ * a guard placed before the writes it protects makes check-then-act race free (single-use codes, challenges,
+ * TOTP replay). Catch the abort with `isCondAbort(err)`.
+ */
+export function abortUnless(db: Db, cond: SQL) {
+  return db.run(
+    sql`INSERT INTO batch_guards (session, rate_limit, cond) SELECT 0, 0, NULL WHERE NOT (${cond})`,
+  );
+}
+
+export function isCondAbort(err: unknown): boolean {
+  return constraintMessage(err)?.includes("batch_guards.cond") ?? false;
+}
+
 /** Maps a guard abort to its HTTP error; any other error passes through unchanged. */
 export function guardError(err: unknown): unknown {
   const m = constraintMessage(err);
@@ -143,9 +158,14 @@ export function guardError(err: unknown): unknown {
 }
 
 export class AuthedBatch {
+  /**
+   * `require` runs on the auth row of every `read` (role gates: `moderator()`, `admin()`). Handlers behind a role
+   * gate must read before they write, which every admin route does anyway.
+   */
   constructor(
     private readonly db: Db,
     readonly principal: Principal,
+    private readonly require?: (user: AuthUser) => void,
   ) {}
 
   get userId(): string {
@@ -156,7 +176,14 @@ export class AuthedBatch {
   async read<T extends readonly Stmt[]>(...stmts: T): Promise<[AuthUser, ...BatchResponse<T>]> {
     const all = [authStatement(this.db, this.principal), ...stmts] as const;
     const [authRows, ...rest] = (await runBatch(this.db, all)) as unknown as [AuthRow[], ...BatchResponse<T>];
-    return [checkAuth(authRows, this.principal), ...rest];
+    const user = checkAuth(authRows, this.principal);
+    this.require?.(user);
+    return [user, ...rest];
+  }
+
+  /** The session guard `write` prepends, for callers that must assemble their own batch. */
+  guardStatement() {
+    return this.db.run(sessionGuard(this.principal));
   }
 
   /** One atomic round trip, aborted with 401 if the session is no longer live. Results exclude the guard. */

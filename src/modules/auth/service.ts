@@ -1,0 +1,955 @@
+/**
+ * Auth business logic (spec/auth.md §3-§4, DESIGN.md §6). The only file other modules may import.
+ *
+ * Round trips: password sign-in and refresh are one read batch plus one write batch. Check-then-act steps
+ * (single-use codes, challenges, TOTP replay, rotation) are made race free by an `abortUnless` guard placed
+ * before the writes in the same atomic batch.
+ */
+import type { Ctx } from "../../ctx.ts";
+import { type AuthedBatch, abortUnless, isCondAbort, runBatch, type Stmt, toWire } from "../../db/batch.ts";
+import type { OtpPurpose } from "../../db/schema/index.ts";
+import { SETTINGS } from "../../env.ts";
+import { dispatchDeliver } from "../../jobs/dispatch.ts";
+import { decryptString, encryptString } from "../../lib/crypto/aesgcm.ts";
+import { timingSafeEqualStr } from "../../lib/crypto/consttime.ts";
+import { hmacSha256Hex, sha256Hex } from "../../lib/crypto/hmac.ts";
+import { dummyPasswordHash, hashPassword, needsRehash, verifyPassword } from "../../lib/crypto/pbkdf2.ts";
+import { findTotpStep, generateTotpSecret, totpProvisioningUri } from "../../lib/crypto/totp.ts";
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  HttpError,
+  isConstraintError,
+  unauthorized,
+} from "../../lib/errors.ts";
+import { createMailer } from "../../lib/mailer/index.ts";
+import {
+  sendEmailChangedNotice,
+  sendEmailChangeEmail,
+  sendPasswordChangedEmail,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../../lib/mailer/templates.ts";
+import { verifyTurnstile } from "../../lib/turnstile.ts";
+import { uuid7 } from "../../lib/uuid7.ts";
+import * as repo from "./repo.ts";
+import {
+  ACCESS_EXPIRES_IN,
+  accessToken,
+  MFA_EXPIRES_IN,
+  mfaToken,
+  newCsrfToken,
+  newRefreshToken,
+  readToken,
+} from "./tokens.ts";
+
+export { admin, auth, moderator, optionalAuth } from "./middleware.ts";
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+export const REUSE_GRACE_MS = 30_000;
+const INVALID_CODE = "Invalid or expired code";
+const BAD_PASSWORD = "Password is incorrect";
+const SUSPICIOUS = "Refresh token has been revoked due to suspicious activity.";
+
+/** Who is asking: descriptive only, never an authorisation input. */
+export interface Meta {
+  ip: string | null;
+  userAgent: string | null;
+}
+
+export interface TokenPair {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  csrf_token: string;
+  /** Goes into the cookie, never the body. */
+  refresh: string;
+}
+
+export interface MfaChallenge {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+}
+
+const mailer = (ctx: Ctx) => createMailer(ctx.cfg, ctx.env, ctx.log);
+const lower = (email: string) => email.toLowerCase();
+
+async function commit(ctx: Ctx, stmts: Stmt[]): Promise<unknown[]> {
+  return (await runBatch(ctx.db, stmts)) as unknown[];
+}
+
+// ---- secrets and codes ------------------------------------------------------------------------------------
+
+/** A uniform six-digit code (Python `f"{randbelow(10**6):06d}"`). */
+export function sixDigitCode(): string {
+  const limit = Math.floor(0x1_0000_0000 / 1_000_000) * 1_000_000;
+  const buf = new Uint32Array(1);
+  for (;;) {
+    crypto.getRandomValues(buf);
+    const v = buf[0] ?? 0;
+    if (v < limit) return String(v % 1_000_000).padStart(6, "0");
+  }
+}
+
+const emailCodeHmac = (ctx: Ctx, purpose: OtpPurpose, userId: string, code: string) =>
+  hmacSha256Hex(ctx.cfg.pepper, `${purpose}|${userId}|${code}`);
+
+const RECOVERY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** `XXXXX-XXXXX` from a 32-letter alphabet (no 0/O/1/I). 256 is a multiple of 32, so `& 31` is unbiased. */
+export function recoveryCode(): string {
+  const b = crypto.getRandomValues(new Uint8Array(10));
+  const s = [...b].map((x) => RECOVERY_ALPHABET[x & 31]).join("");
+  return `${s.slice(0, 5)}-${s.slice(5)}`;
+}
+
+/** Python normalisation: strip, upper-case, drop spaces. The hyphen stays significant. */
+const normaliseRecovery = (code: string) => code.trim().toUpperCase().replace(/ /g, "");
+
+const recoveryHmac = (ctx: Ctx, userId: string, code: string) =>
+  hmacSha256Hex(ctx.cfg.pepper, `recovery|${userId}|${normaliseRecovery(code)}`);
+
+/** `auth_failures.email_hash`: HMAC under the pepper, so the table never holds an address. */
+export const emailHash = (ctx: Ctx, email: string) =>
+  hmacSha256Hex(ctx.cfg.pepper, `auth-failure|${email.trim().toLowerCase()}`);
+
+const totpAad = (userId: string) => `totp|${userId}`;
+
+async function totpSecret(ctx: Ctx, userId: string, stored: string | null): Promise<string> {
+  if (stored === null) return "";
+  return (await decryptString(ctx.cfg.dataKey, stored, totpAad(userId))) ?? "";
+}
+
+/** The step a fresh TOTP code is valid for, or null (wrong, or replayed: step <= last used). */
+async function freshTotpStep(
+  ctx: Ctx,
+  u: { id: string; totpSecret: string | null; totpLastUsedStep: number | null },
+  code: string,
+): Promise<number | null> {
+  const step = await findTotpStep(
+    await totpSecret(ctx, u.id, u.totpSecret),
+    code,
+    ctx.clock.now(),
+    SETTINGS.totpValidWindow,
+  );
+  if (step === null || (u.totpLastUsedStep !== null && step <= u.totpLastUsedStep)) return null;
+  return step;
+}
+
+async function newRecoveryCodes(ctx: Ctx, userId: string): Promise<{ codes: string[]; hmacs: string[] }> {
+  const codes = Array.from({ length: SETTINGS.recoveryCodeCount }, recoveryCode);
+  return { codes, hmacs: await Promise.all(codes.map((c) => recoveryHmac(ctx, userId, c))) };
+}
+
+/** Python `record_failure`: best effort, never fails the request. */
+async function recordFailure(
+  ctx: Ctx,
+  kind: string,
+  meta: Meta,
+  who: { email?: string; userId?: string },
+): Promise<void> {
+  try {
+    const email = who.email === undefined ? null : who.email.trim().toLowerCase();
+    await runBatch(ctx.db, [
+      repo.insertAuthFailure(
+        ctx.db,
+        {
+          kind,
+          ip: meta.ip,
+          emailHash: email === null ? null : await emailHash(ctx, email),
+          userId: who.userId ?? null,
+          email,
+        },
+        ctx.clock.now(),
+      ),
+    ]);
+  } catch (err) {
+    ctx.log.error("could not record an auth failure", err);
+  }
+}
+
+const event = (ctx: Ctx, userId: string, kind: string, meta: Meta | null, extra?: Record<string, unknown>) =>
+  repo.insertEvent(ctx.db, {
+    userId,
+    kind,
+    now: ctx.clock.now(),
+    ip: meta?.ip ?? null,
+    userAgent: meta?.userAgent ?? null,
+    meta: extra ?? null,
+  });
+
+// ---- sessions ---------------------------------------------------------------------------------------------
+
+/** "Firefox on Linux" from a user agent (Python `describe_agent`). */
+export function describeAgent(agent: string | null): string {
+  if (!agent) return "an unknown device";
+  const pick = (pairs: [string, string][], fallback: string) =>
+    pairs.find(([k]) => agent.includes(k))?.[1] ?? fallback;
+  const browser = pick(
+    [
+      ["Edg/", "Edge"],
+      ["OPR/", "Opera"],
+      ["Firefox/", "Firefox"],
+      ["Chrome/", "Chrome"],
+      ["Safari/", "Safari"],
+    ],
+    "a browser",
+  );
+  const system = pick(
+    [
+      ["iPhone", "iPhone"],
+      ["iPad", "iPad"],
+      ["Android", "Android"],
+      ["Mac OS X", "macOS"],
+      ["Windows", "Windows"],
+      ["CrOS", "ChromeOS"],
+      ["Linux", "Linux"],
+    ],
+    "an unknown system",
+  );
+  return `${browser} on ${system}`;
+}
+
+export interface History {
+  hasHistory: number | boolean;
+  knownAgent: number | boolean;
+}
+
+/**
+ * The last step of every way in (password, second factor, passkey): one write batch with `before` (guards and
+ * the caller's own writes) first, then the session, its refresh token, the `login` event and, for a new device on
+ * an account with history, the "new sign-in" notification (Python `start_session` + `note_sign_in`).
+ */
+async function startSession(
+  ctx: Ctx,
+  user: { id: string; tokenVersion: number },
+  meta: Meta,
+  history: History | undefined,
+  before: Stmt[] = [],
+  opts: { recordLogin?: boolean } = {},
+): Promise<TokenPair> {
+  const now = ctx.clock.now();
+  const sessionId = uuid7(now);
+  const refresh = newRefreshToken();
+  const stmts: Stmt[] = [
+    ...before,
+    ...repo.insertSession(ctx.db, {
+      userId: user.id,
+      sessionId,
+      tokenId: uuid7(now),
+      tokenHash: await sha256Hex(refresh),
+      now,
+      userAgent: meta.userAgent,
+      ip: meta.ip,
+      days: SETTINGS.refreshTokenDays,
+    }),
+  ];
+  let notificationId: string | null = null;
+  if (opts.recordLogin !== false) {
+    stmts.push(event(ctx, user.id, "login", meta));
+    if (history?.hasHistory && !history.knownAgent && meta.userAgent !== null) {
+      notificationId = uuid7(now);
+      stmts.push(
+        repo.insertNotification(
+          ctx.db,
+          {
+            id: notificationId,
+            userId: user.id,
+            kind: "new_sign_in",
+            category: "security",
+            title: "New sign-in to your PaceStreak account",
+            body: `From ${describeAgent(meta.userAgent)}. If this was not you, change your password and sign out everywhere.`,
+            url: "/settings/security",
+          },
+          now,
+        ),
+      );
+    }
+  }
+  await commit(ctx, stmts);
+  if (notificationId !== null) ctx.defer(dispatchDeliver(ctx.env.JOBS, [notificationId]));
+  return {
+    access_token: await accessToken(ctx, user.id, user.tokenVersion, sessionId),
+    token_type: "bearer",
+    expires_in: ACCESS_EXPIRES_IN,
+    csrf_token: newCsrfToken(),
+    refresh,
+  };
+}
+
+const userOut = (u: { id: string; email: string; isActive: boolean; isVerified: boolean }) => ({
+  id: u.id,
+  email: u.email,
+  is_active: u.isActive,
+  is_verified: u.isVerified,
+});
+
+// ---- signup, login, refresh, logout -----------------------------------------------------------------------
+
+export async function signup(
+  ctx: Ctx,
+  body: { email: string; password: string; turnstile_token?: string | null | undefined },
+  meta: Meta,
+) {
+  await verifyTurnstile({ secret: ctx.cfg.turnstileSecret, token: body.turnstile_token, remoteIp: meta.ip });
+  const now = ctx.clock.now();
+  const email = lower(body.email);
+  const userId = uuid7(now);
+  const code = sixDigitCode();
+  const [hashed, codeHmac] = await Promise.all([
+    hashPassword(body.password, ctx.cfg.pepper),
+    emailCodeHmac(ctx, "email_verify", userId, code),
+  ]);
+  try {
+    await commit(ctx, [
+      ctx.db
+        .insert(repo.tables.users)
+        .values({ id: userId, email, hashedPassword: hashed, createdAt: now, updatedAt: now }),
+      event(ctx, userId, "signup", meta),
+      ...repo.issueCode(
+        ctx.db,
+        {
+          id: uuid7(now),
+          userId,
+          purpose: "email_verify",
+          codeHmac,
+          expiresAt: now + SETTINGS.emailVerifyTokenHours * HOUR,
+        },
+        now,
+      ),
+    ]);
+  } catch (err) {
+    if (isConstraintError(err)) throw conflict("Email already registered");
+    throw err;
+  }
+  // After the commit: a failed send leaves the account, and the user can ask for another code.
+  await sendVerificationEmail(mailer(ctx), email, code);
+  return userOut({ id: userId, email, isActive: true, isVerified: false });
+}
+
+export async function login(
+  ctx: Ctx,
+  body: { email: string; password: string; turnstile_token?: string | null | undefined },
+  meta: Meta,
+): Promise<TokenPair | MfaChallenge> {
+  await verifyTurnstile({ secret: ctx.cfg.turnstileSecret, token: body.turnstile_token, remoteIp: meta.ip });
+  const email = lower(body.email);
+  const [rows, hist] = await runBatch(ctx.db, [
+    repo.userByEmail(ctx.db, email),
+    repo.loginHistory(ctx.db, { email }, meta.userAgent),
+  ] as const);
+  const user = rows[0];
+  // Unknown addresses still pay for a hash, so timing does not reveal which addresses exist.
+  const stored = user?.hashedPassword ?? (await dummyPasswordHash(ctx.cfg.pepper));
+  const ok = await verifyPassword(stored, body.password, ctx.cfg.pepper);
+  if (user === undefined || !ok || !user.isActive) {
+    await recordFailure(ctx, "login", meta, { email: body.email });
+    throw unauthorized("Incorrect email or password");
+  }
+  if (ctx.cfg.requireVerifiedEmail && !user.isVerified) throw forbidden("Email address not verified");
+  if (user.totpEnabled) {
+    return {
+      mfa_required: true,
+      mfa_token: await mfaToken(ctx, user.id, user.tokenVersion),
+      expires_in: MFA_EXPIRES_IN,
+    };
+  }
+  const before: Stmt[] = [];
+  if (needsRehash(user.hashedPassword)) {
+    const rehashed = await hashPassword(body.password, ctx.cfg.pepper);
+    before.push(
+      ctx.db.update(repo.tables.users).set({ hashedPassword: rehashed }).where(repo.byUserId(user.id)),
+    );
+  }
+  return startSession(ctx, user, meta, hist[0], before);
+}
+
+/**
+ * Rotation (spec/auth.md §4): a live token rotates; a token rotated away less than 30 s ago (two tabs reloading at
+ * once) rotates from the session's live tip instead; any other reuse burns the session. The write is guarded on
+ * the tip still being live, so of two concurrent rotations one wins and the other retries through the grace path.
+ */
+export async function refresh(ctx: Ctx, raw: string | undefined): Promise<TokenPair> {
+  if (raw === undefined) throw unauthorized("Missing refresh token");
+  const hash = await sha256Hex(raw);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const now = ctx.clock.now();
+    const [rows, tips] = await runBatch(ctx.db, [
+      repo.refreshByHash(ctx.db, hash),
+      repo.liveTipByHash(ctx.db, hash),
+    ] as const);
+    const t = rows[0];
+    if (t === undefined) throw unauthorized("Invalid refresh token");
+    if (t.revokedAt !== null) throw unauthorized(SUSPICIOUS);
+    let from = { id: t.tokenId, expiresAt: t.expiresAt };
+    if (t.replacedBy !== null) {
+      const tip = tips[0];
+      if (tip === undefined || t.usedAt === null || now - t.usedAt > REUSE_GRACE_MS) {
+        await commit(ctx, [repo.revokeSession(ctx.db, t.sessionId, now)]);
+        throw unauthorized(SUSPICIOUS);
+      }
+      from = tip;
+    }
+    if (from.expiresAt <= now) throw unauthorized("Refresh token has expired.");
+    if (!t.isActive) throw unauthorized("User account is inactive or does not exist.");
+    const next = newRefreshToken();
+    const nextId = uuid7(now);
+    try {
+      await commit(
+        ctx,
+        repo.rotate(ctx.db, {
+          sessionId: t.sessionId,
+          fromId: from.id,
+          nextId,
+          nextHash: await sha256Hex(next),
+          now,
+          days: SETTINGS.refreshTokenDays,
+        }),
+      );
+    } catch (err) {
+      if (isCondAbort(err)) continue;
+      throw err;
+    }
+    return {
+      access_token: await accessToken(ctx, t.userId, t.tokenVersion, t.sessionId),
+      token_type: "bearer",
+      expires_in: ACCESS_EXPIRES_IN,
+      csrf_token: newCsrfToken(),
+      refresh: next,
+    };
+  }
+  throw unauthorized("Invalid refresh token");
+}
+
+/** Ends the cookie's session, if any. One write, no read. */
+export async function logout(ctx: Ctx, raw: string | undefined): Promise<void> {
+  if (raw === undefined) return;
+  await commit(ctx, [repo.revokeSessionByToken(ctx.db, await sha256Hex(raw), ctx.clock.now())]);
+}
+
+export async function logoutAll(ctx: Ctx, authed: AuthedBatch, meta: Meta): Promise<void> {
+  const now = ctx.clock.now();
+  await authed.write(
+    ...(repo.revokeAllSessions(ctx.db, authed.userId, now) as readonly [Stmt, Stmt]),
+    event(ctx, authed.userId, "logout_all", meta),
+  );
+}
+
+export async function me(authed: AuthedBatch) {
+  const [u] = await authed.read();
+  return userOut(u);
+}
+
+export async function listSessions(ctx: Ctx, authed: AuthedBatch) {
+  const [, rows] = await authed.read(repo.listSessions(ctx.db, authed.userId, ctx.clock.now()));
+  return rows.map((s) => ({
+    id: s.id,
+    created_at: toWire(s.createdAt),
+    last_used_at: toWire(s.lastUsedAt),
+    expires_at: toWire(s.expiresAt),
+    user_agent: s.userAgent,
+    ip_address: s.ip,
+    current: s.id === authed.principal.sessionId,
+  }));
+}
+
+/** Returns true when the caller revoked their own session (the route then clears the cookies). */
+export async function revokeSession(ctx: Ctx, authed: AuthedBatch, sessionId: string): Promise<boolean> {
+  const now = ctx.clock.now();
+  try {
+    await authed.write(
+      abortUnless(ctx.db, repo.sessionOwned(authed.userId, sessionId)),
+      repo.revokeOwnSession(ctx.db, authed.userId, sessionId, now),
+      event(ctx, authed.userId, "session_revoked", null, { session: sessionId }),
+    );
+  } catch (err) {
+    if (isCondAbort(err)) throw new HttpError(404, "Session not found");
+    throw err;
+  }
+  return sessionId === authed.principal.sessionId;
+}
+
+// ---- passwords --------------------------------------------------------------------------------------------
+
+export async function changePassword(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { current_password: string; new_password: string },
+  meta: Meta,
+): Promise<TokenPair> {
+  const [, rows] = await authed.read(repo.userById(ctx.db, authed.userId));
+  const u = rows[0];
+  if (u === undefined || !(await verifyPassword(u.hashedPassword, body.current_password, ctx.cfg.pepper))) {
+    throw unauthorized("Current password is incorrect");
+  }
+  if (body.current_password === body.new_password)
+    throw badRequest("New password must differ from the current one");
+  const now = ctx.clock.now();
+  const hashed = await hashPassword(body.new_password, ctx.cfg.pepper);
+  // Revoke first, so the new session written by startSession stays live; its token carries the bumped version.
+  const pair = await startSession(
+    ctx,
+    { id: u.id, tokenVersion: u.tokenVersion + 1 },
+    meta,
+    undefined,
+    [
+      repo.sessionGuardFor(authed),
+      ctx.db
+        .update(repo.tables.users)
+        .set({ hashedPassword: hashed, passwordChangedAt: now, updatedAt: now })
+        .where(repo.byUserId(u.id)),
+      ...repo.revokeAllSessions(ctx.db, u.id, now),
+      event(ctx, u.id, "password_changed", meta),
+    ],
+    { recordLogin: false },
+  ).catch((err: unknown) => {
+    throw repo.mapSessionGuard(err);
+  });
+  await sendPasswordChangedEmail(mailer(ctx), u.email, ctx.cfg.frontendUrl);
+  return pair;
+}
+
+/** Python `issue_one_time_token`: the statements, plus the code for the email. */
+async function issue(
+  ctx: Ctx,
+  userId: string,
+  purpose: OtpPurpose,
+  lifeMs: number,
+): Promise<{ code: string; stmts: Stmt[] }> {
+  const now = ctx.clock.now();
+  const code = sixDigitCode();
+  const codeHmac = await emailCodeHmac(ctx, purpose, userId, code);
+  return {
+    code,
+    stmts: repo.issueCode(
+      ctx.db,
+      { id: uuid7(now), userId, purpose, codeHmac, expiresAt: now + lifeMs },
+      now,
+    ),
+  };
+}
+
+/**
+ * Finds the user whose newest live code of `purpose` matches. A miss counts an attempt on every candidate code,
+ * and the count is saved (Python rolled it back, so its 5-attempt cap never applied: CHANGES-FROM-PYTHON.md).
+ * The caller's write batch starts with `codeGuard(...)`, which makes the code single-use under concurrency.
+ */
+async function matchCode<E extends Stmt[]>(
+  ctx: Ctx,
+  email: string,
+  code: string,
+  purpose: OtpPurpose,
+  ...extra: E
+) {
+  const now = ctx.clock.now();
+  const [cands, ...rest] = (await runBatch(ctx.db, [
+    repo.codeCandidates(ctx.db, lower(email), purpose, now),
+    ...extra,
+  ] as const)) as readonly [Awaited<ReturnType<typeof repo.codeCandidates>>, ...unknown[]];
+  const live = cands.filter((c) => c.attempts < SETTINGS.emailCodeMaxAttempts);
+  let match: (typeof live)[number] | undefined;
+  for (const c of live) {
+    if (
+      timingSafeEqualStr(await emailCodeHmac(ctx, purpose, c.userId, code), c.codeHmac) &&
+      match === undefined
+    )
+      match = c;
+  }
+  if (match === undefined) {
+    if (live.length > 0)
+      await commit(ctx, [
+        repo.bumpAttempts(
+          ctx.db,
+          live.map((c) => c.tokenId),
+          now,
+        ),
+      ]);
+    throw badRequest(INVALID_CODE);
+  }
+  return { match, rest };
+}
+
+const codeGuard = (ctx: Ctx, tokenId: string) => [
+  abortUnless(ctx.db, repo.codeStillLive(tokenId, SETTINGS.emailCodeMaxAttempts, ctx.clock.now())),
+  repo.markCodeUsed(ctx.db, tokenId, ctx.clock.now()),
+];
+
+async function commitWithCode(ctx: Ctx, stmts: Stmt[]): Promise<void> {
+  try {
+    await commit(ctx, stmts);
+  } catch (err) {
+    if (isCondAbort(err)) throw badRequest(INVALID_CODE);
+    throw err;
+  }
+}
+
+export async function verifyEmail(ctx: Ctx, body: { email: string; code: string }) {
+  const { match } = await matchCode(ctx, body.email, body.code, "email_verify");
+  const now = ctx.clock.now();
+  const stmts: Stmt[] = codeGuard(ctx, match.tokenId);
+  if (!match.isVerified) {
+    stmts.push(
+      ctx.db
+        .update(repo.tables.users)
+        .set({ isVerified: true, verifiedAt: now, updatedAt: now })
+        .where(repo.byUserId(match.userId)),
+      event(ctx, match.userId, "email_verified", null),
+    );
+  }
+  await commitWithCode(ctx, stmts);
+  return { detail: "Email address verified" };
+}
+
+export async function resendVerification(
+  ctx: Ctx,
+  body: { email: string; turnstile_token?: string | null | undefined },
+  meta: Meta,
+  callerEmail: string | null,
+) {
+  const email = lower(body.email);
+  if (callerEmail === null || callerEmail !== email) {
+    await verifyTurnstile({
+      secret: ctx.cfg.turnstileSecret,
+      token: body.turnstile_token,
+      remoteIp: meta.ip,
+    });
+  }
+  const [rows] = await runBatch(ctx.db, [repo.userByEmail(ctx.db, email)] as const);
+  const u = rows[0];
+  if (u?.isActive && !u.isVerified) {
+    const { code, stmts } = await issue(ctx, u.id, "email_verify", SETTINGS.emailVerifyTokenHours * HOUR);
+    await commit(ctx, stmts);
+    await sendVerificationEmail(mailer(ctx), u.email, code);
+  }
+  return { detail: "If that address needs verification, a code has been sent." };
+}
+
+export async function forgotPassword(
+  ctx: Ctx,
+  body: { email: string; turnstile_token?: string | null | undefined },
+  meta: Meta,
+) {
+  await verifyTurnstile({ secret: ctx.cfg.turnstileSecret, token: body.turnstile_token, remoteIp: meta.ip });
+  const [rows] = await runBatch(ctx.db, [repo.userByEmail(ctx.db, lower(body.email))] as const);
+  const u = rows[0];
+  if (u?.isActive) {
+    const { code, stmts } = await issue(
+      ctx,
+      u.id,
+      "password_reset",
+      SETTINGS.passwordResetTokenMinutes * MINUTE,
+    );
+    await commit(ctx, stmts);
+    await sendPasswordResetEmail(mailer(ctx), u.email, code);
+  }
+  return { detail: "If that address has an account, a reset code has been sent." };
+}
+
+export async function resetPassword(ctx: Ctx, body: { email: string; code: string; new_password: string }) {
+  const { match } = await matchCode(ctx, body.email, body.code, "password_reset");
+  const now = ctx.clock.now();
+  const hashed = await hashPassword(body.new_password, ctx.cfg.pepper);
+  await commitWithCode(ctx, [
+    ...codeGuard(ctx, match.tokenId),
+    ctx.db
+      .update(repo.tables.users)
+      .set({
+        hashedPassword: hashed,
+        passwordChangedAt: now,
+        isVerified: true,
+        verifiedAt: repo.coalesceVerifiedAt(now),
+        updatedAt: now,
+      })
+      .where(repo.byUserId(match.userId)),
+    event(ctx, match.userId, "password_reset", null),
+    ...repo.revokeAllSessions(ctx.db, match.userId, now),
+  ]);
+  await sendPasswordChangedEmail(mailer(ctx), match.email, ctx.cfg.frontendUrl);
+  return { detail: "Password updated. All sessions have been signed out." };
+}
+
+export async function recover(
+  ctx: Ctx,
+  body: {
+    email: string;
+    recovery_code: string;
+    new_password: string;
+    turnstile_token?: string | null | undefined;
+  },
+  meta: Meta,
+) {
+  await verifyTurnstile({ secret: ctx.cfg.turnstileSecret, token: body.turnstile_token, remoteIp: meta.ip });
+  const email = lower(body.email);
+  const fail = "That email and recovery code don't match.";
+  const [rows, codes] = await runBatch(ctx.db, [
+    repo.userByEmail(ctx.db, email),
+    repo.unusedRecoveryCodesByEmail(ctx.db, email),
+  ] as const);
+  const u = rows[0];
+  if (u === undefined || !u.isActive || !u.totpEnabled) {
+    await recordFailure(ctx, "recover", meta, { email: body.email });
+    throw unauthorized(fail);
+  }
+  const want = await recoveryHmac(ctx, u.id, body.recovery_code);
+  const hit = codes.find((c) => timingSafeEqualStr(c.codeHmac, want));
+  if (hit === undefined) {
+    await recordFailure(ctx, "recover", meta, { userId: u.id });
+    throw unauthorized(fail);
+  }
+  const now = ctx.clock.now();
+  const hashed = await hashPassword(body.new_password, ctx.cfg.pepper);
+  try {
+    await commit(ctx, [
+      abortUnless(ctx.db, repo.recoveryCodeUnused(hit.id)),
+      repo.useRecoveryCode(ctx.db, hit.id, now),
+      ctx.db
+        .update(repo.tables.users)
+        .set({ hashedPassword: hashed, passwordChangedAt: now, updatedAt: now })
+        .where(repo.byUserId(u.id)),
+      event(ctx, u.id, "password_recovered", meta),
+      ...repo.revokeAllSessions(ctx.db, u.id, now),
+    ]);
+  } catch (err) {
+    if (isCondAbort(err)) throw unauthorized(fail);
+    throw err;
+  }
+  await sendPasswordChangedEmail(mailer(ctx), u.email, ctx.cfg.frontendUrl);
+  return { detail: "Password updated with a recovery code. Sign in again." };
+}
+
+// ---- email change -----------------------------------------------------------------------------------------
+
+export async function changeEmail(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { password: string; new_email: string },
+  meta: Meta,
+) {
+  const next = lower(body.new_email);
+  const [, rows, taken] = await authed.read(
+    repo.userById(ctx.db, authed.userId),
+    repo.emailTaken(ctx.db, next),
+  );
+  const u = rows[0];
+  if (u === undefined || !(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper)))
+    throw unauthorized(BAD_PASSWORD);
+  if (next === u.email) throw new HttpError(422, "That's already your address");
+  const detail = `If ${next} can be used, a confirmation code is on its way there.`;
+  if (taken.length > 0) return { detail };
+  const now = ctx.clock.now();
+  const { code, stmts } = await issue(ctx, u.id, "email_change", SETTINGS.emailChangeTokenHours * HOUR);
+  await authed.write(
+    ctx.db.update(repo.tables.users).set({ pendingEmail: next, updatedAt: now }).where(repo.byUserId(u.id)),
+    ...stmts,
+    event(ctx, u.id, "email_change_requested", meta, { to: next }),
+  );
+  await sendEmailChangeEmail(mailer(ctx), next, code);
+  return { detail };
+}
+
+export async function confirmEmailChange(ctx: Ctx, body: { email: string; code: string }) {
+  const next = lower(body.email);
+  const { match, rest } = await matchCode(
+    ctx,
+    next,
+    body.code,
+    "email_change",
+    repo.emailTaken(ctx.db, next),
+  );
+  const taken = rest[0] as { id: string }[];
+  if (match.pendingEmail === null) throw badRequest("Invalid or expired token");
+  if (taken.some((r) => r.id !== match.userId))
+    throw conflict("That address is now in use by another account");
+  const now = ctx.clock.now();
+  await commitWithCode(ctx, [
+    ...codeGuard(ctx, match.tokenId),
+    ctx.db
+      .update(repo.tables.users)
+      .set({ email: next, pendingEmail: null, isVerified: true, verifiedAt: now, updatedAt: now })
+      .where(repo.byUserId(match.userId)),
+    event(ctx, match.userId, "email_changed", null, { from: match.email, to: next }),
+  ]);
+  await sendEmailChangedNotice(mailer(ctx), match.email, next);
+  return { detail: "Your email address is updated." };
+}
+
+// ---- two-factor -------------------------------------------------------------------------------------------
+
+async function dbUser(ctx: Ctx, authed: AuthedBatch) {
+  const [, rows] = await authed.read(
+    repo.userById(ctx.db, authed.userId),
+    repo.unusedRecoveryCodes(ctx.db, authed.userId),
+  );
+  const u = rows[0];
+  if (u === undefined) throw unauthorized("User is inactive or missing");
+  return u;
+}
+
+export async function twoFactorStatus(ctx: Ctx, authed: AuthedBatch) {
+  const [, rows, codes] = await authed.read(
+    repo.userById(ctx.db, authed.userId),
+    repo.unusedRecoveryCodes(ctx.db, authed.userId),
+  );
+  const u = rows[0];
+  if (u === undefined) throw unauthorized("User is inactive or missing");
+  return {
+    enabled: u.totpEnabled,
+    confirmed_at: toWire(u.totpConfirmedAt),
+    recovery_codes_remaining: codes.length,
+  };
+}
+
+export async function twoFactorSetup(ctx: Ctx, authed: AuthedBatch) {
+  const u = await dbUser(ctx, authed);
+  if (u.totpEnabled) throw conflict("Two-factor authentication is already enabled");
+  const secret = generateTotpSecret();
+  const now = ctx.clock.now();
+  await authed.write(
+    ctx.db
+      .update(repo.tables.users)
+      .set({ totpSecret: await encryptString(ctx.cfg.dataKey, secret, totpAad(u.id)), updatedAt: now })
+      .where(repo.byUserId(u.id)),
+  );
+  return { secret, provisioning_uri: totpProvisioningUri(secret, u.email, SETTINGS.appName) };
+}
+
+/** Writes guarded by the TOTP replay check; a lost race reads as a wrong code. */
+async function writeWithStep(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  userId: string,
+  step: number,
+  stmts: Stmt[],
+): Promise<void> {
+  try {
+    await authed.write(abortUnless(ctx.db, repo.totpStepFresh(userId, step)), ...stmts);
+  } catch (err) {
+    if (isCondAbort(err)) throw badRequest("Invalid code");
+    throw err;
+  }
+}
+
+export async function twoFactorEnable(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { password: string; code: string },
+) {
+  const u = await dbUser(ctx, authed);
+  if (u.totpEnabled) throw conflict("Two-factor authentication is already enabled");
+  if (u.totpSecret === null) throw badRequest("Start with /v1/auth/2fa/setup");
+  if (!(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper)))
+    throw unauthorized(BAD_PASSWORD);
+  const step = await freshTotpStep(ctx, u, body.code);
+  if (step === null) throw badRequest("Invalid code");
+  const now = ctx.clock.now();
+  const { codes, hmacs } = await newRecoveryCodes(ctx, u.id);
+  await writeWithStep(ctx, authed, u.id, step, [
+    ctx.db
+      .update(repo.tables.users)
+      .set({ totpEnabled: true, totpConfirmedAt: now, totpLastUsedStep: step, updatedAt: now })
+      .where(repo.byUserId(u.id)),
+    ...repo.replaceRecoveryCodes(ctx.db, u.id, hmacs, now),
+    event(ctx, u.id, "totp_enabled", null),
+  ]);
+  return { recovery_codes: codes };
+}
+
+export async function twoFactorDisable(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { password: string; code: string },
+) {
+  const u = await dbUser(ctx, authed);
+  if (!u.totpEnabled) throw badRequest("Two-factor authentication is not enabled");
+  if (!(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper)))
+    throw unauthorized(BAD_PASSWORD);
+  const step = await freshTotpStep(ctx, u, body.code);
+  if (step === null) throw badRequest("Invalid code");
+  const now = ctx.clock.now();
+  await writeWithStep(ctx, authed, u.id, step, [
+    ctx.db
+      .update(repo.tables.users)
+      .set({
+        totpEnabled: false,
+        totpSecret: null,
+        totpConfirmedAt: null,
+        totpLastUsedStep: null,
+        updatedAt: now,
+      })
+      .where(repo.byUserId(u.id)),
+    repo.deleteRecoveryCodes(ctx.db, u.id),
+    event(ctx, u.id, "totp_disabled", null),
+  ]);
+  return { detail: "Two-factor authentication disabled" };
+}
+
+export async function regenerateRecoveryCodes(ctx: Ctx, authed: AuthedBatch, body: { code: string }) {
+  const u = await dbUser(ctx, authed);
+  if (!u.totpEnabled) throw badRequest("Two-factor authentication is not enabled");
+  const step = await freshTotpStep(ctx, u, body.code);
+  if (step === null) throw badRequest("Invalid code");
+  const now = ctx.clock.now();
+  const { codes, hmacs } = await newRecoveryCodes(ctx, u.id);
+  await writeWithStep(ctx, authed, u.id, step, [
+    repo.setTotpStep(ctx.db, u.id, step, now),
+    ...repo.replaceRecoveryCodes(ctx.db, u.id, hmacs, now),
+    event(ctx, u.id, "recovery_codes_regenerated", null),
+  ]);
+  return { recovery_codes: codes };
+}
+
+/** The second step of a password sign-in: a TOTP code, or else a recovery code. */
+export async function mfaVerify(
+  ctx: Ctx,
+  body: { mfa_token: string; code: string },
+  meta: Meta,
+): Promise<TokenPair> {
+  const challenge = "Invalid or expired challenge";
+  const claims = await readToken(ctx, body.mfa_token, "mfa");
+  if (claims === null) throw unauthorized(challenge);
+  const [rows, codes, hist] = await runBatch(ctx.db, [
+    repo.userById(ctx.db, claims.userId),
+    repo.unusedRecoveryCodes(ctx.db, claims.userId),
+    repo.loginHistory(ctx.db, { id: claims.userId }, meta.userAgent),
+  ] as const);
+  const u = rows[0];
+  if (u === undefined || !u.isActive || !u.totpEnabled || u.tokenVersion !== claims.tokenVersion)
+    throw unauthorized(challenge);
+  let before: Stmt[];
+  const step = await freshTotpStep(ctx, u, body.code);
+  if (step !== null) {
+    before = [
+      abortUnless(ctx.db, repo.totpStepFresh(u.id, step)),
+      repo.setTotpStep(ctx.db, u.id, step, ctx.clock.now()),
+    ];
+  } else {
+    const want = await recoveryHmac(ctx, u.id, body.code);
+    const hit = codes.find((c) => timingSafeEqualStr(c.codeHmac, want));
+    if (hit === undefined) {
+      await recordFailure(ctx, "mfa", meta, { userId: u.id });
+      throw unauthorized("Invalid code");
+    }
+    before = [
+      abortUnless(ctx.db, repo.recoveryCodeUnused(hit.id)),
+      repo.useRecoveryCode(ctx.db, hit.id, ctx.clock.now()),
+    ];
+  }
+  try {
+    return await startSession(ctx, u, meta, hist[0], before);
+  } catch (err) {
+    if (isCondAbort(err)) throw unauthorized("Invalid code");
+    throw err;
+  }
+}
+
+// ---- shared with passkeys.ts ------------------------------------------------------------------------------
+
+export const internal = { startSession, recordFailure, event, dbUser, commit, BAD_PASSWORD };
+
+/** Worker sweep: drops expired WebAuthn challenges (Python `sweep_expired_challenges`). */
+export async function sweepExpiredChallenges(ctx: Ctx): Promise<void> {
+  await commit(ctx, [repo.sweepChallenges(ctx.db, ctx.clock.now())]);
+}

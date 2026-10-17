@@ -172,4 +172,6 @@ export const exportJobs = sqliteTable(
 export const batchGuards = sqliteTable("batch_guards", {
   session: integer().notNull(),
   rateLimit: integer().notNull(),
+  /** `abortUnless(cond)` (src/db/batch.ts): a module's own check-then-act guard inside one atomic batch. */
+  cond: integer().notNull().default(0),
 });

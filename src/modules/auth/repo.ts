@@ -259,7 +259,8 @@ export const codeCandidates = (db: Db, email: string, purpose: OtpPurpose, now: 
       email: users.email,
       pendingEmail: users.pendingEmail,
       isVerified: users.isVerified,
-      tokenId: oneTimeTokens.id,
+      // Aliased: batch rows are keyed by column name, and users.id is also `id`.
+      tokenId: sql<string>`${oneTimeTokens.id}`.as("token_id"),
       codeHmac: oneTimeTokens.codeHmac,
       attempts: oneTimeTokens.attempts,
     })

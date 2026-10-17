@@ -24,11 +24,18 @@ export function api(path: string, opts: CallOptions = {}): Promise<Response> {
     body = JSON.stringify(opts.json);
   }
   if (opts.token !== undefined) headers.Authorization = `Bearer ${opts.token}`;
+  // Per-IP limits are real in tests: a fresh address per call keeps unrelated tests from sharing a bucket.
+  headers["CF-Connecting-IP"] ??= randomIp();
   return SELF.fetch(`${BASE}${path}`, {
     method: opts.method ?? (body === undefined ? "GET" : "POST"),
     headers,
     ...(body === undefined ? {} : { body }),
   });
+}
+
+export function randomIp(): string {
+  const b = crypto.getRandomValues(new Uint8Array(3));
+  return `10.${b[0]}.${b[1]}.${b[2]}`;
 }
 
 export async function jsonOf<T = unknown>(res: Response): Promise<T> {

@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: Phase 1 units in parallel (P1-CRYPTO, P1-GUARD, P1-MAIL, P1-PUSH, P1-R2, P1-JOBS, P1-HEAVY, P1-CATALOG); read docs/rewrite/CONVENTIONS.md first. Foundation F0-F3 is done.
+Next step: AUTH unit (then NOTIF + OPS-ADMIN in parallel, then GAME). P1 libraries are merged; module agents read docs/rewrite/CONVENTIONS.md.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -10,8 +10,9 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | Unit | State |
 | --- | --- |
 | F0 F1 F2 F3 | done |
-| P1-CRYPTO P1-GUARD P1-MAIL P1-PUSH P1-R2 P1-JOBS P1-HEAVY P1-CATALOG | todo |
-| AUTH NOTIF OPS-ADMIN | todo |
+| P1-CRYPTO P1-GUARD P1-MAIL P1-PUSH P1-R2 P1-JOBS P1-HEAVY P1-CATALOG | done (328 tests on next) |
+| AUTH | in progress |
+| NOTIF OPS-ADMIN | todo |
 | GAME | todo |
 | PROFILE-ACCOUNT TRAINING HABITS NUTRITION SOCIAL | todo |
 | TRASH JOBS-12 | todo |
@@ -115,3 +116,13 @@ Recorded by the implementing agent; each says why.
 - Create the D1 databases with `--location apac`, the R2 buckets, queues and the DLQ when the cutover unit asks;
   replace the zero-UUID placeholders in `wrangler.jsonc`.
 - Run the G-3 batch tests once against a remote D1 (staging) and G-1 (PBKDF2 cpuTime) on staging.
+
+### P1 decisions (2026-10-18)
+- R2: only JPEG/WebP/PNG accepted (as Python); WebP check also needs `WEBP` at byte 8, PNG full 8-byte signature (fix, see CHANGES). Bucket name passed in; photos module adds an `R2_BUCKET` var.
+- Rate limits: rejected calls still count (Python parity); fixed windows aligned to window length (slowapi-style) instead of first-hit.
+- Mailer: own MIME builder for `send_email`; header CR/LF refuses the send; 10 MiB attachment cap.
+- Crypto: PBKDF2 100k ≈ 23 ms wall in local workerd (G-1 cpuTime on staging still owed). JWT checks follow PyJWT. AES-GCM supports AAD (auth should bind user id).
+- Push: push lib returns outcomes, notifications module applies them in its batch; guard re-run at send time.
+- Jobs: one lease per trigger (240 s), shared `scheduler` heartbeat; stale threshold 900 s (was 360 s).
+- Heavy: all readers resumable from any byte offset with JSON state; FIT errors keep partial data.
+- Catalog: data generated from Python modules and verified deep-equal.

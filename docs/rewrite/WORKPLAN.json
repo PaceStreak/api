@@ -1,0 +1,530 @@
+[
+ {
+  "id": "F0",
+  "title": "Scaffold, tooling, wrangler envs, CI",
+  "files": [
+   "package.json",
+   "tsconfig.json",
+   "biome.json",
+   "wrangler.jsonc",
+   "vitest.config.ts",
+   "drizzle.config.ts",
+   "renovate.json",
+   ".dev.vars.example",
+   ".github/workflows/ci.yml",
+   "scripts/check-module-deps.ts"
+  ],
+  "depends_on": [],
+  "spec_refs": [
+   "DESIGN.md \u00a72,\u00a73,\u00a716"
+  ],
+  "acceptance": [
+   "Exact pins from DESIGN \u00a73; pnpm install --frozen-lockfile, tsc, biome ci, vitest run, wrangler deploy --dry-run all green on an empty app",
+   "Bundle gzip gate 400 KiB; module-dependency check fails on a deliberate violation fixture",
+   "Gate G-2: drizzle-orm types compile under TS 7.0.2 (else pin 5.9.3 and record)",
+   "gitleaks step; no secrets in repo"
+  ]
+ },
+ {
+  "id": "F1",
+  "title": "Full Drizzle schema + 0000_init.sql",
+  "files": [
+   "src/db/schema/*.ts",
+   "migrations/0000_init.sql",
+   "src/db/fk-users.gen.ts",
+   "test/schema/*.test.ts"
+  ],
+  "depends_on": [
+   "F0"
+  ],
+  "spec_refs": [
+   "schema.md \u00a71-\u00a74",
+   "DESIGN.md \u00a74"
+  ],
+  "acceptance": [
+   "All 60 tables + sessions, rate_counters, job_leases, import_jobs, export_jobs, stat_days, stat_weeks, records_best, sync_seq",
+   "INTEGER ms timestamps, UUIDv7 TEXT ids, CHECK enums, fold columns via withFold, FK ON DELETE per schema.md \u00a71.3, all FK indexes and partial indexes from DESIGN \u00a74",
+   "fk-users list equals pragma_foreign_key_list (test)",
+   "drizzle-kit check + drift test pass"
+  ]
+ },
+ {
+  "id": "F2",
+  "title": "Core pipeline and platform helpers",
+  "files": [
+   "src/index.ts",
+   "src/app.ts",
+   "src/env.ts",
+   "src/ctx.ts",
+   "src/db/client.ts",
+   "src/db/batch.ts",
+   "src/lib/{errors,http,validation,time,isoweek,uuid7,b64url,format,fold,budget,etag,logger}.ts"
+  ],
+  "depends_on": [
+   "F0"
+  ],
+  "spec_refs": [
+   "core.md \u00a72,\u00a73,\u00a77,\u00a710",
+   "gaps.md G1",
+   "DESIGN.md \u00a75,\u00a78"
+  ],
+  "acceptance": [
+   "404/405/409/500 envelopes, CORS Starlette semantics, PaceStreak-Version on /v1 incl. errors and preflight, config gate 500 in production",
+   "422 hook table test (G-5) for every pydantic msg the app can see",
+   "AuthedBatch prepends session check; write predicates; round-trip counter",
+   "pyRound/formatG vs Python-generated table; uuid7 monotonic",
+   "Gate G-3: LWW UPSERT RETURNING and EXISTS-guarded batch semantics verified on local and remote D1"
+  ]
+ },
+ {
+  "id": "F3",
+  "title": "Test harness and fixtures",
+  "files": [
+   "test/setup.ts",
+   "test/fixtures/*.ts",
+   "test/soft-webauthn.ts",
+   "scripts/test-parity.ts",
+   "test/explain/explain.test.ts",
+   "test/bench/"
+  ],
+  "depends_on": [
+   "F1",
+   "F2"
+  ],
+  "spec_refs": [
+   "auth.md \u00a77",
+   "core.md \u00a711",
+   "DESIGN.md \u00a715"
+  ],
+  "acceptance": [
+   "applyD1Migrations, isolatedStorage, fetchMock defaults, injectable clock",
+   "signup/login/authed fixtures (stub until AUTH lands), parity script listing all 285 pytest names",
+   "EXPLAIN QUERY PLAN lint over registered statements",
+   "Heavy-user seed generator"
+  ]
+ },
+ {
+  "id": "P1-CRYPTO",
+  "title": "Crypto library",
+  "files": [
+   "src/lib/crypto/{pbkdf2,hs256,hmac,aesgcm,totp,consttime}.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "auth.md \u00a72,\u00a74",
+   "DESIGN.md \u00a76"
+  ],
+  "acceptance": [
+   "PBKDF2 PHC format with pepper, rehash detection; RFC 6238 TOTP vectors; HS256 kid ring sign/verify/expiry; AES-GCM round trip",
+   "Gate G-1: staging cpuTime for PBKDF2 recorded in README"
+  ]
+ },
+ {
+  "id": "P1-GUARD",
+  "title": "Rate limiting + Turnstile",
+  "files": [
+   "src/lib/ratelimit.ts",
+   "src/lib/turnstile.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "core.md \u00a72.3,\u00a72.4",
+   "DESIGN.md \u00a77"
+  ],
+  "acceptance": [
+   "Port test_turnstile.py (9)",
+   "Binding middleware returns slowapi 429 body; per-user counter statement + predicate helpers; per-user 429 body; calendar 120/h counter"
+  ]
+ },
+ {
+  "id": "P1-MAIL",
+  "title": "Mailer + templates",
+  "files": [
+   "src/lib/mailer/{index,console,brevo,cloudflare,templates}.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "core.md \u00a76",
+   "DESIGN.md \u00a710"
+  ],
+  "acceptance": [
+   "Port test_email.py (5)",
+   "Exact template strings with app_name PaceStreak; never throws; Brevo request shape via fetchMock; attachment cap from budget"
+  ]
+ },
+ {
+  "id": "P1-PUSH",
+  "title": "Web Push + SSRF guard",
+  "files": [
+   "src/lib/push/{encrypt,vapid,guard,send}.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "misc.md \u00a72 deliver/VAPID",
+   "DESIGN.md \u00a711"
+  ],
+  "acceptance": [
+   "Port test_push_ssrf.py (3) incl. 8.8.8.8 allowed",
+   "RFC 8291 appendix vector; IP classifier table; allowlist and *.pacestreak.com rejection; 404/410/failure counting"
+  ]
+ },
+ {
+  "id": "P1-R2",
+  "title": "R2 presign and verify",
+  "files": [
+   "src/lib/r2.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "core.md \u00a75",
+   "DESIGN.md \u00a712"
+  ],
+  "acceptance": [
+   "aws4fetch presigned PUT/GET with signed content type and response overrides; head size check; magic bytes; batch delete \u22641000"
+  ]
+ },
+ {
+  "id": "P1-JOBS",
+  "title": "Jobs framework",
+  "files": [
+   "src/jobs/{scheduled,consumer,leases,heartbeat,dispatch,zones}.ts"
+  ],
+  "depends_on": [
+   "F2"
+  ],
+  "spec_refs": [
+   "misc.md \u00a74",
+   "DESIGN.md \u00a79"
+  ],
+  "acceptance": [
+   "Cron router for 3 triggers, D1 lease, heartbeat shape, /health/worker semantics",
+   "Zone grouping by local hour (property test incl. DST, +5:30/+5:45)",
+   "No enqueue on empty selection; packing \u226450 ids; consumer type routing; DLQ config"
+  ]
+ },
+ {
+  "id": "P1-HEAVY",
+  "title": "Streaming parsers and writers",
+  "files": [
+   "src/heavy/{multipart,csv,gpx,fit,account-json,zip}.ts"
+  ],
+  "depends_on": [
+   "F0"
+  ],
+  "spec_refs": [
+   "training-a.md import sections",
+   "training-b.md",
+   "account.md import/export",
+   "DESIGN.md \u00a713"
+  ],
+  "acceptance": [
+   "Resumable CSV/GPX/FIT/account-JSON readers: slice-at-any-offset equals whole-file parse (property test) on api/tests/fixtures",
+   "DOCTYPE/ENTITY rejected; streaming multipart with size cap 413"
+  ]
+ },
+ {
+  "id": "P1-CATALOG",
+  "title": "Static catalogues",
+  "files": [
+   "src/catalog/*.ts"
+  ],
+  "depends_on": [
+   "F0"
+  ],
+  "spec_refs": [
+   "training-a.md exercise library",
+   "game.md achievements/quests",
+   "habits.md templates"
+  ],
+  "acceptance": [
+   "Port test_exercise_catalog.py (4)",
+   "Frozen data, fold index built once per isolate"
+  ]
+ },
+ {
+  "id": "AUTH",
+  "title": "Auth module (29 routes)",
+  "files": [
+   "src/modules/auth/*"
+  ],
+  "depends_on": [
+   "F1",
+   "F3",
+   "P1-CRYPTO",
+   "P1-GUARD",
+   "P1-MAIL"
+  ],
+  "spec_refs": [
+   "auth.md",
+   "core.md \u00a72.5"
+  ],
+  "acceptance": [
+   "Port test_auth.py (20), test_passkeys.py (10)",
+   "Cookies/CSRF exact; refresh rotation grace and family burn; sessions list/revoke; TOTP, recovery HMAC, persisted email-code attempts; Gate G-4 simplewebauthn on workerd",
+   "Round-trip budgets: refresh 2, login 2"
+  ]
+ },
+ {
+  "id": "NOTIF",
+  "title": "Notifications module (11 routes) + deliver consumer",
+  "files": [
+   "src/modules/notifications/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "P1-MAIL",
+   "P1-PUSH",
+   "P1-JOBS"
+  ],
+  "spec_refs": [
+   "misc.md \u00a72"
+  ],
+  "acceptance": [
+   "notify() outbox with dedupe; deliver consumer sets delivered_at; retry sweep; unsubscribe signing incl. one-click; preferences category order"
+  ]
+ },
+ {
+  "id": "OPS-ADMIN",
+  "title": "Health, ops, admin",
+  "files": [
+   "src/modules/ops/*",
+   "src/modules/admin/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "P1-MAIL"
+  ],
+  "spec_refs": [
+   "core.md \u00a71",
+   "misc.md \u00a73"
+  ],
+  "acceptance": [
+   "Port test_ops.py (4), test_server_errors.py (2), test_admin_merge.py (2)",
+   "Merge via fk-users list in one batch; metrics incl. D1 size and DLQ"
+  ]
+ },
+ {
+  "id": "GAME",
+  "title": "Game engine: aggregates, snapshot, outcome, recompute, rebuild",
+  "files": [
+   "src/modules/game/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "NOTIF",
+   "P1-JOBS",
+   "P1-CATALOG"
+  ],
+  "spec_refs": [
+   "game.md"
+  ],
+  "acceptance": [
+   "Day 1: publish service.ts interfaces as stubs",
+   "Port test_engine.py (21), test_engagement.py (14)",
+   "Property test incremental == full replay; OCC recompute test_recompute_is_serialized_across_concurrent_calls; snapshot read \u22641 round trip on heavy user"
+  ]
+ },
+ {
+  "id": "PROFILE-ACCOUNT",
+  "title": "Profile, settings, calendar feed, account export/import, deletion",
+  "files": [
+   "src/modules/profile/*",
+   "src/modules/account/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "GAME",
+   "P1-HEAVY",
+   "P1-R2"
+  ],
+  "spec_refs": [
+   "account.md"
+  ],
+  "acceptance": [
+   "Port test_prelaunch.py (10), test_qol.py (14)",
+   "Calendar .ics with 120/h limit and Cache API; inline/queued export and import with additive queued flag"
+  ]
+ },
+ {
+  "id": "TRAINING",
+  "title": "Training: workouts, changes/sync, batch, sets, exercises, routines, plans, gear, gyms, photos, activity/lifting import",
+  "files": [
+   "src/modules/training/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "GAME",
+   "P1-HEAVY",
+   "P1-R2",
+   "P1-CATALOG"
+  ],
+  "spec_refs": [
+   "training-a.md",
+   "training-b.md",
+   "schema.md \u00a72.1"
+  ],
+  "acceptance": [
+   "Port test_training.py (27), test_training_depth.py (6), test_plans.py (11), test_lifting_import.py (5), test_body_data.py (6), test_readiness_blocks.py (8)",
+   "Global sync_seq; /workouts/batch single LWW batch with applied from RETURNING; ETag/304 on changes; budgets on heavy user"
+  ]
+ },
+ {
+  "id": "HABITS",
+  "title": "Habits, insights, journal, routines, habit import",
+  "files": [
+   "src/modules/habits/*",
+   "src/modules/insights/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "GAME",
+   "P1-HEAVY"
+  ],
+  "spec_refs": [
+   "habits.md"
+  ],
+  "acceptance": [
+   "Port test_habits.py (7), test_habits_life.py (14), test_habit_schedule.py (7), test_insights.py (14)",
+   "Signed action URLs; aggregates updated in write batch"
+  ]
+ },
+ {
+  "id": "NUTRITION",
+  "title": "Nutrition (18 routes)",
+  "files": [
+   "src/modules/nutrition/*"
+  ],
+  "depends_on": [
+   "AUTH"
+  ],
+  "spec_refs": [
+   "misc.md \u00a71"
+  ],
+  "acceptance": [
+   "Port test_nutrition.py (7)",
+   "OFF lookup cached in Cache API; expenditure algorithm; 30/min binding"
+  ]
+ },
+ {
+  "id": "SOCIAL",
+  "title": "Social, buddies, groups/challenges, search",
+  "files": [
+   "src/modules/social/*",
+   "src/modules/groups/*",
+   "src/modules/search/*"
+  ],
+  "depends_on": [
+   "AUTH",
+   "NOTIF",
+   "GAME"
+  ],
+  "spec_refs": [
+   "social.md"
+  ],
+  "acceptance": [
+   "Port test_social.py (13), test_social_plans.py (7), test_buddies.py (11), test_features.py (22)",
+   "Habits never exposed; leaderboards from user_stats only; fold-column search with RL_SEARCH"
+  ]
+ },
+ {
+  "id": "TRASH",
+  "title": "Trash (restore/purge)",
+  "files": [
+   "src/modules/trash/*"
+  ],
+  "depends_on": [
+   "TRAINING",
+   "HABITS",
+   "NUTRITION"
+  ],
+  "spec_refs": [
+   "account.md trash",
+   "schema.md trash_items"
+  ],
+  "acceptance": [
+   "Restore triggers rebuild; purge_after honoured"
+  ]
+ },
+ {
+  "id": "JOBS-12",
+  "title": "The 12 worker jobs",
+  "files": [
+   "src/jobs/tasks/*.ts"
+  ],
+  "depends_on": [
+   "P1-JOBS",
+   "GAME",
+   "HABITS",
+   "SOCIAL",
+   "NOTIF",
+   "PROFILE-ACCOUNT",
+   "OPS-ADMIN"
+  ],
+  "spec_refs": [
+   "misc.md \u00a74"
+  ],
+  "acceptance": [
+   "Port test_worker.py (10)",
+   "Exact titles/bodies/dedupe keys; local-hour matching via zone grouping; purge R2 keys; housekeeping retention incl. rate_counters/sessions/staging; error_alerts hourly"
+  ]
+ },
+ {
+  "id": "CONTRACT",
+  "title": "App contract, golden responses, budgets, benches",
+  "files": [
+   "scripts/extract-app-routes.ts",
+   "test/contract/*",
+   "test/bench/*"
+  ],
+  "depends_on": [
+   "TRAINING",
+   "HABITS",
+   "SOCIAL",
+   "NUTRITION",
+   "PROFILE-ACCOUNT",
+   "TRASH",
+   "JOBS-12"
+  ],
+  "spec_refs": [
+   "DESIGN.md \u00a715,\u00a717"
+  ],
+  "acceptance": [
+   "Every app api() call site resolves to a route; response schemas satisfy app/src/lib/types.ts",
+   "Golden structural comparison for ~40 endpoints",
+   "test-parity: all 285 pytest names ported or documented; changed: tests for DESIGN \u00a719",
+   "Round-trip and CPU budgets on heavy user"
+  ]
+ },
+ {
+  "id": "CUTOVER",
+  "title": "Docs, privacy, deploy, retirement",
+  "files": [
+   "README.md",
+   "AGENTS.md",
+   "../infra/*.md",
+   "../web privacy page",
+   "config terms_version"
+  ],
+  "depends_on": [
+   "CONTRACT"
+  ],
+  "spec_refs": [
+   "DESIGN.md \u00a716,\u00a722"
+  ],
+  "acceptance": [
+   "Workers Builds deploy with migrations first; staging e2e green; custom domain swap without 522 window",
+   "/privacy lists Cloudflare + Brevo, 7-day Time Travel, terms_version bumped",
+   "Retire FastAPI Cloud, Actions worker/migrate, GHCR, Neon, Upstash after one clean week"
+  ]
+ }
+]

@@ -9,7 +9,7 @@ process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = "false";
 process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = "false";
 
 // Fixed, obviously fake secrets: tests must never depend on real credentials.
-const TEST_KEY = "dGVzdC1rZXktdGVzdC1rZXktdGVzdC1rZXktdGVzdC0="; // 32 bytes, base64
+const TEST_KEY = btoa("not-a-secret-test-key-32-bytes!!"); // 32 bytes, base64
 
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.join(root, "migrations"));

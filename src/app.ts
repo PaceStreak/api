@@ -65,6 +65,7 @@ export function createApp(mount: (app: App) => void): App {
       await next();
     } finally {
       c.res.headers.set("X-Request-Id", rid);
+      if (ctx.cfg.environment === "test") c.res.headers.set("X-D1-Round-Trips", String(ctx.stats.roundTrips));
       ctx.log.info("request", {
         method: c.req.method,
         route: c.req.routePath,

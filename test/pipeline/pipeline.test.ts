@@ -65,7 +65,7 @@ describe("error envelopes", () => {
     ]);
   });
 
-  it("a constraint violation is 409 (test_integrity_error_becomes_409)", async () => {
+  it("a constraint violation is 409 (test_a_lost_unique_race_is_a_409)", async () => {
     const res = await call(app, "/v1/_race", { method: "POST" });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ detail: SAVED_TWICE });

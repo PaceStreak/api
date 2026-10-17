@@ -4,6 +4,7 @@ import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   FOLD_COLUMNS,
+  foldLike,
   rateLimitGuard,
   runBatch,
   SESSION_LOGGED_OUT,
@@ -278,5 +279,39 @@ describe("withFold", () => {
       displayName: null,
       displayNameFold: null,
     });
+  });
+});
+
+describe("foldLike", () => {
+  it("matches case- and accent-insensitively and treats wildcards literally", async () => {
+    const u = await seedUser(t.db);
+    const now = Date.now();
+    const names = ["Ärger management", "50% more water", "500 pushups", "a_b test", "abc"];
+    await runBatch(
+      t.db,
+      names.map((name) =>
+        t.db.insert(habits).values(
+          withFold(habits, {
+            userId: u.userId,
+            name,
+            startedOn: "2026-10-18",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ),
+      ),
+    );
+    const find = async (term: string, mode: "prefix" | "contains") =>
+      (
+        await t.db
+          .select({ name: habits.name })
+          .from(habits)
+          .where(and(eq(habits.userId, u.userId), foldLike(habits.nameFold, term, mode)))
+          .orderBy(habits.nameFold)
+      ).map((r) => r.name);
+    expect(await find("ARG", "prefix")).toEqual(["Ärger management"]);
+    expect(await find("50%", "prefix")).toEqual(["50% more water"]);
+    expect(await find("a_b", "prefix")).toEqual(["a_b test"]);
+    expect(await find("WATER", "contains")).toEqual(["50% more water"]);
   });
 });

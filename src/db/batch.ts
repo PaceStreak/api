@@ -11,10 +11,10 @@
  */
 import { and, eq, getTableName, sql } from "drizzle-orm";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
-import type { SQLiteTable } from "drizzle-orm/sqlite-core";
+import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Ctx } from "../ctx.ts";
 import { constraintMessage, HttpError, SLOW_DOWN } from "../lib/errors.ts";
-import { foldOrNull } from "../lib/fold.ts";
+import { foldOrNull, likePattern } from "../lib/fold.ts";
 import type { Db } from "./client.ts";
 import type { UserRole } from "./schema/auth.ts";
 import { sessions, users } from "./schema/auth.ts";
@@ -215,4 +215,9 @@ export function withFoldPatch<T extends SQLiteTable>(
   patch: WithoutFold<Partial<T["$inferInsert"]>>,
 ): Partial<T["$inferInsert"]> & Partial<Pick<T["$inferInsert"], FoldKey<keyof T["$inferInsert"]>>> {
   return addFolds(table, patch as Record<string, unknown>) as Partial<T["$inferInsert"]>;
+}
+
+/** `fold_col LIKE <escaped folded term> ESCAPE '\\'`: case/accent-insensitive search; `prefix` can use the index. */
+export function foldLike(col: SQLiteColumn, term: string, mode: "prefix" | "contains") {
+  return sql`${col} LIKE ${likePattern(term, mode)} ESCAPE '\\'`;
 }

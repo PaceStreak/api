@@ -40,7 +40,9 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
-      include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+      // `pnpm bench` (BENCH=1) runs only the CPU benches; `pnpm vitest run` never does.
+      include:
+        process.env.BENCH === "1" ? ["test/bench/**/*.bench.ts"] : ["src/**/*.test.ts", "test/**/*.test.ts"],
       setupFiles: ["./test/setup.ts"],
     },
   };

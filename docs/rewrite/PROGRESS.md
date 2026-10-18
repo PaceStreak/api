@@ -1,6 +1,6 @@
-# Rewrite progress
+STATUS: COMPLETE
 
-Next step: CUTOVER (docs only): README, AGENTS.md, infra docs, privacy notes, terms_version; deploy steps documented, not executed. Leftovers: app e2e against Workers API, queue throughput watch.
+Next step: none for the build. Owner: follow docs/rewrite/CUTOVER.md (fix staging PUBLIC_API_URL, update app Playwright config and e2e CI on api-next, then the deploy and merges).
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -22,7 +22,7 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | TRASH | done (c0da71b; ratchet 59, 950 tests, 346.7 KiB) |
 | JOBS-12 | done (88cb86b; ratchet 7, 1214 tests, 375.9 KiB, migration 0005) |
 | CONTRACT | done (9994bae; parity 0 missing, 1325 tests, 376.8 KiB; app api-next 6904c72) |
-| CUTOVER (docs only) | todo |
+| CUTOVER (docs only) | done (a51bf51; terms_version 2026-10-19) |
 
 ## Gates
 

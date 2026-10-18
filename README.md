@@ -1,474 +1,156 @@
 # PaceStreak API
 
-> **Branch `next`** holds the TypeScript rewrite (Hono on Cloudflare Workers,
-> D1, Drizzle, Zod). The Python service described below still runs from `main`
-> until cutover. See [`AGENTS.md`](./AGENTS.md) for commands and
-> [`docs/rewrite/`](./docs/rewrite/) for the design.
-
 Backend for [PaceStreak](https://www.pacestreak.com), a habit and streak
-tracker. **Live at `api.pacestreak.com`.**
+tracker: about 265 routes under `/v1`, a scheduler and a job queue, in one
+Cloudflare Worker. TypeScript, [Hono](https://hono.dev), D1 through
+[Drizzle](https://orm.drizzle.team), [Zod](https://zod.dev).
 
-About 265 routes under `/v1`, a background worker, and a test suite of about
-285 tests that runs against real Postgres and Redis. It runs on FastAPI
-Cloud's free plan, with a scheduled GitHub Actions workflow as the worker, Neon
-Postgres, Upstash Redis, Cloudflare R2 and Brevo for mail; see
-[ARCHITECTURE.md](./ARCHITECTURE.md#statelessness-and-deployment).
+> **Branch `next` is this TypeScript service.** `main` still holds the Python
+> (FastAPI) service that serves `api.pacestreak.com` until the cutover in
+> [`docs/rewrite/CUTOVER.md`](./docs/rewrite/CUTOVER.md) merges `next` into
+> `main`. Read the old code with `git show main:app/<path>`.
 
-Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE) — anyone
-running a modified version of this over a network must offer its source to
-their users. That is the point of AGPL over GPL for a hosted service.
+Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE): anyone
+running a modified version over a network must offer its source to its users.
 
 ## Status
 
 | | |
 | --- | --- |
-| Stack | FastAPI, PostgreSQL, Redis; Docker Compose locally, FastAPI Cloud in production |
-| Hostname | `api.pacestreak.com`, a FastAPI Cloud custom domain (DNS-only CNAME in Cloudflare) |
-| Consumers | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
-| Tests | ~260, `make test`, nothing mocked; CI runs lint, tests, `alembic check` and an image build |
-| Deploys | Push to `main` → FastAPI Cloud's GitHub integration deploys the API; `migrate.yml` applies migrations; `publish.yml` builds the image the worker runs |
-| Monitoring | `/health` on [`status.pacestreak.com`](https://status.pacestreak.com) |
+| Runtime | Cloudflare Workers (Paid plan), Smart Placement |
+| Storage | D1 `pacestreak` (location `apac`), R2 `pacestreak-photos` and `pacestreak-staging` |
+| Background work | Three cron triggers and the `pacestreak-jobs` queue (one message per invocation, DLQ `pacestreak-jobs-dlq`) |
+| Mail | Cloudflare Email Service (`send_email` binding); a `console` transport in dev and tests |
+| Hostname | `api.pacestreak.com`, a Workers custom domain (after cutover) |
+| Consumer | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
+| Deploys | Workers Builds: push to `main` applies D1 migrations, then deploys; other branches deploy `--env staging` |
+| Monitoring | `/health`, `/health/ready`, `/health/worker` on [`status.pacestreak.com`](https://status.pacestreak.com) |
+
+Everything deployable is declared in [`wrangler.jsonc`](./wrangler.jsonc).
 
 ## Quick start
 
-```bash
-make keys          # generate the RS256 keypair into ./keys
-cp .env.example .env
-make dev           # build and start api + postgres + redis, with reload
-make migrate       # apply migrations (in a second terminal, once healthy)
-```
-
-The API is on `http://localhost:8000`, interactive docs at `/docs`.
+Needs Node 24 and pnpm (the version is pinned in `package.json`; `corepack enable`).
 
 ```bash
-make logs          # tail the api container
-make ps            # container status
-make down          # stop
-make clean         # stop and delete both data volumes (Postgres and Redis)
+pnpm install --frozen-lockfile
+cp .dev.vars.example .dev.vars        # gitignored; fill in the secrets below
+pnpm wrangler d1 migrations apply pacestreak --local
+pnpm dev                              # wrangler dev on http://localhost:8787
 ```
 
-## What it does
-
-| Area | Module | Highlights |
-| --- | --- | --- |
-| Auth | `app/auth/` | Signup, login, rotating refresh with reuse detection, CSRF, email verification, reset, sessions, TOTP + recovery codes, **passkeys (WebAuthn)** |
-| Profile | `app/profile/` | Onboarding, age gates (13 / 16), settings, reserved handles and brand-impersonation checks |
-| Training | `app/training/` | Workouts with offline-safe batch sync and a sequence change feed, 283-exercise library, 24 starter routines, 22 built-in plans, custom exercises, body metrics, streak chains with **requirements**, repairs, **pauses** (incl. travel), **GPX/FIT/CSV file import**, **tags**, **gear**, **training plans** |
-| Game | `app/game/` | Week-based streak engine, XP, levels, self-relative records, 29 achievements, 5 opt-in leaderboards, **weekly quests**, **weekly recap**, **year review**, **record history**, **joint (buddy/group) streaks** |
-| Social | `app/social/` | Follows with approval, feed, kudos, comments, blocks, reports, **buddy streaks**, **preset encouragement**; visibility checked at emit and at read |
-| Groups | `app/groups/` | Crews and coaching groups, coach consent, attendance challenges, mute, **group streak** |
-| Notifications | `app/notifications/` | Inbox, Web Push (VAPID), email, per-category preferences, RFC 8058 unsubscribe |
-| Account | `app/account/` | Export (JSON/CSV/ICS), import, deletion with a 30-day grace, security history, **private calendar feed** |
-| Admin | `app/admin/` | Reports, moderation, append-only audit log, metrics, **official accounts** |
-| Worker | `app/worker.py` | Stale-stat refresh, timezone-aware nudges (silent during a pause), weekly digest, challenge resolution, **monthly backup reminder**, deletion purge, housekeeping; writes a **heartbeat** every tick |
-| Ops | `app/ops/` | `/health` (liveness), `/health/ready` (Postgres required, Redis reported), `/health/worker` (503 after three missed ticks) |
-
-The pure engines (`game/streak.py`, `xp.py`, `levels.py`, `records.py`,
-`achievements.py`, `training/pauses.py`, `training/importers.py`) do no I/O and
-are tested without a database. Everything a user sees about their streak is
-recomputed from their log on read; nothing is stored that can drift.
-
-### Pauses
-
-`/v1/pauses`: declare an injury/illness/life break. A week the pause covers
-for 4+ days is `paused`: it neither breaks nor extends the run, spends and earns
-no freeze, pays no XP, and is excluded from consistency. Limits: start up to 14
-days back or 30 ahead, 12 weeks each, 120 days per trailing year, no overlaps;
-a pause that has sheltered weeks can be ended but not deleted.
-
-### File import
-
-`POST /v1/workouts/import` (multipart `file`, optional `discipline`). GPX via
-`defusedxml`, FIT via `fitdecode`, CSV with forgiving column names. Imported
-rows are `source="import"` with a deterministic `uuid5` id and a 3-minute
-duplicate window, so re-uploads never double-count. They count for the streak,
-never for challenges or rewarded records.
-
-### Calendar feed
-
-`POST /v1/me/calendar` returns a feed URL once; only its SHA-256 is stored.
-`DELETE` revokes it; creating again rotates it. The public
-`GET /v1/calendar/{token}.ics` carries time, discipline, title and
-duration/distance, never notes. Needs `PUBLIC_API_URL`.
-
-### Passkeys
-
-`/v1/auth/passkeys`: `register/options` (needs the password) then `register`;
-`sign-in/options` then `sign-in` (usernameless, no allow-list, rate limited
-like login). User verification is required, so a passkey sign-in skips the TOTP
-step. Challenges are rows in `webauthn_challenges`, deleted on use and swept by
-the worker. The relying party id defaults to the host of `FRONTEND_URL`
-(`app.pacestreak.com`); set `WEBAUTHN_RP_ID` only if that must differ, and
-never change it after launch - every registered passkey is bound to it.
-Tests use a software authenticator that produces real signatures.
-
-### Streak requirements, consistency, review
-
-A chain's `requirements` ("at least 2 days of run", max 3, summing to no more
-than the target) have a history like `target_history` and apply from the week
-they were set. `consistency_12`/`consistency_52` join the 4-week score.
-`GET /v1/me/review?year=` and `GET /v1/me/records/history?key=` read the same
-snapshot as everything else. Attendance only, never volume.
-
-### Tags, gear, plans
-
-Workouts carry private `tags` (normalised slugs, max 8) and an optional
-`gear_id`; unknown or foreign gear is dropped, not rejected, so offline edits
-still sync. `/v1/gear` mileage is summed from the log, never stored.
-`/v1/plans` (templates in `training/plan_templates.py`): one plan runs at a
-time; what's done is read from the log, and a session moved to another day of
-the same week still counts.
-
-### Buddies, group streaks, encouragement
-
-`/v1/buddies` pairs people with an accepted follow in either direction. A
-shared week is judged from each member's own week verdicts
-(`game/joint.py`), stored as `user_stats.recent_weeks` so no replay is needed.
-Blocking ends a pair. Group detail includes `streak`, judged against the
-owner's `streak_threshold` (50-100). `POST /v1/people/{handle}/encourage`
-takes one of six preset ids, once a day per pair.
-
-After deploying a release that adds a projected stats field, run
-`make recompute-all` once.
-
-### Recovery, email change, terms versions
-
-`POST /v1/auth/recover` sets a password with a 2FA recovery code (no email
-needed). `POST /v1/auth/change-email` needs the password and only moves the
-account when the code sent to the new address is confirmed
-(`/v1/auth/confirm-email-change`); the old address is told. `TERMS_VERSION`
-is the date of the current terms/privacy wording: **bump it in the same
-change as a material edit to /terms or /privacy on www**, and every
-signed-in person is asked to accept again (`POST /v1/me/terms`).
-
-### Crash reports and the abuse view
-
-`POST /v1/client-errors` is unauthenticated and anonymous, rate-limited,
-cut to the URL path, grouped by fingerprint and capped at 1000 groups.
-Failed sign-in, 2FA, passkey and recovery attempts are recorded with the IP
-and a keyed hash of the address. Admins see both under `/v1/admin/client-errors`
-and `/v1/admin/abuse`; the worker sweeps both after 30 days.
-
-### Habits, depth and shared plans
-
-Smart reminders (`reminder_mode=smart`) nudge an hour before the most
-common training hour of the last 60 days (`game/reminders.py`). Monthly goals
-and rest days live under `/v1/me/monthly-goal` and `/v1/me/rest-days`; neither
-touches a streak. Sets carry an optional `superset` number; imported
-GPX/FIT tracks produce kilometre `splits`. Plans export and import as
-`pacestreak-plan` files; `plan_sessions` challenges and coach suggestions
-(`POST /v1/groups/{id}/members/{uid}/plan`, consent required) reuse the same
-helpers. Group owners and admins post `/v1/groups/{id}/announcements`.
-
-### Merging accounts
-
-`POST /v1/admin/users/{id}/merge` (admin only, audited) moves everything one
-account owns into another (`into`) and deletes it; the source's email must be
-typed back as `confirm_email`. Tables come from Postgres's foreign keys at run
-time, so new tables are covered. Sign-in material is not moved, self-links
-(following yourself) are dropped, and on a collision the destination's row
-wins unless `keep_source_profile` is set. Stats are recomputed afterwards.
-
-### Official accounts
-
-`POST /v1/admin/users/{id}/official` (admin only, audited) is the only way a
-reserved handle such as `pacestreak` can be assigned. Non-official accounts
-cannot use the brand anywhere in a handle or display name, including with
-separators or look-alike digits.
-
-The rules are in `app/profile/reserved.py`: about 280 exact words (staff and
-authority, mail conventions, hosts, app routes, placeholders), the same list
-after folding look-alikes (`adm1n`), words like `moderator` anywhere,
-`admin`/`official`/`verified` at either end (`admin_user`, but not
-`badminton`), and whole words such as `mod` or `staff` (`run_mod_42`, but not
-`model`). Existing handles are never re-checked.
-
-## Auth endpoints
-
-All under `/v1/auth`, per the versioning rule below.
-
-| Method | Path | Auth required | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `/signup` | — | Create an account. Returns `201`. Does **not** log you in. |
-| `POST` | `/login` | — | Exchange credentials for a token pair, or an MFA challenge. |
-| `POST` | `/refresh` | refresh cookie + CSRF header | Rotate the refresh token, mint a new access token. |
-| `POST` | `/logout` | refresh cookie + CSRF header | End this session only. |
-| `POST` | `/logout-all` | bearer | End every session for this user, on every device. |
-| `GET` | `/me` | bearer | The current user. |
-| `POST` | `/verify-email` | email + code | Redeem the 6-digit code from the verification email. |
-| `POST` | `/resend-verification` | — | Email another verification code. |
-| `POST` | `/forgot-password` | — | Email a reset code. Always reports success. |
-| `POST` | `/reset-password` | email + code | Set a new password and sign out everywhere. |
-| `POST` | `/change-password` | bearer + current password | Change password, keep this session, end the others. |
-| `GET` | `/sessions` | bearer | List active sessions, with the current one flagged. |
-| `DELETE` | `/sessions/{id}` | bearer | End one session remotely. |
-| `GET` | `/2fa` | bearer | Two-factor status and remaining recovery codes. |
-| `POST` | `/2fa/setup` | bearer | Generate a TOTP secret and provisioning URI. |
-| `POST` | `/2fa/enable` | bearer + password + code | Confirm setup, receive recovery codes. |
-| `POST` | `/2fa/verify` | MFA challenge | Second half of login. TOTP or a recovery code. |
-| `POST` | `/2fa/recovery-codes` | bearer + code | Replace the recovery codes. |
-| `POST` | `/2fa/disable` | bearer + password + code | Turn two-factor off. |
-
-The access token goes in an `Authorization: Bearer` header; the refresh token
-is an httpOnly cookie you never touch directly. There is no endpoint that
-issues a CSRF token — it arrives in the `csrf_token` cookie at login and is
-*replaced on every refresh*, so re-read it each time and send it back as
-`X-CSRF-Token`. Passwords must be **at least 16 characters**.
-
-In production the cookies carry the `__Secure-` prefix and `Domain=pacestreak.com`
-so `app.pacestreak.com` can send them here — see `app/auth/router.py` and
-[`AGENTS.md`](https://github.com/PaceStreak/pacestreak/blob/main/AGENTS.md) and `ARCHITECTURE.md` for why. Locally, with `COOKIE_SECURE=False`,
-they are named `refresh_token` / `csrf_token` with no prefix, because the
-prefix requires `Secure` and local development is plain HTTP.
-
-Full design in [ARCHITECTURE.md](./ARCHITECTURE.md).
-
-## Constraints already settled
-
-These are not suggestions. Each one is either load-bearing for the frontend or
-was learned by breaking something.
-
-### Cookies and CORS
-
-`api.pacestreak.com` and `www.pacestreak.com` are **cross-origin but same-site**
-— they share the registrable domain `pacestreak.com`. Consequences:
-
-- **`SameSite=Lax` works.** You do *not* need `SameSite=None`, and reaching for
-  it would needlessly widen exposure.
-- **The auth cookie must be scoped `Domain=pacestreak.com`** to be sent from the
-  frontend to this API. That means it is sent to *every* subdomain, so nothing
-  untrusted may ever be hosted under `pacestreak.com`.
-- **You cannot use the `__Host-` prefix** — it forbids a `Domain` attribute.
-  Use `__Secure-` with `HttpOnly`, `Secure`, `SameSite=Lax`.
-- CORS must send `Access-Control-Allow-Credentials: true` and an **explicit**
-  `Access-Control-Allow-Origin` — a wildcard is rejected when credentials are
-  included.
-
-### The frontend's CSP names this host
-
-Every site in the org ships `default-src 'self'`. `app/public/_headers` in
-`PaceStreak/app` allows `connect-src 'self' https://api.pacestreak.com`; if
-this API's hostname ever changes, that line must change **in the same
-commit** as the app's base URL, or every request fails silently. `www` never
-calls this API and its `connect-src` stays `'self'`.
-
-### Versioning
-
-Prefix routes with `/v1/`. Retrofitting a version prefix after clients exist is
-far more expensive than carrying one from the first commit. Every response
-under `/v1` also carries a `PaceStreak-Version` header naming the URL version
-that served it. Full policy - what counts as a breaking change, how `/v2`
-would get added, how a version eventually gets deprecated - is in
-[VERSIONING.md](./VERSIONING.md).
-
-### Cloudflare Turnstile guards the mailer and password/recovery endpoints
-
-`/auth/signup`, `/auth/login`, `/auth/forgot-password`, `/auth/resend-verification`
-and `/auth/recover` call `app/turnstile.py` before doing anything else. This is
-a deliberate, narrow exception to "no third-party services": Turnstile is
-Cloudflare's own product, already trusted for DNS and the CDN, and it exists
-specifically to stop a script from emptying Brevo's free SMTP quota (300/day)
-by hammering signup or resend-verification, or from grinding past the per-IP
-rate limits in `app/ratelimit.py` by spreading requests across addresses.
-
-- `TURNSTILE_SECRET_KEY` unset (the default) turns verification off entirely -
-  local development and the test suite need no Cloudflare account, same as
-  `EMAIL_BACKEND=console`. It is **required** in production
-  (`compose.prod.yaml`), enforced by `_check_production_config` in `app/main.py`.
-- The frontend's site key is public by design (`app/.env.example`,
-  `PUBLIC_TURNSTILE_SITE_KEY`) and renders the widget via
-  `challenges.cloudflare.com`, which the app's CSP allows in `script-src`,
-  `connect-src` and `frame-src` - the one embedded third-party script this
-  product ships, and it is not optional.
-- `/auth/resend-verification` skips the check for a caller who is already
-  signed in and asking to resend to *their own* address (`get_optional_user`
-  in `app/auth/dependencies.py`) - a live session already proves who they are,
-  so Today's coach card and the Settings resend button need no widget. Asking
-  to resend to any other address still requires a token.
-- A Turnstile token is single-use: Signup's immediate auto-login after a
-  successful signup call gets its own fresh token
-  (`captchaRef.current.getFreshToken()` in `app/src/routes/auth/Signup.tsx`),
-  not a reuse of the signup one.
-
-### Data export is a product promise
-
-The public site promises full export. It is built (`/v1/me/export`, JSON, CSV
-and ICS), and any new table holding user data must be added to both
-`build_export` and `import_data` in `app/account/router.py`, as pauses were.
-
-## Migrations
-
-Alembic is the only thing allowed to change the schema.
+Local secrets for `.dev.vars` (never reuse them anywhere else):
 
 ```bash
-make migration m="add whatever"   # autogenerate from model changes
-make migrate                      # apply, inside the running containers
-make current                      # what revision the database is on
-make history                      # the full chain
-make downgrade                    # back one revision
+openssl rand -base64 32               # PEPPER, and again for DATA_KEY
+printf '{"current":"k1","keys":{"k1":"%s"}}\n' "$(openssl rand -base64 32)"   # JWT_KEYS
 ```
 
-`RUN_MIGRATIONS=1` in `.env` also runs `alembic upgrade head` from the
-container entrypoint on boot — off by default so a multi-replica deploy does
-not race itself; see `docker/entrypoint.sh`.
+`TURNSTILE_SECRET_KEY` can be Cloudflare's always-pass test secret
+`1x0000000000000000000000000000000AA`; VAPID and R2 keys are optional locally
+(push and photo backup then answer 503). With `MAILER=console`,
+verification, reset and email-change codes print to the `wrangler dev` log.
 
-## Tests
+Run the app against it with `PUBLIC_API_BASE_URL=http://localhost:8787` in
+`../app`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `pnpm dev` | `wrangler dev` with local D1, R2 and Queues under `.wrangler/` |
+| `pnpm typecheck` | TypeScript 7 over `src`, `test` and `scripts` |
+| `pnpm lint` / `pnpm format` | `biome ci .` / fix formatting and safe lints |
+| `pnpm test` | Vitest inside `workerd` (`@cloudflare/vitest-plugin`) |
+| `pnpm check:deps` | Module boundaries (`docs/rewrite/DESIGN.md` §2) |
+| `pnpm check:parity` | Every pytest from the Python service is ported or explicitly dropped |
+| `pnpm check:app` | The routes the app calls exist here |
+| `pnpm build` | `wrangler deploy --dry-run` and the 400 KiB gzip bundle budget |
+| `pnpm db:generate` | New migration from `src/db/schema`; then `pnpm db:fk-users` |
+| `pnpm types` | Regenerate `worker-configuration.d.ts` after editing `wrangler.jsonc` |
+| `pnpm admin ...` | Operator commands (create-admin, set-password, set-role); print SQL for `wrangler d1 execute` |
+| `pnpm bench` | Benchmarks (`test/bench`) |
+
+## Layout
+
+```text
+src/
+  index.ts          Worker entry: fetch, scheduled, queue
+  app.ts routes.ts  Hono app, middleware, route table
+  env.ts            Config: vars and secrets parsed once by Zod; SETTINGS (terms_version, token lifetimes)
+  ctx.ts            Per-request context (db, deferred work, round-trip counter)
+  db/               Drizzle schema, AuthedBatch (one read batch, one write batch), guards
+  modules/          auth, profile, habits, training, game, social, groups, nutrition,
+                    insights, notifications, account, trash, search, admin, ops
+  jobs/             Cron dispatch, leases, heartbeat, queue consumer, tasks
+  heavy/            Resumable importers and exporters (CSV, GPX, FIT, ZIP, JSON)
+  lib/              Crypto (PBKDF2, JWT, AES-GCM), mailer, push (RFC 8291/8292), R2, rate limits
+  catalog/          Exercises, routines and plans (data)
+migrations/         D1 SQL migrations (drizzle-kit), applied before every deploy
+test/               Vitest suites; test/parity holds the ported pytest cases
+docs/rewrite/       Owner decisions, design, conventions, workplan, progress, cutover
+```
+
+## Testing
+
+`pnpm test` runs every suite inside `workerd`, the real Workers runtime, with
+local D1, R2 and Queues provided by Miniflare. Nothing is mocked except
+outbound `fetch`, which is blocked unless a test stubs it.
+
+**There is no "tests truncate your database" hazard any more.** The Python
+suite ran against whichever Postgres it was pointed at and truncated every
+table, so pointing it at the dev database wiped the dev admin. Here each test
+file gets its own fresh, isolated D1 with the migrations applied
+(`test/setup.ts`), held in memory by the test runner. Tests read their
+bindings only from `vitest.config.ts` (fixed, obviously fake secrets) and
+never from `.dev.vars`, `.env` or a remote database, so they cannot reach
+local `wrangler dev` state or production.
+
+Each route has a D1 round-trip budget, asserted with `expectRoundTrips`.
+`CHANGES-FROM-PYTHON.md` lists every intentional behaviour change with the
+test that covers it.
+
+## Deploy
+
+Workers Builds deploys on push; there is no deploy workflow and CI needs no
+secrets. On `main`:
 
 ```bash
-make dev      # the suite runs against the real Postgres and Redis
-make test
+pnpm wrangler d1 migrations apply pacestreak --remote && pnpm wrangler deploy
 ```
 
-**`make test` truncates every table in the database it points at.** Run it
-against a throwaway database if the dev one holds anything you care about:
+Migrations land before the code, and the old code briefly runs against the
+new schema, so a migration must stay backward compatible (add, never rename
+or drop in the same release). Roll back code with `pnpm wrangler rollback`;
+roll back data with D1 Time Travel (30 days on Workers Paid). Secrets are set
+with `wrangler secret put` and never committed: see
+[`docs/rewrite/CUTOVER.md`](./docs/rewrite/CUTOVER.md) step 8 for the list
+and how to generate each one.
 
-```bash
-docker compose exec postgres psql -U pacestreak -c "CREATE DATABASE pacestreak_test"
-DATABASE_URL=postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test \
-REDIS_URL=redis://localhost:6379/15 uv run alembic upgrade head
-DATABASE_URL=postgresql+asyncpg://pacestreak:pacestreak@localhost:5432/pacestreak_test \
-REDIS_URL=redis://localhost:6379/15 uv run pytest
-```
+## Load-bearing rules
 
-The suite never reads `.env` (`tests/conftest.py` sets `PACESTREAK_ENV_FILE=""`),
-so local runs match CI and can't send real email or need Turnstile.
+- **The API host and the app's CSP move together.** `app/public/_headers`
+  allows `connect-src https://api.pacestreak.com` (and the R2 account host in
+  `R2_ACCOUNT_HOST`). If either host changes, change `_headers` in the same
+  commit as the base URL, or every request fails silently.
+- **The refresh cookie is `Domain=pacestreak.com`, `__Secure-`, `SameSite=Lax`,
+  `Path=/v1/auth`.** `__Host-` would forbid `Domain`; `SameSite=None` would
+  widen exposure for nothing (app and api are same-site). Nothing untrusted
+  may ever be hosted under `pacestreak.com`.
+- **CORS lists explicit origins** (`CORS_ORIGINS`); `*` is refused at startup
+  because credentials are sent.
+- **A production misconfiguration refuses to serve**: every request is a 500
+  and the log says `refusing to start: <reason>`.
+- **Habits never reach anyone else**: no feed, profile, group or leaderboard
+  shows a habit's name, amounts or slips.
+- **A material change to `/privacy` or `/terms` bumps `SETTINGS.termsVersion`**
+  in `src/env.ts`, which makes every account accept again.
+- **Do not raise the queue's `max_batch_size`**: D1 allows 1,000 statements per
+  invocation, so a consumer takes one message at a time.
 
-Nothing is mocked: the behaviour under test is mostly about transactions,
-rotation and revocation, which a mock would not exercise. Every test starts
-from an empty database and a flushed Redis.
+## More
 
-## Known gaps
-
-- **`totp_last_used_step` prevents a TOTP code being replayed only for
-  *this* installation's own login flow.** It does not protect a code shared
-  out-of-band before it is used once here.
-- **No account lockout after repeated failed logins** beyond the per-IP rate
-  limit in `app/ratelimit.py` — a distributed attacker still gets
-  `RATE_LIMIT_LOGIN` guesses per IP.
-- **Brevo's free tier sends 300 mails a day.** Turnstile keeps scripts from
-  spending it, but a real surge of sign-ups could still hit the cap.
-
-## Production
-
-**Where it runs now:**
-
-- **API:** FastAPI Cloud (app `pacestreak-api`, team `PaceStreak`), deployed by
-  its GitHub integration on every push to `main`. The entrypoint comes from
-  `[tool.fastapi]` in `pyproject.toml`; configuration is the app's environment
-  variables there (`fastapi cloud env list`). There is no migration step on
-  boot.
-- **Migrations:** `.github/workflows/migrate.yml` runs `alembic upgrade head`
-  against Neon when `alembic/**` changes on `main` (or on manual dispatch). It
-  races the deploy by about a minute, so a migration must stay compatible with
-  the code that is still running: add first, switch the code, drop later.
-- **Worker:** `.github/workflows/worker.yml` runs `python -m app.worker --once`
-  from `ghcr.io/pacestreak/api:latest` every five minutes. Its environment is
-  the `WORKER_ENV_JSON` secret, and GitHub disables schedules after 60 days
-  without repository activity.
-- **Secrets:** the same values live in FastAPI Cloud's environment and in the
-  `WORKER_ENV_JSON` secret; rotate both together.
-
-The images stay host-agnostic: `compose.prod.yaml` runs the same stack on
-any Docker host behind a TLS-terminating proxy in front of `127.0.0.1:8000`:
-
-```bash
-cp .env.example .env && chmod 600 .env   # then fill in the required values
-make prod-config                          # names any required variable still missing
-make prod-up                              # migrate once, then api + worker
-```
-
-`compose.prod.yaml` refuses to start without `POSTGRES_PASSWORD`,
-`JWT_PRIVATE_KEY_PEM`, `JWT_PUBLIC_KEY_PEM`, `TOTP_ENCRYPTION_KEY`,
-`SMTP_HOST` and `FORWARDED_ALLOW_IPS`. The app itself then refuses to start
-unless email is `smtp` with TLS, cookies are secure, `DEBUG` is off and
-`PUBLIC_API_URL` is https. Keys are passed as PEM contents in environment
-variables; a flattened one-line PEM with literal `\n` works. Keys are read
-once per process, so restart after rotating them.
-
-Containers run with a read-only root filesystem, `no-new-privileges`, memory
-limits and rotated logs. Migrations run once in a `migrate` container before
-the API starts, never from every replica.
-
-### Email
-
-`EMAIL_BACKEND=smtp` works with any provider: STARTTLS on 587 (default) or
-implicit TLS on 465 (`SMTP_SSL=True`, `SMTP_STARTTLS=False`). Transient
-failures retry three times with backoff. Notification mail carries RFC 8058
-`List-Unsubscribe` headers, and mail clients' one-click POST goes to
-`/v1/notifications/unsubscribe/one-click`. Production uses Brevo, with SPF
-and DKIM set for `pacestreak.com`.
-
-### Admin accounts
-
-```bash
-make create-admin email=you@example.com   # prompts for the password
-make set-password email=you@example.com   # also signs out every session
-make recompute-all                        # rebuild every stats projection
-docker compose exec api python -m app.cli set-role someone@example.com moderator
-```
-
-Passwords are prompted for (or read from `PACESTREAK_PASSWORD` for
-automation), never taken from argv.
-
-### Health and monitoring
-
-Point the status page at `/health/ready` (API and database) and
-`/health/worker` (reminders, digests and purges actually running). The admin
-Metrics tab shows each job's last result.
-
-### Capacity (measured 2026-10-02)
-
-`scripts/loadtest.py` runs signed-in users through what the app does all
-day (open, sync, log a session, read habits and the feed) against a local
-stack, and only a gentle `/health` read against production.
-
-| Where | Load | Throughput | p50 / p95 | Errors |
-| --- | --- | --- | --- | --- |
-| Local, one process | 10 users | 38 req/s | 130-520 / 180-1000 ms | none |
-| Local, one process | 30 users | 45 req/s | 400-1230 / 630-1940 ms | none |
-| Production `/health` | 5 req/s | - | 373 / 3568 ms | none |
-
-One API process saturates at about 40-45 requests a second; more users
-only add queueing. Saving a session is the costliest call because it
-recomputes streaks and stats. The production numbers above were measured
-on the previous GCP e2-micro (about 340 ms of every request from India was
-the round trip to us-central1, and the p95 spikes were its shared burstable
-CPU). The API now runs on FastAPI Cloud's free plan (0.1 vCPU, bursting to
-0.5, scale-to-zero, us-east-1), so re-run `scripts/loadtest.py --health-only`
-against it before quoting any figure.
-
-### Backups
-
-```bash
-make backup                      # scripts/backup.sh, then restore-check.sh
-scripts/restore-check.sh FILE    # restore into a scratch DB and verify
-scripts/restore.sh FILE          # restore OVER the live DB (asks first)
-```
-
-Dumps are custom-format, checksummed and mode 0600 in `./backups` (git-ignored),
-kept for `BACKUP_KEEP_DAYS` (default 14). The newest is never pruned. Every
-backup is immediately test-restored into a throwaway database and compared
-against the live schema revision; a backup that has never been restored is not
-trusted. In production, Neon and Upstash provide managed point-in-time
-recovery (Neon's is a 6-hour restore history); off-provider dumps were
-considered and declined by the owner, and `/privacy` says so. For production, prefix both with
-`COMPOSE="docker compose -f compose.yaml -f compose.prod.yaml"`.
-
-## Local development
-
-See **Quick start** above for the container workflow. Without containers:
-
-```bash
-make install       # uv sync
-make migrate-local # apply migrations to the DATABASE_URL in .env
-make run           # fastapi dev
-```
-
-## Documentation
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — how the pieces fit and why
-- [VERSIONING.md](./VERSIONING.md) — the API versioning and deprecation policy
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to work on this
-- [SECURITY.md](./SECURITY.md) — reporting a vulnerability
-- [CHANGELOG.md](./CHANGELOG.md) — what changed
-- [Infrastructure](https://github.com/PaceStreak/infra) — DNS, Cloudflare, runbooks
+- [`AGENTS.md`](./AGENTS.md): working rules for this repo.
+- [`docs/rewrite/`](./docs/rewrite/): `OWNER-DECISIONS.md` (overrides the
+  rest), `DESIGN.md`, `CONVENTIONS.md`, `CHANGES-FROM-PYTHON.md`, `CUTOVER.md`.
+- [`SECURITY.md`](./SECURITY.md), [`CONTRIBUTING.md`](./CONTRIBUTING.md).

@@ -22,6 +22,7 @@
     "db:check": "drizzle-kit check",
     "db:fk-users": "tsx scripts/gen-fk-users.ts",
     "seed:heavy": "tsx scripts/seed-heavy.ts",
+    "admin": "tsx scripts/admin.ts",
     "types:check": "wrangler types --env-file .dev.vars.example --check",
     "bench": "BENCH=1 vitest run"
   },

@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: JOBS-12 (batch trash purgeExpired, sweepExpiredChallenges, groups resolveFinished hourly, buddy-nudge job + its parity test), then CONTRACT (app api-next; settle D1 per-request query limit for coach view, people-search change) and CUTOVER.
+Next step: CONTRACT (app api-next; settle D1 per-request query limit for coach view; people-search change; 7 parity names still missing), then CUTOVER docs (queue ops cost, PHOTOS and STAGING buckets, Email Service onboarding).
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -20,7 +20,7 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | NUTRITION | done |
 | SOCIAL | done (baaa7b1; ratchet 20, 1002 tests, 368.4 KiB) |
 | TRASH | done (c0da71b; ratchet 59, 950 tests, 346.7 KiB) |
-| JOBS-12 | todo |
+| JOBS-12 | done (88cb86b; ratchet 7, 1214 tests, 375.9 KiB, migration 0005) |
 | CONTRACT | todo |
 | CUTOVER (docs only) | todo |
 

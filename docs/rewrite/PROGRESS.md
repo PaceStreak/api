@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: TRAINING, HABITS, NUTRITION and SOCIAL in parallel, then TRASH and JOBS-12. GAME is done: see its integration hooks (statRefresh, recompute, setHabitSource, jointStreak) in src/modules/game/.
+Next step: TRAINING, NUTRITION and SOCIAL in parallel, then TRASH and JOBS-12. GAME is done: see its integration hooks (statRefresh, recompute, setHabitSource, jointStreak) in src/modules/game/.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -15,7 +15,8 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | NOTIF OPS-ADMIN | done (442 tests; parity 231 missing) |
 | GAME | done (11 /me routes + leaderboards, recompute consumer; parity 200 missing) |
 | PROFILE-ACCOUNT | done |
-| TRAINING HABITS NUTRITION SOCIAL | todo |
+| HABITS | done |
+| TRAINING NUTRITION SOCIAL | todo |
 | TRASH JOBS-12 | todo |
 | CONTRACT | todo |
 | CUTOVER (docs only) | todo |

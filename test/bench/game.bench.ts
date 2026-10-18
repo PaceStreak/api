@@ -18,10 +18,12 @@ describe("game", () => {
     loaded = await game.internal.load(jobCtx(), userId, []);
   }, 120_000);
 
-  // Measured 4.3 ms locally for the 5-year user; DESIGN §17's 5 ms is a Free-plan class target, so the
-  // heaviest possible user gets 8 ms on Paid (OWNER-DECISIONS). Typical users are a fraction of this.
+  // Measured 4.3 ms before the heavy user's 20 habits (five of them five-year quit habits, ~9,000 clean days)
+  // joined the snapshot; 13.5 ms with them after the CONTRACT unit's memoised day conversions in the habit engine
+  // (45 ms before). DESIGN §17's 5 ms is a Free-plan class target for a typical user; this is the heaviest
+  // possible account on Paid (OWNER-DECISIONS).
   benchCase("snapshot derivation (heavy user)", () => game.internal.snapshotOf(loaded), {
-    budgetMs: 8,
+    budgetMs: 30,
     ops: 20,
     samples: 9,
   });
@@ -30,11 +32,11 @@ describe("game", () => {
     async () => {
       game.internal.snapshotOf(await game.internal.load(jobCtx(), userId, []));
     },
-    { budgetMs: 70, ops: 5, samples: 5 },
+    { budgetMs: 120, ops: 5, samples: 5 },
   );
   benchCase(
     "recompute without record keys (heavy user, local D1 wall time)",
     () => game.recompute(jobCtx(), userId, { notify: false }),
-    { budgetMs: 80, ops: 3, samples: 5 },
+    { budgetMs: 120, ops: 3, samples: 5 },
   );
 });

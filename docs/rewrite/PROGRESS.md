@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: CONTRACT (app api-next; settle D1 per-request query limit for coach view; people-search change; 7 parity names still missing), then CUTOVER docs (queue ops cost, PHOTOS and STAGING buckets, Email Service onboarding).
+Next step: CONTRACT in progress, paused at 5h 93% (resume after 23:40 IST). Work is on branch wip-contract (pushed; local worktree scratchpad/api-contract, branch contract) and app branch api-next (local worktree scratchpad/app-next). Resume: finish CONTRACT on that branch, verify all checks, merge into next; then CUTOVER docs.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.

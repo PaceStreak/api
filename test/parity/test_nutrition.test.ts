@@ -161,33 +161,34 @@ describe("test_nutrition", () => {
     expect((await api(`/v1/nutrition/barcode/${digits(8)}`, { token: me.token })).status).toBe(503);
   });
 
-  it.each([
-    [
-      {
-        product_name: "Bar",
-        brands: "Acme, Other",
-        serving_quantity: 40,
-        serving_size: "1 bar (40 g)",
-        nutriments: { "energy-kcal_serving": 180, proteins_serving: 20, "energy-kcal_100g": 450 },
-      },
-      {
-        name: "Bar",
-        brand: "Acme",
-        serving_label: "1 bar (40 g)",
-        kcal: 180,
-        protein_g: 20,
-        carbs_g: 0,
-        fat_g: 0,
-      },
-    ],
-    [
-      { product_name: "Milk", nutriments: { "energy-kcal_100g": 64, fat_100g: 3.6 } },
-      { name: "Milk", brand: null, serving_label: "100 g", kcal: 64, protein_g: 0, carbs_g: 0, fat_g: 3.6 },
-    ],
-    [{ product_name: "Mystery", nutriments: {} }, null],
-    [{ nutriments: { "energy-kcal_100g": 10 } }, null],
-  ])("parse_open_food_facts_product %#", (product, expected) => {
-    expect(parseProduct(product)).toEqual(expected);
+  it("parse_open_food_facts_product", () => {
+    const cases: [Record<string, unknown>, unknown][] = [
+      [
+        {
+          product_name: "Bar",
+          brands: "Acme, Other",
+          serving_quantity: 40,
+          serving_size: "1 bar (40 g)",
+          nutriments: { "energy-kcal_serving": 180, proteins_serving: 20, "energy-kcal_100g": 450 },
+        },
+        {
+          name: "Bar",
+          brand: "Acme",
+          serving_label: "1 bar (40 g)",
+          kcal: 180,
+          protein_g: 20,
+          carbs_g: 0,
+          fat_g: 0,
+        },
+      ],
+      [
+        { product_name: "Milk", nutriments: { "energy-kcal_100g": 64, fat_100g: 3.6 } },
+        { name: "Milk", brand: null, serving_label: "100 g", kcal: 64, protein_g: 0, carbs_g: 0, fat_g: 3.6 },
+      ],
+      [{ product_name: "Mystery", nutriments: {} }, null],
+      [{ nutriments: { "energy-kcal_100g": 10 } }, null],
+    ];
+    for (const [product, expected] of cases) expect(parseProduct(product)).toEqual(expected);
   });
 
   it("coach_flags_low_readiness_and_short_protein", async () => {

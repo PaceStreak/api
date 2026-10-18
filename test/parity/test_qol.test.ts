@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { habits, notifications } from "../../src/db/schema/index.ts";
 import { listZip, readZipEntry } from "../../src/heavy/zip.ts";
+import { addDays } from "../../src/lib/time.ts";
 import { uuid7 } from "../../src/lib/uuid7.ts";
 import { exportAttachment } from "../../src/modules/account/service.ts";
 import { signup } from "../fixtures/auth.ts";
@@ -129,5 +130,28 @@ describe("test_qol: habit reminders", () => {
     expect(await runFor("habit_summary", me.userId)).toEqual([]); // once a day
     const off = await jsonOf<{ habit_summary_hour: number | null }>(await put({ habit_summary_hour: null }));
     expect(off.habit_summary_hour).toBeNull();
+  });
+
+  it("bulk_days_fill_clear_and_validate", async () => {
+    const me = await person();
+    const token = me.token;
+    const today = new Date().toISOString().slice(0, 10);
+    const habit = await jsonOf<{ id: string }>(await api("/v1/habits", { token, json: { name: "Stretch" } }));
+    const bulk = (json: unknown) => api(`/v1/habits/${habit.id}/days`, { token, method: "PUT", json });
+    const count = async () =>
+      (await jsonOf<{ days: unknown[] }>(await api(`/v1/habits/${habit.id}?days=10`, { token }))).days.length;
+    const days = Array.from({ length: 5 }, (_, i) => addDays(today, -i));
+    expect((await bulk({ days: days.map((date) => ({ date, amount: 1 })) })).status).toBe(200);
+    expect(await count()).toBe(5);
+    await bulk({ days: [{ date: days[0], amount: 0 }] });
+    expect(await count()).toBe(4);
+    const dup = {
+      days: [
+        { date: days[0], amount: 1 },
+        { date: days[0], amount: 1 },
+      ],
+    };
+    expect((await bulk(dup)).status).toBe(422);
+    expect((await bulk({ days: [{ date: addDays(today, 2), amount: 1 }] })).status).toBe(422);
   });
 });

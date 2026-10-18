@@ -16,6 +16,7 @@
     "test": "vitest run",
     "check:deps": "tsx scripts/check-module-deps.ts",
     "check:parity": "tsx scripts/test-parity.ts",
+    "check:app": "tsx scripts/extract-app-routes.ts --check",
     "build": "wrangler deploy --dry-run --outdir dist && tsx scripts/check-bundle-size.ts dist",
     "types": "wrangler types --env-file .dev.vars.example",
     "db:generate": "drizzle-kit generate",

@@ -5,7 +5,7 @@
 import type { Ctx } from "../../ctx.ts";
 import { retryUndelivered } from "../../modules/notifications/service.ts";
 import type { ConsumerRegistry } from "../consumer.ts";
-import { chunk, dispatchDeliver, dispatchJobSlices, dispatchPurge, IDS_PER_MESSAGE } from "../dispatch.ts";
+import { chunk, dispatchDeliver, dispatchJobSlices, dispatchPurge, idsPerSlice } from "../dispatch.ts";
 import type { JobName, JobRegistry, Tick } from "../scheduled.ts";
 import { buddyNudges } from "./buddies.ts";
 import type { SlicedJob } from "./common.ts";
@@ -79,6 +79,6 @@ export async function runSliced(ctx: Ctx, name: JobName, tick?: Partial<Tick>): 
   };
   const ids = await job.select(ctx, full);
   const out: string[] = [];
-  for (const part of chunk(ids, IDS_PER_MESSAGE)) out.push(...(await job.slice(ctx, part)));
+  for (const part of chunk(ids, idsPerSlice(name))) out.push(...(await job.slice(ctx, part)));
   return out;
 }

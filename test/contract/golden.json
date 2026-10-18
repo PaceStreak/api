@@ -1,0 +1,1270 @@
+{
+  "GET /body-metrics": [
+    {
+      "arm_cm": "null",
+      "body_fat_pct": "null",
+      "calf_cm": "null",
+      "chest_cm": "null",
+      "date": "string",
+      "forearm_cm": "null",
+      "hips_cm": "null",
+      "neck_cm": "null",
+      "note": "null",
+      "resting_hr": "number",
+      "shoulders_cm": "null",
+      "sleep_hours": "number",
+      "thigh_cm": "null",
+      "waist_cm": "number"
+    }
+  ],
+  "GET /chains": {
+    "chains": [
+      {
+        "at_risk": "boolean",
+        "consistency": "number",
+        "consistency_12": "number",
+        "consistency_52": "number",
+        "current": "number",
+        "days_left": "number",
+        "disciplines": ["string"],
+        "freezes_available": "number",
+        "id": "string",
+        "longest": "number",
+        "name": "string",
+        "needed": "number",
+        "paused_now": "boolean",
+        "repairable_week": "null",
+        "requirements": [],
+        "run_started": "null",
+        "target": "number",
+        "this_week_days": "number",
+        "this_week_target": "number",
+        "weeks": [
+          {
+            "days": "number",
+            "score": "number",
+            "status": "string",
+            "target": "number",
+            "week_start": "string"
+          }
+        ],
+        "will_freeze": "boolean"
+      }
+    ],
+    "repair_available": "boolean"
+  },
+  "GET /challenges": [
+    {
+      "description": "null",
+      "disciplines": [],
+      "ends_on": "string",
+      "group_id": "null",
+      "id": "string",
+      "invite_code": "string",
+      "is_creator": "boolean",
+      "joined": "boolean",
+      "kind": "string",
+      "participants": "number",
+      "plan_name": "null",
+      "starts_on": "string",
+      "status": "string",
+      "target": "number",
+      "title": "string"
+    }
+  ],
+  "GET /challenges/{id}": {
+    "days_elapsed": "number",
+    "days_total": "number",
+    "description": "null",
+    "disciplines": [],
+    "ends_on": "string",
+    "group_id": "null",
+    "id": "string",
+    "invite_code": "string",
+    "is_creator": "boolean",
+    "joined": "boolean",
+    "kind": "string",
+    "leaderboard": [
+      {
+        "avatar_hue": "number",
+        "completed": "boolean",
+        "current_streak": "number",
+        "display_name": "null",
+        "handle": "string",
+        "id": "string",
+        "level": "number",
+        "official": "boolean",
+        "rank": "number",
+        "score": "number",
+        "visibility": "string"
+      }
+    ],
+    "participants": "number",
+    "plan_name": "null",
+    "starts_on": "string",
+    "status": "string",
+    "target": "number",
+    "title": "string"
+  },
+  "GET /coach/today": {
+    "date": "string",
+    "notes": [
+      {
+        "body": "string",
+        "kind": "string",
+        "title": "string",
+        "tone": "string"
+      }
+    ]
+  },
+  "GET /day/{date}": {
+    "date": "string",
+    "food": {
+      "kcal": "number",
+      "meals": [
+        {
+          "count": "number",
+          "kcal": "number",
+          "meal": "string",
+          "protein_g": "number"
+        }
+      ],
+      "protein_g": "number"
+    },
+    "habits": [
+      {
+        "amount": "number",
+        "done": "boolean",
+        "emoji": "string",
+        "id": "string",
+        "kind": "string",
+        "name": "string",
+        "note": "string",
+        "unit": "string"
+      }
+    ],
+    "journal": {
+      "mood": "number",
+      "note": "string"
+    },
+    "readiness": {
+      "energy": "number",
+      "sleep": "number",
+      "soreness": "number"
+    },
+    "rest": "null",
+    "weigh_ins": [
+      {
+        "moment": "string",
+        "weight_kg": "number"
+      }
+    ],
+    "workouts": [
+      {
+        "discipline": "string",
+        "distance_m": "number",
+        "duration_sec": "number",
+        "id": "string",
+        "title": "string"
+      }
+    ]
+  },
+  "GET /events/{id}": {
+    "author": {
+      "avatar_hue": "number",
+      "display_name": "null",
+      "handle": "string",
+      "id": "string",
+      "official": "boolean",
+      "visibility": "string"
+    },
+    "comments": "number",
+    "created_at": "string",
+    "data": {
+      "*": "string"
+    },
+    "date": "string",
+    "id": "string",
+    "kind": "string",
+    "kudoed": "boolean",
+    "kudos": "number",
+    "kudos_by": [
+      {
+        "avatar_hue": "number",
+        "display_name": "null",
+        "handle": "string",
+        "id": "string",
+        "official": "boolean",
+        "visibility": "string"
+      }
+    ],
+    "mine": "boolean",
+    "my_reaction": "string",
+    "reactions": {
+      "*": "number"
+    }
+  },
+  "GET /exercises/custom": [
+    {
+      "aliases": [],
+      "archived": "boolean",
+      "cue": "null",
+      "custom": "boolean",
+      "equipment": "string",
+      "id": "string",
+      "load_type": "string",
+      "name": "string",
+      "pattern": "string",
+      "primary": ["string"],
+      "rest_sec": "number",
+      "secondary": [],
+      "unilateral": "boolean"
+    }
+  ],
+  "GET /feed": {
+    "events": [
+      {
+        "author": {
+          "avatar_hue": "number",
+          "display_name": "null",
+          "handle": "string",
+          "id": "string",
+          "official": "boolean",
+          "visibility": "string"
+        },
+        "comments": "number",
+        "created_at": "string",
+        "data": {
+          "*": "string|number|number|number||number|string|string|number|number|number||number|number|string|string"
+        },
+        "date": "string",
+        "id": "string",
+        "kind": "string",
+        "kudoed": "boolean",
+        "kudos": "number",
+        "mine": "boolean",
+        "my_reaction": "string",
+        "reactions": {
+          "*": "number"
+        }
+      }
+    ],
+    "next": "null"
+  },
+  "GET /gear": [
+    {
+      "default_for": ["string"],
+      "distance_m": "number",
+      "id": "string",
+      "initial_km": "number",
+      "kind": "string",
+      "last_used": "null",
+      "limit_km": "number",
+      "name": "string",
+      "note": "null",
+      "retired": "boolean",
+      "retired_at": "null",
+      "sessions": "number",
+      "worn": "number"
+    }
+  ],
+  "GET /groups": [
+    {
+      "avatar_hue": "number",
+      "description": "null",
+      "id": "string",
+      "invite_code": "string",
+      "kind": "string",
+      "member_count": "number",
+      "muted": "boolean",
+      "my_role": "string",
+      "name": "string",
+      "shares_with_coach": "boolean",
+      "streak_threshold": "number"
+    }
+  ],
+  "GET /groups/{id}": {
+    "avatar_hue": "number",
+    "description": "null",
+    "id": "string",
+    "invite_code": "string",
+    "kind": "string",
+    "member_count": "number",
+    "members": [
+      {
+        "avatar_hue": "number",
+        "consistency": "number",
+        "current_streak": "number",
+        "display_name": "null",
+        "handle": "string",
+        "id": "string",
+        "last_active": "string",
+        "level": "number",
+        "official": "boolean",
+        "role": "string",
+        "shares_with_coach": "boolean",
+        "this_week_days": "number",
+        "this_week_target": "number",
+        "visibility": "string"
+      }
+    ],
+    "muted": "boolean",
+    "my_role": "string",
+    "name": "string",
+    "shares_with_coach": "boolean",
+    "streak": {
+      "current": "number",
+      "longest": "number",
+      "this_week": {
+        "counted": "number",
+        "kept": "number"
+      },
+      "threshold": "number",
+      "weeks": ["string"]
+    },
+    "streak_threshold": "number"
+  },
+  "GET /gyms": [
+    {
+      "bar_kg": "number",
+      "equipment": ["string"],
+      "id": "string",
+      "is_default": "boolean",
+      "name": "string",
+      "plates_kg": ["number"]
+    }
+  ],
+  "GET /habit-routines": [
+    {
+      "emoji": "string",
+      "habit_ids": ["string"],
+      "id": "string",
+      "name": "string",
+      "time_of_day": "string"
+    }
+  ],
+  "GET /habits": [
+    {
+      "archived": "boolean",
+      "best_clean_run": "null",
+      "category": "string",
+      "clean_run": "null",
+      "cue": "null",
+      "daily_goal": "number",
+      "days_mask": "null",
+      "emoji": "string",
+      "id": "string",
+      "kind": "string",
+      "last_slip": "null",
+      "name": "string",
+      "paused": "boolean",
+      "paused_from": "null",
+      "paused_until": "null",
+      "position": "number",
+      "recent": [
+        {
+          "amount": "number",
+          "date": "string",
+          "note": "string"
+        }
+      ],
+      "remind_hour": "null",
+      "scheduled_today": "boolean",
+      "snoozed_until": "null",
+      "started_on": "string",
+      "streak": {
+        "at_risk": "boolean",
+        "consistency": "number",
+        "current": "number",
+        "days_left": "number",
+        "freezes_available": "number",
+        "longest": "number",
+        "needed": "number",
+        "this_week_days": "number",
+        "this_week_target": "number"
+      },
+      "strength": "number",
+      "template_id": "string",
+      "time_of_day": "string",
+      "today": {
+        "amount": "number",
+        "done": "boolean"
+      },
+      "total": "number",
+      "total_goal": "null",
+      "unit": "string",
+      "weekly_target": "number",
+      "why": "null"
+    }
+  ],
+  "GET /habits/catalog": {
+    "categories": {
+      "*": "string"
+    },
+    "templates": [
+      {
+        "blurb": "string",
+        "category": "string",
+        "cue": "string",
+        "daily_goal": "number",
+        "emoji": "string",
+        "id": "string",
+        "kind": "string",
+        "name": "string",
+        "time_of_day": "string",
+        "total_goal": "number",
+        "unit": "string",
+        "weekly_target": "number"
+      }
+    ]
+  },
+  "GET /habits/{id}": {
+    "archived": "boolean",
+    "best_clean_run": "null",
+    "category": "string",
+    "clean_run": "null",
+    "cue": "null",
+    "daily_goal": "null",
+    "days": [
+      {
+        "amount": "number",
+        "date": "string",
+        "note": "string"
+      }
+    ],
+    "days_mask": "null",
+    "emoji": "string",
+    "id": "string",
+    "kind": "string",
+    "last_slip": "null",
+    "name": "string",
+    "paused": "boolean",
+    "paused_from": "null",
+    "paused_until": "null",
+    "position": "number",
+    "recent": [
+      {
+        "amount": "number",
+        "date": "string",
+        "note": "string"
+      }
+    ],
+    "remind_hour": "null",
+    "scheduled_today": "boolean",
+    "snoozed_until": "null",
+    "started_on": "string",
+    "streak": {
+      "at_risk": "boolean",
+      "consistency": "number",
+      "current": "number",
+      "days_left": "number",
+      "freezes_available": "number",
+      "longest": "number",
+      "needed": "number",
+      "this_week_days": "number",
+      "this_week_target": "number"
+    },
+    "strength": "number",
+    "template_id": "null",
+    "time_of_day": "string",
+    "today": {
+      "amount": "number",
+      "done": "boolean"
+    },
+    "total": "number",
+    "total_goal": "null",
+    "unit": "null",
+    "weekly_target": "number",
+    "weeks": [
+      {
+        "days": "number",
+        "score": "number",
+        "status": "string",
+        "target": "number",
+        "week_start": "string"
+      }
+    ],
+    "why": "null"
+  },
+  "GET /habits/{id}/stats": {
+    "keep_rate": "number",
+    "weeks": [
+      {
+        "days": "number",
+        "score": "number",
+        "status": "string",
+        "target": "number",
+        "week_start": "string"
+      }
+    ],
+    "weeks_counted": "number",
+    "weeks_kept": "number"
+  },
+  "GET /insights": {
+    "coverage": {
+      "*": "number"
+    },
+    "insights": [],
+    "window_days": "number"
+  },
+  "GET /journal": [
+    {
+      "date": "string",
+      "mood": "number",
+      "note": "string"
+    }
+  ],
+  "GET /library": {
+    "disciplines": [
+      {
+        "emoji": "string",
+        "id": "string",
+        "metrics": ["string"],
+        "name": "string",
+        "verb": "string"
+      }
+    ],
+    "equipment": {
+      "*": "string"
+    },
+    "exercises": [
+      {
+        "aliases": ["string"],
+        "cue": "string",
+        "custom": "boolean",
+        "equipment": "string",
+        "id": "string",
+        "load_type": "string",
+        "name": "string",
+        "pattern": "string",
+        "primary": ["string"],
+        "rest_sec": "number",
+        "secondary": ["string"],
+        "unilateral": "boolean"
+      }
+    ],
+    "muscles": {
+      "*": "string"
+    },
+    "patterns": {
+      "*": "string"
+    },
+    "templates": [
+      {
+        "discipline": "string",
+        "id": "string",
+        "items": [
+          {
+            "exercise_id": "string",
+            "note": "null",
+            "reps_max": "number",
+            "reps_min": "number",
+            "rest_sec": "number",
+            "sets": "number",
+            "target_rpe": "number"
+          }
+        ],
+        "name": "string",
+        "summary": "string"
+      }
+    ],
+    "version": "number"
+  },
+  "GET /me": {
+    "follow_requests": "number",
+    "min_age": "number",
+    "needs_onboarding": "boolean",
+    "needs_terms": "boolean",
+    "profile": {
+      "avatar_hue": "number",
+      "bio": "null",
+      "birth_year": "number",
+      "deletion_scheduled_at": "null",
+      "display_name": "null",
+      "distance_unit": "string",
+      "favourite_disciplines": [],
+      "gamification_enabled": "boolean",
+      "handle": "string",
+      "leaderboard_opt_in": "boolean",
+      "learned_reminder_hour": "null",
+      "life_target": "null",
+      "max_hr": "null",
+      "official": "boolean",
+      "onboarded": "boolean",
+      "onboarded_at": "string",
+      "quiet_days": "null",
+      "quiet_end": "number",
+      "quiet_start": "number",
+      "reminder_hour": "number",
+      "reminder_mode": "string",
+      "sharing_paused": "boolean",
+      "social_suspended": "boolean",
+      "timezone": "string",
+      "training_days": "null",
+      "visibility": "string",
+      "week_starts_on": "number",
+      "weight_unit": "string"
+    },
+    "push_public_key": "string",
+    "social_allowed": "boolean",
+    "social_min_age": "number",
+    "terms_version": "string",
+    "unread_notifications": "number",
+    "user": {
+      "email": "string",
+      "id": "string",
+      "is_verified": "boolean",
+      "role": "string",
+      "totp_enabled": "boolean"
+    }
+  },
+  "GET /me/achievements": {
+    "achievements": [
+      {
+        "category": "string",
+        "description": "string",
+        "hidden": "boolean",
+        "id": "string",
+        "progress": {
+          "max": "number",
+          "next": "number",
+          "value": "number"
+        },
+        "rarity": {
+          "*": "number"
+        },
+        "secret": "boolean",
+        "thresholds": ["number"],
+        "tier_names": ["string"],
+        "tiered": "boolean",
+        "title": "string",
+        "unit": "string",
+        "unlocked": {
+          "*": "string"
+        }
+      }
+    ],
+    "unlocked_count": "number"
+  },
+  "GET /me/recap": {
+    "badges": [
+      {
+        "id": "string",
+        "tier": "string",
+        "title": "string"
+      }
+    ],
+    "days": "number",
+    "disciplines": [
+      {
+        "id": "string",
+        "name": "string",
+        "sessions": "number"
+      }
+    ],
+    "freezes_available": "number",
+    "longest": "number",
+    "previous_days": "null",
+    "records": [],
+    "sessions": "number",
+    "status": "string",
+    "streak": "number",
+    "target": "number",
+    "this_week_target": "number",
+    "trained_on": ["string"],
+    "verdict": "string",
+    "week_end": "string",
+    "week_start": "string"
+  },
+  "GET /me/recap/month": {
+    "active_days": "number",
+    "complete": "boolean",
+    "ends_on": "string",
+    "lifts": [],
+    "month": "string",
+    "pr_streak": "number",
+    "records": "number",
+    "sessions": "number",
+    "starts_on": "string",
+    "steadiest": "null",
+    "weeks": "number",
+    "weeks_kept": "number"
+  },
+  "GET /me/records": {
+    "current": [
+      {
+        "date": "string",
+        "flagged": "boolean",
+        "gain_pct": "null",
+        "key": "string",
+        "kind": "string",
+        "label": "string",
+        "previous": "null",
+        "rewarded": "boolean",
+        "subject": "string",
+        "value": "number",
+        "workout_id": "string"
+      }
+    ],
+    "recent": []
+  },
+  "GET /me/stats": {
+    "chains": [
+      {
+        "at_risk": "boolean",
+        "consistency": "number",
+        "consistency_12": "number",
+        "consistency_52": "number",
+        "current": "number",
+        "days_left": "number",
+        "disciplines": ["string"],
+        "freezes_available": "number",
+        "id": "string",
+        "longest": "number",
+        "name": "string",
+        "needed": "number",
+        "paused_now": "boolean",
+        "repairable_week": "null",
+        "requirements": [],
+        "run_started": "null",
+        "target": "number",
+        "this_week_days": "number",
+        "this_week_target": "number",
+        "weeks": [
+          {
+            "days": "number",
+            "score": "number",
+            "status": "string",
+            "target": "number",
+            "week_start": "string"
+          }
+        ],
+        "will_freeze": "boolean"
+      }
+    ],
+    "gamification_enabled": "boolean",
+    "habits": {
+      "count": "number",
+      "done_today": "number",
+      "kept_this_week": "number"
+    },
+    "heatmap": [
+      {
+        "date": "string",
+        "disciplines": ["string"],
+        "level": "number",
+        "sessions": "number"
+      }
+    ],
+    "last_active": "string",
+    "level": {
+      "into_level": "number",
+      "level": "number",
+      "level_span": "number",
+      "title": "string",
+      "to_next": "number",
+      "total_xp": "number"
+    },
+    "life": "null",
+    "paused_today": "boolean",
+    "pauses": [
+      {
+        "active": "boolean",
+        "effective_end": "string",
+        "ends_on": "string",
+        "id": "string",
+        "note": "null",
+        "reason": "string",
+        "starts_on": "string",
+        "upcoming": "boolean"
+      }
+    ],
+    "pr_streak": {
+      "block_ends": "string",
+      "current": "number",
+      "longest": "number",
+      "this_block_has_pr": "boolean"
+    },
+    "quests": {
+      "completed_total": "number",
+      "items": [
+        {
+          "description": "string",
+          "done": "boolean",
+          "goal": "number",
+          "id": "string",
+          "progress": "number",
+          "title": "string"
+        }
+      ],
+      "paused": "boolean",
+      "week_start": "string",
+      "xp_each": "number"
+    },
+    "repair_available": "boolean",
+    "season": {
+      "ends_on": "string",
+      "id": "string",
+      "starts_on": "string"
+    },
+    "today": "string",
+    "totals": {
+      "active_days": "number",
+      "disciplines": "number",
+      "distance_km": "number",
+      "exercises": "number",
+      "hours": "number",
+      "records": "number",
+      "sessions": "number",
+      "tonnage_kg": "number"
+    },
+    "training_days": "null",
+    "wager": {
+      "current": "null",
+      "freezes_available": "number",
+      "last": "null",
+      "next": "null",
+      "options": [
+        {
+          "blocked": "string",
+          "days": "number",
+          "week": "string",
+          "week_start": "string"
+        }
+      ]
+    },
+    "week_starts_on": "number",
+    "xp": {
+      "by_source": {
+        "*": "number"
+      },
+      "season": "number",
+      "total": "number"
+    }
+  },
+  "GET /notifications": {
+    "items": [
+      {
+        "actor": {
+          "avatar_hue": "number",
+          "display_name": "null",
+          "handle": "string"
+        },
+        "body": "string",
+        "category": "string",
+        "created_at": "string",
+        "id": "string",
+        "kind": "string",
+        "read": "boolean",
+        "title": "string",
+        "url": "string"
+      }
+    ],
+    "next": "null"
+  },
+  "GET /nutrition/days/{date}": {
+    "date": "string",
+    "entries": [
+      {
+        "carbs_g": "number",
+        "date": "string",
+        "fat_g": "number",
+        "food_id": "string",
+        "id": "string",
+        "kcal": "number",
+        "meal": "string",
+        "name": "string",
+        "protein_g": "number",
+        "servings": "number"
+      }
+    ],
+    "target": {
+      "carbs_g": "null",
+      "fat_g": "null",
+      "kcal": "number",
+      "protein_g": "number"
+    },
+    "totals": {
+      "carbs_g": "number",
+      "fat_g": "number",
+      "kcal": "number",
+      "protein_g": "number"
+    }
+  },
+  "GET /nutrition/expenditure": {
+    "avg_intake": "null",
+    "confidence": "null",
+    "food_days": "number",
+    "status": "string",
+    "suggestion": "null",
+    "tdee": "null",
+    "trend_kg": "null",
+    "trend_kg_per_week": "null",
+    "weigh_days": "number",
+    "window_days": "number"
+  },
+  "GET /nutrition/foods": [
+    {
+      "barcode": "null",
+      "brand": "null",
+      "carbs_g": "number",
+      "fat_g": "number",
+      "id": "string",
+      "kcal": "number",
+      "name": "string",
+      "protein_g": "number",
+      "serving_label": "string"
+    }
+  ],
+  "GET /nutrition/history": [
+    {
+      "carbs_g": "number",
+      "date": "string",
+      "fat_g": "number",
+      "kcal": "number",
+      "protein_g": "number"
+    }
+  ],
+  "GET /nutrition/recent": [
+    {
+      "carbs_g": "number",
+      "fat_g": "number",
+      "food_id": "string",
+      "kcal": "number",
+      "name": "string",
+      "protein_g": "number",
+      "times": "number"
+    }
+  ],
+  "GET /nutrition/recipes": [
+    {
+      "carbs_g": "number",
+      "fat_g": "number",
+      "id": "string",
+      "items": [
+        {
+          "food_id": "string",
+          "name": "string",
+          "servings": "number"
+        }
+      ],
+      "kcal": "number",
+      "name": "string",
+      "protein_g": "number",
+      "serves": "number"
+    }
+  ],
+  "GET /pauses": {
+    "budget": {
+      "days_allowed": "number",
+      "days_used": "number"
+    },
+    "pauses": [
+      {
+        "active": "boolean",
+        "effective_end": "string",
+        "ends_on": "string",
+        "id": "string",
+        "note": "null",
+        "reason": "string",
+        "starts_on": "string",
+        "upcoming": "boolean"
+      }
+    ]
+  },
+  "GET /people/search": [
+    {
+      "avatar_hue": "number",
+      "current_streak": "number",
+      "display_name": "null",
+      "handle": "string",
+      "id": "string",
+      "level": "number",
+      "official": "boolean",
+      "visibility": "string"
+    }
+  ],
+  "GET /plans": [
+    {
+      "active": "boolean",
+      "description": "string",
+      "finished_at": "null",
+      "id": "string",
+      "name": "string",
+      "repeat": "boolean",
+      "sessions_count": "number",
+      "started_on": "null",
+      "template_id": "string",
+      "weeks_count": "number"
+    }
+  ],
+  "GET /plans/templates": [
+    {
+      "disciplines": ["string"],
+      "equipment": ["string"],
+      "id": "string",
+      "name": "string",
+      "per_week": "number",
+      "summary": "string",
+      "weeks_count": "number"
+    }
+  ],
+  "GET /plans/{id}": {
+    "active": "boolean",
+    "assigned_by": "null",
+    "challenge_id": "null",
+    "current_week": "null",
+    "description": "string",
+    "finished_at": "null",
+    "id": "string",
+    "name": "string",
+    "progress": "null",
+    "repeat": "boolean",
+    "sessions_count": "number",
+    "started_on": "null",
+    "template_id": "string",
+    "today": [],
+    "weeks": [
+      [
+        {
+          "day": "number",
+          "discipline": "string",
+          "distance_km": "null",
+          "minutes": "number",
+          "note": "string",
+          "routine_id": "string",
+          "title": "string"
+        }
+      ]
+    ],
+    "weeks_count": "number"
+  },
+  "GET /readiness": [
+    {
+      "date": "string",
+      "energy": "number",
+      "sleep": "number",
+      "soreness": "number"
+    }
+  ],
+  "GET /routines": [
+    {
+      "discipline": "string",
+      "id": "string",
+      "items": [
+        {
+          "exercise_id": "string",
+          "increment_kg": "null",
+          "note": "null",
+          "reps_max": "number",
+          "reps_min": "number",
+          "rest_sec": "number",
+          "sets": "number",
+          "target_rpe": "number",
+          "weight_kg": "number"
+        }
+      ],
+      "last_used_at": "null",
+      "name": "string",
+      "notes": "string",
+      "position": "number",
+      "updated_at": "string"
+    }
+  ],
+  "GET /search": {
+    "q": "string",
+    "results": [
+      {
+        "detail": "null",
+        "id": "string",
+        "kind": "string",
+        "title": "string",
+        "url": "string"
+      }
+    ]
+  },
+  "GET /trash": [
+    {
+      "deleted_at": "string",
+      "id": "string",
+      "item_id": "string",
+      "kind": "string",
+      "label": "string",
+      "purge_after": "string"
+    }
+  ],
+  "GET /weigh-ins": [
+    {
+      "date": "string",
+      "id": "string",
+      "moment": "string",
+      "note": "null",
+      "weighed_at": "string",
+      "weight_kg": "number"
+    }
+  ],
+  "GET /weight-goal": {
+    "milestone_kg": "number",
+    "set_on": "string",
+    "start_kg": "number",
+    "target_kg": "number"
+  },
+  "GET /workouts/changes": {
+    "cursor": "number",
+    "more": "boolean",
+    "workouts": [
+      {
+        "avg_hr": "null",
+        "client_updated_at": "string",
+        "deleted_at": "null",
+        "discipline": "string",
+        "distance_m": "number",
+        "duration_sec": "number",
+        "effort": "null",
+        "elevation_m": "null",
+        "feel": "null",
+        "gear_id": "null",
+        "gym_id": "null",
+        "hr_zones": [],
+        "id": "string",
+        "local_date": "string",
+        "max_hr": "null",
+        "notes": "null",
+        "pump": "null",
+        "routine_id": "null",
+        "seq": "number",
+        "sets": [
+          {
+            "completed": "boolean",
+            "distance_m": "null",
+            "duration_sec": "null",
+            "exercise_id": "string",
+            "kind": "string",
+            "position": "number",
+            "reps": "number",
+            "rpe": "number",
+            "set_index": "number",
+            "superset": "null",
+            "weight_kg": "number"
+          }
+        ],
+        "soreness": "null",
+        "source": "string",
+        "splits": [],
+        "started_at": "string",
+        "tags": [],
+        "title": "string"
+      }
+    ]
+  },
+  "POST /habits": {
+    "archived": "boolean",
+    "best_clean_run": "null",
+    "category": "string",
+    "clean_run": "null",
+    "cue": "null",
+    "daily_goal": "number",
+    "days_mask": "null",
+    "emoji": "string",
+    "id": "string",
+    "kind": "string",
+    "last_slip": "null",
+    "name": "string",
+    "paused": "boolean",
+    "paused_from": "null",
+    "paused_until": "null",
+    "position": "number",
+    "recent": [
+      {
+        "amount": "number",
+        "date": "string",
+        "note": "null"
+      }
+    ],
+    "remind_hour": "null",
+    "scheduled_today": "boolean",
+    "snoozed_until": "null",
+    "started_on": "string",
+    "streak": {
+      "at_risk": "boolean",
+      "consistency": "number",
+      "current": "number",
+      "days_left": "number",
+      "freezes_available": "number",
+      "longest": "number",
+      "needed": "number",
+      "this_week_days": "number",
+      "this_week_target": "number"
+    },
+    "strength": "number",
+    "template_id": "null",
+    "time_of_day": "string",
+    "today": {
+      "amount": "number",
+      "done": "boolean"
+    },
+    "total": "number",
+    "total_goal": "null",
+    "unit": "string",
+    "weekly_target": "number",
+    "why": "null"
+  },
+  "POST /workouts/batch": {
+    "outcome": {
+      "level": "number",
+      "leveled_up_to": "null",
+      "new_achievements": [],
+      "new_records": [],
+      "streak": {
+        "current": "number",
+        "milestone": "null",
+        "target": "number",
+        "this_week_days": "number"
+      },
+      "title": "string",
+      "total_xp": "number",
+      "xp_gained": "number"
+    },
+    "results": [
+      {
+        "applied": "boolean",
+        "created": "boolean",
+        "id": "string",
+        "ok": "boolean",
+        "workout": {
+          "avg_hr": "null",
+          "client_updated_at": "string",
+          "deleted_at": "null",
+          "discipline": "string",
+          "distance_m": "number",
+          "duration_sec": "number",
+          "effort": "null",
+          "elevation_m": "null",
+          "feel": "null",
+          "gear_id": "null",
+          "gym_id": "null",
+          "hr_zones": [],
+          "id": "string",
+          "local_date": "string",
+          "max_hr": "null",
+          "notes": "null",
+          "pump": "null",
+          "routine_id": "null",
+          "seq": "number",
+          "sets": [],
+          "soreness": "null",
+          "source": "string",
+          "splits": [],
+          "started_at": "string",
+          "tags": [],
+          "title": "null"
+        }
+      }
+    ]
+  },
+  "PUT /reflections/{week}": {
+    "change": "null",
+    "week_start": "string",
+    "went_well": "string"
+  }
+}

@@ -120,7 +120,7 @@ describe("test_training", () => {
     expect((await put(me.token, uuid(), workout({ started_at: at(DAY) }))).status).toBe(422);
   });
 
-  it("changes_feed_includes_tombstones (and answers 304 when nothing changed)", async () => {
+  it("test_changes_feed_includes_tombstones (and answers 304 when nothing changed)", async () => {
     const me = await person();
     const a = uuid();
     const b = uuid();

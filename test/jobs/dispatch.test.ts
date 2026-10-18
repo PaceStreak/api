@@ -21,20 +21,22 @@ describe("dispatch", () => {
     expect(q.calls).toEqual([]);
   });
 
-  it("packs at most 50 ids per message, in order, deduplicated", async () => {
+  it("packs at most 20 notes per deliver message, in order, deduplicated", async () => {
     const q = recordingQueue();
     const sent = await dispatchDeliver(q, [...ids(120), "id-3", "id-7"]);
-    expect(sent).toBe(3);
+    expect(sent).toBe(6);
     expect(q.calls).toHaveLength(1);
     const sizes = q.messages.map((m) => (m.type === "deliver" ? m.ids.length : -1));
-    expect(sizes).toEqual([50, 50, 20]);
+    expect(sizes).toEqual([20, 20, 20, 20, 20, 20]);
     expect(q.messages.flatMap((m) => (m.type === "deliver" ? m.ids : []))).toEqual(ids(120));
   });
 
-  it("exactly 50 ids is one message", async () => {
+  it("exactly 50 ids is one message for a light job; heavy jobs pack fewer", async () => {
     const q = recordingQueue();
-    expect(await dispatchJobSlices(q, "digest", ids(50))).toBe(1);
-    expect(q.messages[0]).toEqual({ type: "job-slice", job: "digest", ids: ids(50) });
+    expect(await dispatchJobSlices(q, "habits", ids(50))).toBe(1);
+    expect(q.messages[0]).toEqual({ type: "job-slice", job: "habits", ids: ids(50) });
+    expect(await dispatchJobSlices(q, "digest", ids(50))).toBe(2);
+    expect(await dispatchJobSlices(q, "stats", ids(50))).toBe(3);
   });
 
   it("purge packs user ids", async () => {

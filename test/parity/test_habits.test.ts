@@ -1,12 +1,14 @@
 /**
  * Port of tests/test_habits.py: smart reminder timing (the game engine's reminder helpers).
  *
- * Still owned by other units: test_profile_exposes_smart_mode (PROFILE-ACCOUNT: PATCH /v1/me/profile),
- * test_monthly_goal_counts_distinct_days and test_rest_days_are_private_and_never_count (TRAINING: /v1/me/monthly-goal
+
+ * Owned by other units: test_monthly_goal_counts_distinct_days and test_rest_days_are_private_and_never_count (TRAINING: /v1/me/monthly-goal
  * and /v1/me/rest-days, spec/training-b.md §1d).
  */
 import { describe, expect, it } from "vitest";
 import { inQuietHour, learnReminderHour, reminderHour } from "../../src/modules/game/service.ts";
+import { person } from "../fixtures/game.ts";
+import { api, jsonOf } from "../fixtures/http.ts";
 
 describe("test_habits", () => {
   it("learns_an_hour_before_the_usual_time", () => {
@@ -32,5 +34,17 @@ describe("test_habits", () => {
     expect(reminderHour("smart", 18, 6)).toBe(6);
     expect(reminderHour("smart", 18, null)).toBe(18);
     expect(reminderHour("fixed", 18, 6)).toBe(18);
+  });
+
+  it("profile_exposes_smart_mode", async () => {
+    const me = await person();
+    const patch = (json: unknown) => api("/v1/me/profile", { method: "PATCH", json, token: me.token });
+    expect((await patch({ reminder_mode: "smart" })).status).toBe(200);
+    const { profile } = await jsonOf<{ profile: Record<string, unknown> }>(
+      await api("/v1/me", { token: me.token }),
+    );
+    expect(profile.reminder_mode).toBe("smart");
+    expect(profile.learned_reminder_hour).toBeNull(); // one session isn't a habit
+    expect((await patch({ reminder_mode: "psychic" })).status).toBe(422);
   });
 });

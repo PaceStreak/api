@@ -187,39 +187,48 @@ export const sharers = (db: Db, me: string, groupId: string | null) =>
       ORDER BY gm.created_at, gm.id`,
   );
 
-/** The running plan: started, not finished, latest start first. */
-export const runningPlan = (db: Db, userId: string) =>
+/** Each person's running plans (started, not finished), latest start first per person; the first is the one. */
+export const runningPlansOf = (db: Db, userIds: readonly string[]) =>
   db
     .select()
     .from(trainingPlans)
     .where(
       and(
-        eq(trainingPlans.userId, userId),
+        sql`${trainingPlans.userId} IN (SELECT value FROM json_each(${JSON.stringify(userIds)}))`,
         sql`${trainingPlans.startedOn} IS NOT NULL`,
         sql`${trainingPlans.finishedAt} IS NULL`,
       ),
     )
-    .orderBy(sql`${trainingPlans.startedOn} DESC`, sql`${trainingPlans.id} DESC`)
-    .limit(1);
+    .orderBy(asc(trainingPlans.userId), sql`${trainingPlans.startedOn} DESC`, sql`${trainingPlans.id} DESC`);
 
-/** The ten latest sessions with their completed working sets counted. */
-export const recentWorkouts = (db: Db, userId: string) =>
-  db.all<{
-    id: string;
-    date: string;
-    discipline: string;
-    title: string | null;
-    duration_sec: number | null;
-    distance_m: number | null;
-    effort: number | null;
-    feel: number | null;
-    sets: number;
-  }>(
-    sql`SELECT w.id, w.local_date AS date, w.discipline, w.title, w.duration_sec, w.distance_m, w.effort, w.feel,
+export interface RecentWorkout {
+  user_id: string;
+  id: string;
+  date: string;
+  discipline: string;
+  title: string | null;
+  duration_sec: number | null;
+  distance_m: number | null;
+  effort: number | null;
+  feel: number | null;
+  sets: number;
+}
+
+/**
+ * Each person's ten latest sessions with their completed working sets counted, for any number of people in one
+ * statement: per id, a correlated `LIMIT 10` on ix_workouts_user_started picks the rows.
+ */
+export const recentWorkoutsOf = (db: Db, userIds: readonly string[]) =>
+  db.all<RecentWorkout>(
+    sql`SELECT w.user_id, w.id, w.local_date AS date, w.discipline, w.title, w.duration_sec, w.distance_m, w.effort,
+        w.feel,
         (SELECT count(*) FROM workout_sets ws WHERE ws.workout_id = w.id AND ws.completed = 1
           AND ws.kind <> 'warmup') AS sets
-      FROM workouts w WHERE w.user_id = ${userId} AND w.deleted_at IS NULL
-      ORDER BY w.started_at DESC LIMIT 10`,
+      FROM json_each(${JSON.stringify(userIds)}) u
+      JOIN workouts w ON w.id IN (
+        SELECT x.id FROM workouts x WHERE x.user_id = u.value AND x.deleted_at IS NULL
+        ORDER BY x.started_at DESC LIMIT 10)
+      ORDER BY w.user_id, w.started_at DESC`,
   );
 
 // ---- challenges -----------------------------------------------------------------------------------------------
@@ -460,6 +469,7 @@ const U = "00000000-0000-7000-8000-000000000001";
 const G = "00000000-0000-7000-8000-000000000002";
 const Y = 2026;
 const D = "2026-01-01";
+const JSON_IDS = "walks the JSON id list; each id probes the table's user index";
 
 type Case = {
   name: string;
@@ -494,8 +504,8 @@ const cases: Case[] = [
   { name: "groups.coachingGroups", build: (db) => coachingGroups(db, U) },
   { name: "groups.sharers", build: (db) => sharers(db, U, G) },
   { name: "groups.sharersAll", build: (db) => sharers(db, U, null) },
-  { name: "groups.runningPlan", build: (db) => runningPlan(db, U) },
-  { name: "groups.recentWorkouts", build: (db) => recentWorkouts(db, U) },
+  { name: "groups.runningPlansOf", build: (db) => runningPlansOf(db, [U, G]), scanOk: JSON_IDS },
+  { name: "groups.recentWorkoutsOf", build: (db) => recentWorkoutsOf(db, [U, G]), scanOk: JSON_IDS },
   { name: "groups.challengeById", build: (db) => challengeById(db, G) },
   { name: "groups.challengeByCode", build: (db) => challengeByCode(db, "abcdefgh") },
   { name: "groups.participant", build: (db) => participant(db, G, U) },

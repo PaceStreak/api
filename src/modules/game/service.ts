@@ -21,7 +21,7 @@ import type { ConsumerRegistry } from "../../jobs/consumer.ts";
 import { enqueue } from "../../jobs/dispatch.ts";
 import { conflict, forbidden, HttpError, notFound } from "../../lib/errors.ts";
 import { pyRound } from "../../lib/format.ts";
-import { addDays, localDate, seasonId, weekStart, zone } from "../../lib/time.ts";
+import { addDays, localDate, monthKey, seasonId, weekStart, zone } from "../../lib/time.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
 import { dispatchNotified, type NotifyResult, notify } from "../notifications/service.ts";
 import { learnReminderHour } from "./engine/quests.ts";
@@ -29,6 +29,7 @@ import type { Best, PrEvent } from "./engine/records.ts";
 import { recordLabel, splitKey } from "./engine/records.ts";
 import {
   buildSnapshot,
+  chainViewOf,
   customMap,
   detectRecords,
   eventOrder,
@@ -42,10 +43,12 @@ import {
   type StoredRecord,
   withAchievements,
 } from "./engine/snapshot.ts";
-import { pausedDays } from "./engine/streak.ts";
+import { type ChainResult, pausedDays } from "./engine/streak.ts";
 import * as views from "./engine/views.ts";
 import * as repo from "./repo.ts";
 
+/** Memoised calendar arithmetic for other engines' hot loops (habits). */
+export { dayNum, dayStr } from "./engine/days.ts";
 export type { JointResult } from "./engine/quests.ts";
 export { inQuietHour, jointStreak, learnReminderHour, reminderHour } from "./engine/quests.ts";
 export { e1rm } from "./engine/records.ts";
@@ -355,6 +358,101 @@ export async function snapshotsFor(
     }),
   );
   return out;
+}
+
+// ---- main chains of many people -------------------------------------------------------------------------------
+
+export interface MainChain {
+  profile: ProfileIn;
+  today: string;
+  main: ChainResult;
+  /** Every active day with its disciplines (session counts), oldest first. */
+  days: readonly { localDate: string; disciplines: Record<string, number> }[];
+}
+
+/**
+ * The main streak of many people (a coach's view of a group) in ONE batch of six set-based statements plus
+ * `extra`, however many people: D1 counts every statement of a batch against its 1,000 queries per invocation,
+ * so `snapshotsFor` (about 16 statements a person) cannot serve a 200-member group. Same chain as the snapshot's
+ * (`chainViewOf`). Someone whose default chain was never written gets it in memory (nothing to write on a read);
+ * anyone without a profile goes through `snapshotsFor`, which creates it.
+ */
+export async function mainChainsFor(
+  ctx: Ctx,
+  userIds: readonly string[],
+  extra: readonly Stmt[] = [],
+): Promise<{ chains: Map<string, MainChain>; extra: unknown[] }> {
+  const ids = [...new Set(userIds)];
+  const out = new Map<string, MainChain>();
+  if (ids.length === 0 && extra.length === 0) return { chains: out, extra: [] };
+  const db = ctx.db;
+  const [profileRows, chainRows, repairRows, pauseRows, wagerRows, dayRows, ...rest] = (await runBatch(db, [
+    repo.profilesOf(db, ids),
+    repo.chainsOf(db, ids),
+    repo.repairsOf(db, ids),
+    repo.pausesOf(db, ids),
+    repo.wagersOf(db, ids),
+    repo.dayDisciplinesOf(db, ids),
+    ...extra,
+  ])) as [
+    Awaited<ReturnType<typeof repo.profilesOf>>,
+    Awaited<ReturnType<typeof repo.chainsOf>>,
+    Awaited<ReturnType<typeof repo.repairsOf>>,
+    Awaited<ReturnType<typeof repo.pausesOf>>,
+    Awaited<ReturnType<typeof repo.wagersOf>>,
+    Awaited<ReturnType<typeof repo.dayDisciplinesOf>>,
+    ...unknown[],
+  ];
+  const group = <T extends { userId: string }>(rows: readonly T[]) => {
+    const by = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = by.get(r.userId);
+      if (list === undefined) by.set(r.userId, [r]);
+      else list.push(r);
+    }
+    return by;
+  };
+  const profilesBy = new Map(profileRows.map((p) => [p.userId, p]));
+  const chainsBy = group(chainRows);
+  const repairsBy = group(repairRows);
+  const pausesBy = group(pauseRows);
+  const wagersBy = group(wagerRows);
+  const daysBy = group(dayRows);
+  const missing: string[] = [];
+  const now = ctx.clock.now();
+  for (const id of ids) {
+    const p = profilesBy.get(id);
+    const chain = chainsBy.get(id)?.[0] ?? { id: "", ...repo.DEFAULT_CHAIN };
+    if (p === undefined) {
+      missing.push(id);
+      continue;
+    }
+    const profile = profileIn(p);
+    const today = localDate(now, profile.timezone);
+    const repairs = repairsBy.get(id) ?? [];
+    const days = daysBy.get(id) ?? [];
+    const view = chainViewOf(chain, true, {
+      today,
+      weekStartsOn: profile.weekStartsOn,
+      days,
+      repairs,
+      repairUsed: repairs.some((r) => r.month === monthKey(today)),
+      sheltered: pausedDays(pausesBy.get(id) ?? []),
+      wagers: new Map((wagersBy.get(id) ?? []).map((w) => [w.weekStart, w.days])),
+    });
+    out.set(id, { profile, today, main: view.result, days });
+  }
+  if (missing.length > 0) {
+    for (const [id, got] of await snapshotsFor(ctx, missing)) {
+      const s = got.snapshot;
+      const days = [...s.dayRows.values()].map((d) => ({
+        localDate: d.localDate,
+        disciplines: d.disciplines,
+      }));
+      out.set(id, { profile: s.profile, today: s.today, main: s.chains[0].result, days });
+    }
+  }
+  return { chains: out, extra: rest };
 }
 
 // ---- recompute ------------------------------------------------------------------------------------------------

@@ -1,0 +1,781 @@
+{
+  "DELETE /v1/admin/client-errors/:param": [
+    "src/routes/Admin.tsx:359"
+  ],
+  "DELETE /v1/auth/sessions/:param": [
+    "src/routes/settings/Security.tsx:129"
+  ],
+  "DELETE /v1/body-metrics/:param": [
+    "src/routes/progress/Body.tsx:116"
+  ],
+  "DELETE /v1/body-photos": [
+    "src/lib/photos.ts:100"
+  ],
+  "DELETE /v1/body-photos/:param": [
+    "src/lib/photos.ts:118"
+  ],
+  "DELETE /v1/chains/:param": [
+    "src/routes/settings/Training.tsx:151"
+  ],
+  "DELETE /v1/challenges/:param": [
+    "src/routes/social/ChallengeDetail.tsx:161"
+  ],
+  "DELETE /v1/comments/:param": [
+    "src/routes/social/EventDetail.tsx:49"
+  ],
+  "DELETE /v1/events/:param": [
+    "src/routes/social/EventDetail.tsx:55"
+  ],
+  "DELETE /v1/events/:param/kudos": [
+    "src/components/social.tsx:162"
+  ],
+  "DELETE /v1/gear/:param": [
+    "src/routes/settings/GearSettings.tsx:69"
+  ],
+  "DELETE /v1/groups/:param": [
+    "src/routes/social/GroupDetail.tsx:97"
+  ],
+  "DELETE /v1/groups/:param/announcements/:param": [
+    "src/routes/social/GroupDetail.tsx:515"
+  ],
+  "DELETE /v1/groups/:param/members/:param": [
+    "src/routes/social/GroupDetail.tsx:343"
+  ],
+  "DELETE /v1/gyms/:param": [
+    "src/routes/settings/GymSettings.tsx:56"
+  ],
+  "DELETE /v1/habit-routines/:param": [
+    "src/components/HabitRoutines.tsx:108"
+  ],
+  "DELETE /v1/habits/:param": [
+    "src/routes/habits/HabitDetail.tsx:101"
+  ],
+  "DELETE /v1/habits/:param/snooze": [
+    "src/routes/habits/HabitDetail.tsx:426"
+  ],
+  "DELETE /v1/me/calendar": [
+    "src/routes/settings/ActivityImport.tsx:127"
+  ],
+  "DELETE /v1/me/monthly-goal/:param": [
+    "src/components/MonthlyGoal.tsx:27"
+  ],
+  "DELETE /v1/me/wager/:param": [
+    "src/components/Engagement.tsx:82"
+  ],
+  "DELETE /v1/nutrition/entries/:param": [
+    "src/routes/progress/Food.tsx:72"
+  ],
+  "DELETE /v1/nutrition/recipes/:param": [
+    "src/routes/progress/Food.tsx:558"
+  ],
+  "DELETE /v1/people/:param/block": [
+    "src/routes/settings/Privacy.tsx:58",
+    "src/routes/social/Profile.tsx:57"
+  ],
+  "DELETE /v1/people/:param/follow": [
+    "src/components/social.tsx:61"
+  ],
+  "DELETE /v1/people/:param/follower": [
+    "src/routes/social/Profile.tsx:74"
+  ],
+  "DELETE /v1/plans/:param": [
+    "src/routes/plans/PlanDetail.tsx:244"
+  ],
+  "DELETE /v1/routines/:param": [
+    "src/routes/library/RoutineEditor.tsx:66"
+  ],
+  "DELETE /v1/trash": [
+    "src/routes/Trash.tsx:50"
+  ],
+  "DELETE /v1/trash/:param": [
+    "src/routes/Trash.tsx:40"
+  ],
+  "DELETE /v1/weigh-ins/:param": [
+    "src/routes/progress/Body.tsx:89"
+  ],
+  "DELETE /v1/weight-goal": [
+    "src/routes/progress/Body.tsx:417"
+  ],
+  "GET /v1/admin/abuse": [
+    "src/routes/Admin.tsx:355"
+  ],
+  "GET /v1/admin/audit": [
+    "src/routes/Admin.tsx:183"
+  ],
+  "GET /v1/admin/client-errors": [
+    "src/routes/Admin.tsx:354"
+  ],
+  "GET /v1/admin/metrics": [
+    "src/routes/Admin.tsx:209"
+  ],
+  "GET /v1/admin/reports": [
+    "src/routes/Admin.tsx:60",
+    "src/routes/Admin.tsx:60",
+    "src/routes/Admin.tsx:60"
+  ],
+  "GET /v1/admin/users": [
+    "src/routes/Admin.tsx:127"
+  ],
+  "GET /v1/auth/2fa": [
+    "src/routes/settings/Security.tsx:54"
+  ],
+  "GET /v1/auth/passkeys": [
+    "src/components/GettingStarted.tsx:26",
+    "src/routes/settings/PasskeySection.tsx:14"
+  ],
+  "GET /v1/auth/sessions": [
+    "src/routes/settings/Security.tsx:52"
+  ],
+  "GET /v1/blocks/active": [
+    "src/components/RaceAndBlocks.tsx:97",
+    "src/routes/log/LiveWorkout.tsx:248"
+  ],
+  "GET /v1/body-metrics": [
+    "src/routes/progress/Body.tsx:47"
+  ],
+  "GET /v1/body-photos": [
+    "src/lib/photos.ts:70"
+  ],
+  "GET /v1/body-photos/:param": [
+    "src/lib/photos.ts:89"
+  ],
+  "GET /v1/buddies": [
+    "src/routes/social/Buddies.tsx:32"
+  ],
+  "GET /v1/chains": [
+    "src/routes/settings/Training.tsx:20"
+  ],
+  "GET /v1/challenges": [
+    "src/routes/Today.tsx:97",
+    "src/routes/social/Challenges.tsx:46",
+    "src/routes/social/GroupDetail.tsx:55"
+  ],
+  "GET /v1/challenges/:param": [
+    "src/routes/social/ChallengeDetail.tsx:24"
+  ],
+  "GET /v1/coach/today": [
+    "src/routes/Today.tsx:103"
+  ],
+  "GET /v1/coaching": [
+    "src/routes/You.tsx:33",
+    "src/routes/social/Coaching.tsx:28"
+  ],
+  "GET /v1/day/:param": [
+    "src/routes/Day.tsx:24"
+  ],
+  "GET /v1/encouragement/presets": [
+    "src/components/Encourage.tsx:16"
+  ],
+  "GET /v1/events/:param": [
+    "src/routes/social/EventDetail.tsx:29"
+  ],
+  "GET /v1/events/:param/comments": [
+    "src/routes/social/EventDetail.tsx:30"
+  ],
+  "GET /v1/exercise-notes": [
+    "src/lib/queries.ts:133",
+    "src/lib/queries.ts:49"
+  ],
+  "GET /v1/exercises/:param/history": [
+    "src/routes/library/ExerciseDetail.tsx:29"
+  ],
+  "GET /v1/exercises/custom": [
+    "src/lib/queries.ts:109",
+    "src/lib/queries.ts:44"
+  ],
+  "GET /v1/feed": [
+    "src/routes/social/Feed.tsx:14"
+  ],
+  "GET /v1/gear": [
+    "src/lib/queries.ts:124",
+    "src/lib/queries.ts:47"
+  ],
+  "GET /v1/groups": [
+    "src/routes/social/Groups.tsx:14",
+    "src/routes/social/Leaderboards.tsx:29"
+  ],
+  "GET /v1/groups/:param": [
+    "src/routes/social/GroupDetail.tsx:47"
+  ],
+  "GET /v1/groups/:param/announcements": [
+    "src/routes/social/GroupDetail.tsx:494"
+  ],
+  "GET /v1/groups/:param/coach": [
+    "src/routes/social/GroupDetail.tsx:56"
+  ],
+  "GET /v1/groups/:param/feed": [
+    "src/routes/social/GroupDetail.tsx:51"
+  ],
+  "GET /v1/gyms": [
+    "src/lib/queries.ts:128",
+    "src/lib/queries.ts:46"
+  ],
+  "GET /v1/habit-routines": [
+    "src/components/HabitRoutines.tsx:20"
+  ],
+  "GET /v1/habits": [
+    "src/lib/queries.ts:137",
+    "src/lib/queries.ts:48",
+    "src/routes/habits/Habits.tsx:30"
+  ],
+  "GET /v1/habits/:param": [
+    "src/routes/habits/HabitDetail.tsx:36"
+  ],
+  "GET /v1/habits/:param/stats": [
+    "src/routes/habits/HabitDetail.tsx:37"
+  ],
+  "GET /v1/habits/catalog": [
+    "src/lib/queries.ts:141"
+  ],
+  "GET /v1/handles/:param": [
+    "src/routes/Welcome.tsx:58",
+    "src/routes/settings/ProfileSettings.tsx:20"
+  ],
+  "GET /v1/insights": [
+    "src/routes/Insights.tsx:20"
+  ],
+  "GET /v1/journal": [
+    "src/components/Mood.tsx:47",
+    "src/routes/Journal.tsx:27"
+  ],
+  "GET /v1/leaderboards/:param": [
+    "src/routes/social/Leaderboards.tsx:33"
+  ],
+  "GET /v1/library": [
+    "src/lib/queries.ts:108",
+    "src/lib/queries.ts:43"
+  ],
+  "GET /v1/me": [
+    "src/lib/session.tsx:34",
+    "src/routes/Welcome.tsx:103"
+  ],
+  "GET /v1/me/achievements": [
+    "src/routes/progress/Achievements.tsx:22"
+  ],
+  "GET /v1/me/blocks": [
+    "src/routes/settings/Privacy.tsx:13"
+  ],
+  "GET /v1/me/calendar": [
+    "src/routes/settings/ActivityImport.tsx:109"
+  ],
+  "GET /v1/me/export": [
+    "src/routes/settings/Data.tsx:31",
+    "src/routes/settings/Data.tsx:31",
+    "src/routes/settings/Data.tsx:31"
+  ],
+  "GET /v1/me/monthly-goal": [
+    "src/components/MonthlyGoal.tsx:20"
+  ],
+  "GET /v1/me/progress": [
+    "src/routes/progress/Progress.tsx:48"
+  ],
+  "GET /v1/me/recap": [
+    "src/routes/Recap.tsx:28"
+  ],
+  "GET /v1/me/recap/month": [
+    "src/routes/MonthRecap.tsx:35"
+  ],
+  "GET /v1/me/records": [
+    "src/routes/log/WorkoutDetail.tsx:44",
+    "src/routes/progress/Records.tsx:30"
+  ],
+  "GET /v1/me/records/history": [
+    "src/routes/progress/RecordHistory.tsx:37"
+  ],
+  "GET /v1/me/rest-days": [
+    "src/lib/queries.ts:120"
+  ],
+  "GET /v1/me/review": [
+    "src/routes/Review.tsx:44"
+  ],
+  "GET /v1/me/security-events": [
+    "src/routes/settings/Security.tsx:53"
+  ],
+  "GET /v1/me/stats": [
+    "src/lib/queries.ts:97"
+  ],
+  "GET /v1/me/xp": [
+    "src/routes/progress/Xp.tsx:30"
+  ],
+  "GET /v1/notifications": [
+    "src/routes/Notifications.tsx:16"
+  ],
+  "GET /v1/notifications/preferences": [
+    "src/routes/settings/Data.tsx:153",
+    "src/routes/settings/NotificationSettings.tsx:23"
+  ],
+  "GET /v1/notifications/unread-count": [
+    "src/shell/Shell.tsx:102"
+  ],
+  "GET /v1/nutrition/barcode/:param": [
+    "src/routes/progress/Food.tsx:284"
+  ],
+  "GET /v1/nutrition/days/:param": [
+    "src/routes/progress/Food.tsx:47"
+  ],
+  "GET /v1/nutrition/expenditure": [
+    "src/routes/progress/Food.tsx:51"
+  ],
+  "GET /v1/nutrition/foods": [
+    "src/routes/progress/Food.tsx:532"
+  ],
+  "GET /v1/nutrition/recent": [
+    "src/routes/progress/Food.tsx:49"
+  ],
+  "GET /v1/nutrition/recipes": [
+    "src/routes/progress/Food.tsx:50"
+  ],
+  "GET /v1/pauses": [
+    "src/routes/settings/PauseSection.tsx:49"
+  ],
+  "GET /v1/people/:param": [
+    "src/routes/social/Profile.tsx:43"
+  ],
+  "GET /v1/people/:param/events": [
+    "src/routes/social/Profile.tsx:47"
+  ],
+  "GET /v1/people/:param/followers": [
+    "src/routes/social/FollowList.tsx:11"
+  ],
+  "GET /v1/people/:param/following": [
+    "src/routes/social/FollowList.tsx:11"
+  ],
+  "GET /v1/people/search": [
+    "src/routes/social/People.tsx:26"
+  ],
+  "GET /v1/people/suggested": [
+    "src/routes/social/People.tsx:27"
+  ],
+  "GET /v1/plans": [
+    "src/routes/plans/Plans.tsx:21",
+    "src/routes/social/Challenges.tsx:136",
+    "src/routes/social/GroupDetail.tsx:426"
+  ],
+  "GET /v1/plans/:param": [
+    "src/routes/plans/PlanDetail.tsx:122"
+  ],
+  "GET /v1/plans/:param/export": [
+    "src/routes/plans/PlanDetail.tsx:215"
+  ],
+  "GET /v1/plans/active": [
+    "src/routes/Today.tsx:100"
+  ],
+  "GET /v1/plans/templates": [
+    "src/routes/plans/Plans.tsx:25",
+    "src/routes/social/Challenges.tsx:135",
+    "src/routes/social/GroupDetail.tsx:425"
+  ],
+  "GET /v1/readiness": [
+    "src/components/Readiness.tsx:27"
+  ],
+  "GET /v1/reflections": [
+    "src/components/Reflection.tsx:13"
+  ],
+  "GET /v1/routines": [
+    "src/lib/queries.ts:145",
+    "src/lib/queries.ts:45"
+  ],
+  "GET /v1/search": [
+    "src/routes/Search.tsx:24"
+  ],
+  "GET /v1/trash": [
+    "src/routes/Trash.tsx:34"
+  ],
+  "GET /v1/weigh-ins": [
+    "src/components/Standards.tsx:20",
+    "src/routes/progress/Body.tsx:46"
+  ],
+  "GET /v1/weight-goal": [
+    "src/routes/progress/Body.tsx:51"
+  ],
+  "GET /v1/workouts/changes": [
+    "src/lib/sync.ts:230"
+  ],
+  "PATCH /v1/admin/users/:param": [
+    "src/routes/Admin.tsx:130"
+  ],
+  "PATCH /v1/auth/passkeys/:param": [
+    "src/routes/settings/PasskeySection.tsx:105"
+  ],
+  "PATCH /v1/chains/:param": [
+    "src/routes/settings/Training.tsx:139"
+  ],
+  "PATCH /v1/gear/:param": [
+    "src/routes/settings/GearSettings.tsx:46",
+    "src/routes/settings/GearSettings.tsx:57"
+  ],
+  "PATCH /v1/groups/:param": [
+    "src/routes/social/GroupDetail.tsx:159",
+    "src/routes/social/GroupDetail.tsx:357"
+  ],
+  "PATCH /v1/groups/:param/me": [
+    "src/routes/social/GroupDetail.tsx:139",
+    "src/routes/social/GroupDetail.tsx:150"
+  ],
+  "PATCH /v1/groups/:param/members/:param": [
+    "src/routes/social/GroupDetail.tsx:334",
+    "src/routes/social/GroupDetail.tsx:339"
+  ],
+  "PATCH /v1/habits/:param": [
+    "src/routes/habits/HabitDetail.tsx:65"
+  ],
+  "PATCH /v1/me/profile": [
+    "src/routes/Welcome.tsx:92",
+    "src/routes/settings/useProfilePatch.ts:14",
+    "src/routes/social/Leaderboards.tsx:39"
+  ],
+  "POST /v1/admin/reports/:param/resolve": [
+    "src/routes/Admin.tsx:63"
+  ],
+  "POST /v1/admin/users/:param/official": [
+    "src/routes/Admin.tsx:296"
+  ],
+  "POST /v1/auth/2fa/disable": [
+    "src/routes/settings/Security.tsx:107"
+  ],
+  "POST /v1/auth/2fa/enable": [
+    "src/routes/settings/Security.tsx:96"
+  ],
+  "POST /v1/auth/2fa/recovery-codes": [
+    "src/routes/settings/Security.tsx:119"
+  ],
+  "POST /v1/auth/2fa/setup": [
+    "src/routes/settings/Security.tsx:87"
+  ],
+  "POST /v1/auth/2fa/verify": [
+    "src/routes/auth/Login.tsx:76"
+  ],
+  "POST /v1/auth/change-email": [
+    "src/routes/settings/Security.tsx:64"
+  ],
+  "POST /v1/auth/change-password": [
+    "src/routes/settings/Security.tsx:75"
+  ],
+  "POST /v1/auth/confirm-email-change": [
+    "src/routes/auth/ConfirmEmail.tsx:25"
+  ],
+  "POST /v1/auth/forgot-password": [
+    "src/routes/auth/ForgotPassword.tsx:21"
+  ],
+  "POST /v1/auth/login": [
+    "src/routes/auth/Login.tsx:78",
+    "src/routes/auth/Signup.tsx:35",
+    "src/routes/auth/VerifyEmail.tsx:45"
+  ],
+  "POST /v1/auth/logout": [
+    "src/lib/session.tsx:126"
+  ],
+  "POST /v1/auth/logout-all": [
+    "src/lib/session.tsx:125"
+  ],
+  "POST /v1/auth/passkeys/:param/remove": [
+    "src/routes/settings/PasskeySection.tsx:122"
+  ],
+  "POST /v1/auth/passkeys/register": [
+    "src/lib/passkeys.ts:125"
+  ],
+  "POST /v1/auth/passkeys/register/options": [
+    "src/lib/passkeys.ts:122"
+  ],
+  "POST /v1/auth/passkeys/sign-in": [
+    "src/lib/passkeys.ts:144"
+  ],
+  "POST /v1/auth/passkeys/sign-in/options": [
+    "src/lib/passkeys.ts:136"
+  ],
+  "POST /v1/auth/recover": [
+    "src/routes/auth/Recover.tsx:27"
+  ],
+  "POST /v1/auth/refresh": [
+    "src/lib/api.ts:85"
+  ],
+  "POST /v1/auth/resend-verification": [
+    "src/routes/Today.tsx:190",
+    "src/routes/auth/VerifyEmail.tsx:69",
+    "src/routes/settings/Security.tsx:148"
+  ],
+  "POST /v1/auth/reset-password": [
+    "src/routes/auth/ResetPassword.tsx:21"
+  ],
+  "POST /v1/auth/signup": [
+    "src/routes/auth/Signup.tsx:28"
+  ],
+  "POST /v1/auth/verify-email": [
+    "src/routes/auth/VerifyEmail.tsx:34"
+  ],
+  "POST /v1/blocks": [
+    "src/components/RaceAndBlocks.tsx:105"
+  ],
+  "POST /v1/blocks/:param/end": [
+    "src/components/RaceAndBlocks.tsx:113"
+  ],
+  "POST /v1/body-photos/:param/upload": [
+    "src/lib/photos.ts:44"
+  ],
+  "POST /v1/body-photos/:param/upload/complete": [
+    "src/lib/photos.ts:51"
+  ],
+  "POST /v1/buddies": [
+    "src/routes/social/Buddies.tsx:186",
+    "src/routes/social/Profile.tsx:217"
+  ],
+  "POST /v1/buddies/:param/accept": [
+    "src/routes/social/Buddies.tsx:93"
+  ],
+  "POST /v1/buddies/:param/end": [
+    "src/routes/social/Buddies.tsx:48"
+  ],
+  "POST /v1/chains": [
+    "src/routes/Welcome.tsx:97",
+    "src/routes/settings/Training.tsx:140"
+  ],
+  "POST /v1/chains/:param/repair": [
+    "src/routes/Today.tsx:171",
+    "src/routes/progress/Progress.tsx:229"
+  ],
+  "POST /v1/challenges": [
+    "src/routes/social/Challenges.tsx:151"
+  ],
+  "POST /v1/challenges/:param/join": [
+    "src/routes/social/ChallengeDetail.tsx:100"
+  ],
+  "POST /v1/challenges/:param/leave": [
+    "src/routes/social/ChallengeDetail.tsx:145"
+  ],
+  "POST /v1/challenges/join": [
+    "src/routes/social/Challenges.tsx:112"
+  ],
+  "POST /v1/client-errors": [
+    "src/lib/errors.ts:25"
+  ],
+  "POST /v1/events/:param/comments": [
+    "src/routes/social/EventDetail.tsx:37"
+  ],
+  "POST /v1/events/:param/kudos": [
+    "src/components/social.tsx:162"
+  ],
+  "POST /v1/exercises/custom": [
+    "src/components/CustomExerciseForm.tsx:40"
+  ],
+  "POST /v1/gear": [
+    "src/routes/settings/GearSettings.tsx:47"
+  ],
+  "POST /v1/groups": [
+    "src/routes/social/Groups.tsx:82"
+  ],
+  "POST /v1/groups/:param/announcements": [
+    "src/routes/social/GroupDetail.tsx:504"
+  ],
+  "POST /v1/groups/:param/invite/rotate": [
+    "src/routes/social/GroupDetail.tsx:127"
+  ],
+  "POST /v1/groups/:param/leave": [
+    "src/routes/social/GroupDetail.tsx:90"
+  ],
+  "POST /v1/groups/:param/members/:param/plan": [
+    "src/routes/social/GroupDetail.tsx:435"
+  ],
+  "POST /v1/groups/join": [
+    "src/routes/social/Groups.tsx:83"
+  ],
+  "POST /v1/gyms": [
+    "src/routes/settings/GymSettings.tsx:46"
+  ],
+  "POST /v1/habit-routines": [
+    "src/components/HabitRoutines.tsx:97"
+  ],
+  "POST /v1/habits": [
+    "src/components/HabitForm.tsx:239",
+    "src/routes/Welcome.tsx:101"
+  ],
+  "POST /v1/habits/:param/archive": [
+    "src/routes/habits/HabitDetail.tsx:93"
+  ],
+  "POST /v1/habits/:param/days/:param/add": [
+    "src/components/FocusTimer.tsx:71"
+  ],
+  "POST /v1/habits/:param/pause": [
+    "src/routes/habits/HabitDetail.tsx:74"
+  ],
+  "POST /v1/habits/:param/resume": [
+    "src/routes/habits/HabitDetail.tsx:85"
+  ],
+  "POST /v1/habits/:param/snooze": [
+    "src/routes/habits/HabitDetail.tsx:427"
+  ],
+  "POST /v1/habits/:param/unarchive": [
+    "src/routes/habits/HabitDetail.tsx:93"
+  ],
+  "POST /v1/habits/import": [
+    "src/components/HabitImport.tsx:25"
+  ],
+  "POST /v1/me/calendar": [
+    "src/routes/settings/ActivityImport.tsx:117"
+  ],
+  "POST /v1/me/delete": [
+    "src/routes/settings/Data.tsx:67"
+  ],
+  "POST /v1/me/delete/cancel": [
+    "src/routes/Today.tsx:198"
+  ],
+  "POST /v1/me/follow-requests/:param/accept": [
+    "src/routes/social/People.tsx:32"
+  ],
+  "POST /v1/me/follow-requests/:param/decline": [
+    "src/routes/social/People.tsx:32"
+  ],
+  "POST /v1/me/import": [
+    "src/routes/settings/Data.tsx:53"
+  ],
+  "POST /v1/me/onboarding": [
+    "src/routes/Welcome.tsx:77"
+  ],
+  "POST /v1/me/terms": [
+    "src/components/TermsGate.tsx:24"
+  ],
+  "POST /v1/me/wager": [
+    "src/components/Engagement.tsx:71"
+  ],
+  "POST /v1/notifications/push/subscribe": [
+    "src/lib/pwa.ts:123"
+  ],
+  "POST /v1/notifications/push/test": [
+    "src/routes/settings/NotificationSettings.tsx:84"
+  ],
+  "POST /v1/notifications/push/unsubscribe": [
+    "src/lib/pwa.ts:130"
+  ],
+  "POST /v1/notifications/read": [
+    "src/routes/Notifications.tsx:26",
+    "src/routes/Notifications.tsx:38"
+  ],
+  "POST /v1/notifications/unsubscribe": [
+    "src/routes/auth/Unsubscribe.tsx:15"
+  ],
+  "POST /v1/nutrition/copy": [
+    "src/routes/progress/Food.tsx:77"
+  ],
+  "POST /v1/nutrition/foods": [
+    "src/routes/progress/Food.tsx:344"
+  ],
+  "POST /v1/nutrition/recipes": [
+    "src/routes/progress/Food.tsx:547"
+  ],
+  "POST /v1/pauses": [
+    "src/routes/settings/PauseSection.tsx:129"
+  ],
+  "POST /v1/pauses/:param/end": [
+    "src/routes/settings/PauseSection.tsx:65"
+  ],
+  "POST /v1/people/:param/block": [
+    "src/routes/social/Profile.tsx:64"
+  ],
+  "POST /v1/people/:param/encourage": [
+    "src/components/Encourage.tsx:22"
+  ],
+  "POST /v1/people/:param/follow": [
+    "src/components/social.tsx:61"
+  ],
+  "POST /v1/plans": [
+    "src/routes/plans/Plans.tsx:62"
+  ],
+  "POST /v1/plans/:param/start": [
+    "src/routes/plans/PlanDetail.tsx:305",
+    "src/routes/plans/PlanDetail.tsx:308"
+  ],
+  "POST /v1/plans/:param/stop": [
+    "src/routes/plans/PlanDetail.tsx:300"
+  ],
+  "POST /v1/plans/import": [
+    "src/routes/plans/Plans.tsx:48"
+  ],
+  "POST /v1/plans/race": [
+    "src/components/RaceAndBlocks.tsx:38"
+  ],
+  "POST /v1/reports": [
+    "src/components/social.tsx:270"
+  ],
+  "POST /v1/routines": [
+    "src/routes/library/RoutineEditor.tsx:50"
+  ],
+  "POST /v1/routines/from-template/:param": [
+    "src/routes/library/Routines.tsx:16"
+  ],
+  "POST /v1/trash/:param/restore": [
+    "src/lib/undo.ts:56"
+  ],
+  "POST /v1/workouts/batch": [
+    "src/lib/sync.ts:149"
+  ],
+  "POST /v1/workouts/import": [
+    "src/routes/settings/ActivityImport.tsx:36"
+  ],
+  "PUT /v1/body-metrics/:param": [
+    "src/routes/progress/Body.tsx:104"
+  ],
+  "PUT /v1/exercise-notes/:param": [
+    "src/routes/library/ExerciseDetail.tsx:45",
+    "src/routes/log/LiveWorkout.tsx:671"
+  ],
+  "PUT /v1/exercises/custom/:param": [
+    "src/components/CustomExerciseForm.tsx:39"
+  ],
+  "PUT /v1/gyms/:param": [
+    "src/routes/settings/GymSettings.tsx:45"
+  ],
+  "PUT /v1/habit-routines/:param": [
+    "src/components/HabitRoutines.tsx:96"
+  ],
+  "PUT /v1/habits/:param/days": [
+    "src/routes/habits/HabitDetail.tsx:114"
+  ],
+  "PUT /v1/habits/:param/days/:param": [
+    "src/lib/habits.ts:88"
+  ],
+  "PUT /v1/journal/:param": [
+    "src/components/Mood.tsx:18"
+  ],
+  "PUT /v1/me/monthly-goal": [
+    "src/components/MonthlyGoal.tsx:28"
+  ],
+  "PUT /v1/me/rest-days/:param": [
+    "src/components/AdjustToday.tsx:41",
+    "src/routes/log/LogSheet.tsx:157"
+  ],
+  "PUT /v1/notifications/preferences": [
+    "src/routes/settings/Data.tsx:168",
+    "src/routes/settings/Data.tsx:182",
+    "src/routes/settings/NotificationSettings.tsx:36",
+    "src/routes/settings/NotificationSettings.tsx:45"
+  ],
+  "PUT /v1/nutrition/entries/:param": [
+    "src/routes/progress/Food.tsx:325",
+    "src/routes/progress/Food.tsx:356"
+  ],
+  "PUT /v1/nutrition/recipes/:param": [
+    "src/routes/progress/Food.tsx:546"
+  ],
+  "PUT /v1/nutrition/target": [
+    "src/routes/progress/Food.tsx:450",
+    "src/routes/progress/Food.tsx:484"
+  ],
+  "PUT /v1/plans/:param": [
+    "src/routes/plans/PlanDetail.tsx:171",
+    "src/routes/plans/PlanDetail.tsx:445"
+  ],
+  "PUT /v1/readiness/:param": [
+    "src/components/Readiness.tsx:77"
+  ],
+  "PUT /v1/reflections/:param": [
+    "src/components/Reflection.tsx:34"
+  ],
+  "PUT /v1/routines/:param": [
+    "src/routes/library/RoutineEditor.tsx:50"
+  ],
+  "PUT /v1/weigh-ins/:param": [
+    "src/routes/progress/Body.tsx:72"
+  ],
+  "PUT /v1/weight-goal": [
+    "src/routes/progress/Body.tsx:408"
+  ]
+}

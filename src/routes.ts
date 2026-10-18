@@ -10,6 +10,7 @@ import { gameRoutes, leaderboardRoutes } from "./modules/game/routes.ts";
 import { habitRoutes, habitRoutineRoutes } from "./modules/habits/routes.ts";
 import { insightRoutes } from "./modules/insights/routes.ts";
 import { notificationRoutes } from "./modules/notifications/routes.ts";
+import { coachRoutes, nutritionRoutes } from "./modules/nutrition/routes.ts";
 import { healthRoutes, opsRoutes } from "./modules/ops/routes.ts";
 import { handleRoutes, profileRoutes } from "./modules/profile/routes.ts";
 import {
@@ -40,6 +41,8 @@ export function mountRoutes(app: App): void {
   app.route("/v1/body-photos", photoRoutes);
   app.route("/v1/me", meRoutes);
   app.route("/v1/plans", planRoutes);
+  app.route("/v1/nutrition", nutritionRoutes);
+  app.route("/v1/coach", coachRoutes);
   // ... modules 16-20 mount here, in spec/core.md §0 order ...
   app.route("/v1/leaderboards", leaderboardRoutes);
   app.route("/v1/notifications", notificationRoutes);

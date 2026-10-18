@@ -301,6 +301,19 @@ export async function snapshot(ctx: Ctx, authed: AuthedBatch): Promise<Snapshot>
   return snapshotOf(await load(ctx, authed.userId, [], authed));
 }
 
+/**
+ * The snapshot plus the caller's own reads, in the same single round trip (the coach reads readiness and meals
+ * next to it). `extra` results come back in order.
+ */
+export async function snapshotWith<T extends readonly Stmt[]>(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  extra: T,
+): Promise<{ snapshot: Snapshot; extra: unknown[] }> {
+  const l = await load(ctx, authed.userId, extra, authed);
+  return { snapshot: snapshotOf(l), extra: l.extra };
+}
+
 /** A snapshot for a job (no session), e.g. the weekly digest. */
 export async function snapshotFor(ctx: Ctx, userId: string): Promise<Snapshot> {
   return snapshotOf(await load(ctx, userId, []));

@@ -6,23 +6,37 @@ import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { readiness } from "../../src/db/schema/index.ts";
 import { zipFiles } from "../../src/heavy/zip.ts";
-import { addDays } from "../../src/lib/time.ts";
+import { addDays, daysBetween } from "../../src/lib/time.ts";
 import { uuid7 } from "../../src/lib/uuid7.ts";
 import { HabitImportError, parse } from "../../src/modules/habits/importer.ts";
 import { find, type SeriesMap } from "../../src/modules/insights/engine.ts";
+import { type Estimate, estimate, suggest } from "../../src/modules/nutrition/expenditure.ts";
 import { testDb } from "../fixtures/db.ts";
 import { person } from "../fixtures/game.ts";
 import { api, BASE, jsonOf, randomIp } from "../fixtures/http.ts";
-
-// Still owned by NUTRITION: test_expenditure_from_intake_and_a_falling_trend,
-// test_expenditure_refuses_thin_or_impossible_data, test_suggestions_are_gentle,
-// test_expenditure_endpoint_reports_what_is_missing, test_recipe_logs_per_serving_and_snapshots_foods.
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const daysBack = (n: number, end = "2026-09-30") => Array.from({ length: n }, (_, i) => addDays(end, -i));
 const series = (o: Record<string, Map<string, number>>): SeriesMap => new Map(Object.entries(o));
 const mapOf = (days: string[], f: (d: string, i: number) => number) =>
   new Map(days.map((d, i) => [d, f(d, i)]));
+
+/** Python `Estimate(status, food_days, weigh_days, tdee=..., trend_kg=...)`. */
+const estimateOf = (
+  status: Estimate["status"],
+  food_days: number,
+  weigh_days: number,
+  v: { tdee?: number; trend_kg?: number } = {},
+): Estimate => ({
+  status,
+  food_days,
+  weigh_days,
+  tdee: v.tdee ?? null,
+  avg_intake: null,
+  trend_kg_per_week: null,
+  trend_kg: v.trend_kg ?? null,
+  confidence: null,
+});
 
 type Habit = { id: string; name: string };
 
@@ -87,6 +101,105 @@ describe("test_insights", () => {
     const habits = mapOf(days, (d) => (flag.get(d) ? 0.9 : 0.3));
     const found = find(series({ trained: flag, sleep, habits }));
     expect(found.filter((i) => i.outcome === "habits")).toHaveLength(1);
+  });
+
+  // --- adaptive expenditure (NUTRITION)
+
+  it("expenditure_from_intake_and_a_falling_trend", () => {
+    const end = "2026-09-30";
+    const days = daysBack(28, end);
+    const intake = mapOf(days, () => 2000);
+    // Losing 0.5 kg a week: 0.5 * 7700 / 7 = 550 kcal a day of deficit.
+    const every2 = days.filter((_, i) => i % 2 === 0);
+    const weights = mapOf(every2, (d) => 80 + (daysBetween(d, end) * 0.5) / 7);
+    const est = estimate(intake, weights, end);
+    expect(est.status).toBe("ok");
+    expect(Math.abs((est.tdee ?? 0) - 2550)).toBeLessThanOrEqual(5);
+    expect(est.trend_kg_per_week).toBe(-0.5);
+    expect(est.confidence).toBe("good");
+  });
+
+  it("expenditure_refuses_thin_or_impossible_data", () => {
+    const end = "2026-09-30";
+    expect(
+      estimate(
+        mapOf(daysBack(10, end), () => 2000),
+        new Map(),
+        end,
+      ).status,
+    ).toBe("not_enough");
+    const days = daysBack(28, end);
+    // 500 kcal a day while gaining weight: meals weren't logged.
+    const every2 = days.filter((_, i) => i % 2 === 0);
+    const gaining = mapOf(every2, (d) => 80 - (daysBetween(d, end) * 0.5) / 7);
+    expect(
+      estimate(
+        mapOf(days, () => 500),
+        gaining,
+        end,
+      ).status,
+    ).toBe("inconsistent");
+  });
+
+  it("suggestions_are_gentle", () => {
+    const est = estimateOf("ok", 28, 14, { tdee: 1800, trend_kg: 60 });
+    const lose = suggest(est, 50);
+    // 0.5% of 60 kg a week is 0.3 kg, about 330 kcal a day under.
+    expect(lose?.goal).toBe("lose");
+    expect(lose?.kcal).toBe(1470);
+    expect(lose?.rate_kg_per_week).toBeGreaterThanOrEqual(-0.31);
+    expect(suggest(estimateOf("ok", 28, 14, { tdee: 1300, trend_kg: 90 }), 60)?.kcal).toBe(1200);
+    expect(suggest(est, 60.5)?.goal).toBe("maintain");
+    expect(suggest(est, null)?.kcal).toBe(1800);
+    expect(suggest(estimateOf("not_enough", 3, 1), 50)).toBeNull();
+  });
+
+  it("expenditure_endpoint_reports_what_is_missing", async () => {
+    const { token } = await person();
+    const got = await jsonOf<{ status: string; suggestion: unknown }>(
+      await api("/v1/nutrition/expenditure", { token }),
+    );
+    expect(got.status).toBe("not_enough");
+    expect(got.suggestion).toBeNull();
+  });
+
+  // --- recipes (NUTRITION)
+
+  it("recipe_logs_per_serving_and_snapshots_foods", async () => {
+    const { token } = await person();
+    const food = async (json: unknown) =>
+      jsonOf<{ id: string }>(await api("/v1/nutrition/foods", { token, json }));
+    const rice = await food({ name: "Rice", kcal: 200, carbs_g: 44 });
+    const chicken = await food({ name: "Chicken", kcal: 165, protein_g: 31 });
+    const recipe = await jsonOf<{ id: string; kcal: number; protein_g: number }>(
+      await api("/v1/nutrition/recipes", {
+        token,
+        json: {
+          name: "Rice bowl",
+          serves: 2,
+          items: [{ food_id: rice.id, servings: 2 }, { food_id: chicken.id }],
+        },
+      }),
+    );
+    expect(recipe.kcal).toBe(282.5);
+    expect(recipe.protein_g).toBe(15.5);
+    const body = { date: TODAY, meal: "dinner", recipe_id: recipe.id, servings: 2 };
+    const entry = await jsonOf<{ name: string; kcal: number }>(
+      await api(`/v1/nutrition/entries/${crypto.randomUUID()}`, { method: "PUT", json: body, token }),
+    );
+    expect(entry.name).toBe("Rice bowl");
+    expect(entry.kcal).toBe(565);
+    // Changing a food doesn't rewrite the recipe until it's saved again.
+    await api(`/v1/nutrition/foods/${rice.id}`, { method: "PUT", json: { name: "Rice", kcal: 400 }, token });
+    const list = await jsonOf<{ kcal: number }[]>(await api("/v1/nutrition/recipes", { token }));
+    expect(list[0]?.kcal).toBe(282.5);
+    const other = await person();
+    const stolen = { name: "Mine", items: [{ food_id: rice.id }] };
+    expect((await api("/v1/nutrition/recipes", { token: other.token, json: stolen })).status).toBe(404);
+    const exported = await jsonOf<{ recipes: { serves: number }[] }>(
+      await api("/v1/me/export?format=json", { token }),
+    );
+    expect(exported.recipes[0]?.serves).toBe(2);
   });
 
   // --- journal and insights

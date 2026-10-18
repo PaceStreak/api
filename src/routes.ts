@@ -8,6 +8,14 @@ import { authRoutes, passkeyRoutes } from "./modules/auth/routes.ts";
 import { gameRoutes, leaderboardRoutes } from "./modules/game/routes.ts";
 import { notificationRoutes } from "./modules/notifications/routes.ts";
 import { healthRoutes, opsRoutes } from "./modules/ops/routes.ts";
+import {
+  gearRoutes,
+  meRoutes,
+  personalRoutes,
+  photoRoutes,
+  planRoutes,
+  trainingRoutes,
+} from "./modules/training/routes.ts";
 
 export function mountRoutes(app: App): void {
   // Health lives outside /v1 and carries no PaceStreak-Version header.
@@ -16,7 +24,15 @@ export function mountRoutes(app: App): void {
   app.route("/v1/auth", authRoutes);
   // 3 profile (PROFILE-ACCOUNT) mounts here.
   app.route("/v1/me", gameRoutes);
-  // ... modules 5-20 mount here, in spec/core.md §0 order ...
+  // 5-6 account (PROFILE-ACCOUNT) mount here.
+  app.route("/v1", trainingRoutes);
+  app.route("/v1/gear", gearRoutes);
+  app.route("/v1", personalRoutes);
+  app.route("/v1/body-photos", photoRoutes);
+  // 11-13 habits and insights (HABITS) mount here.
+  app.route("/v1/me", meRoutes);
+  app.route("/v1/plans", planRoutes);
+  // ... modules 16-20 mount here, in spec/core.md §0 order ...
   app.route("/v1/leaderboards", leaderboardRoutes);
   app.route("/v1/notifications", notificationRoutes);
   // ... modules 23-24 mount here ...

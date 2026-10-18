@@ -89,6 +89,8 @@ export const workouts = sqliteTable(
   (t) => [
     index("ix_workouts_user_date").on(t.userId, t.localDate),
     index("ix_workouts_user_seq").on(t.userId, t.seq),
+    // Newest-first lists, exercise history and the import duplicate window.
+    index("ix_workouts_user_started").on(t.userId, t.startedAt),
     index("ix_workouts_seq").on(t.seq),
     index("ix_workouts_gear_id").on(t.gearId),
     index("ix_workouts_gym_id").on(t.gymId),

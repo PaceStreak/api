@@ -29,6 +29,13 @@
       "when": 1792294963410,
       "tag": "0003_game_aggregates",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792311634267,
+      "tag": "0004_workouts_user_started",
+      "breakpoints": true
     }
   ]
 }

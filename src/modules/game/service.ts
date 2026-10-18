@@ -48,10 +48,15 @@ import * as repo from "./repo.ts";
 
 export type { JointResult } from "./engine/quests.ts";
 export { inQuietHour, jointStreak, learnReminderHour, reminderHour } from "./engine/quests.ts";
+export { e1rm } from "./engine/records.ts";
 export type { HabitView, Snapshot } from "./engine/snapshot.ts";
 export type { ChainResult, Span, WeekCell } from "./engine/streak.ts";
 export {
   computeChain,
+  effectiveEnd,
+  PAUSE_BUDGET_DAYS,
+  PAUSE_MAX_DAYS,
+  pauseDaysUsed,
   pausedDays,
   pauseEndFor,
   pauseError,
@@ -233,10 +238,37 @@ function ensureStatements(ctx: Ctx, userId: string): [Stmt, Stmt] {
   ];
 }
 
+/**
+ * Statements a caller runs in the same atomic batch as the first snapshot read, before the reads (a workout write
+ * and its aggregate refresh): the read then sees them, and the write costs no round trip of its own. `done`
+ * receives their results. They run once, never on a retry.
+ */
+export interface BeforeRead {
+  stmts: readonly [Stmt, ...Stmt[]];
+  done(results: readonly unknown[]): void;
+}
+
 /** Reads everything a snapshot needs plus `extra`, creating the profile/default chain when missing. */
-async function load(ctx: Ctx, userId: string, extra: readonly Stmt[], authed?: AuthedBatch): Promise<Loaded> {
+async function load(
+  ctx: Ctx,
+  userId: string,
+  extra: readonly Stmt[],
+  authed?: AuthedBatch,
+  before?: BeforeRead,
+): Promise<Loaded> {
+  let pending = before;
   const run = async () => {
     const list = readList(ctx.db, userId, extra);
+    if (pending !== undefined) {
+      const pre = pending;
+      pending = undefined;
+      const all = [...pre.stmts, ...list] as unknown as [Stmt, ...Stmt[]];
+      const res = (
+        authed === undefined ? await runBatch(ctx.db, all) : await authed.write(...all)
+      ) as unknown[];
+      pre.done(res.slice(0, pre.stmts.length));
+      return res.slice(pre.stmts.length);
+    }
     if (authed === undefined) return runBatch(ctx.db, list) as Promise<unknown[]>;
     const [, ...rest] = (await authed.read(...list)) as unknown[];
     return rest;
@@ -630,17 +662,19 @@ function recomputeExtra(ctx: Ctx, userId: string, opts: RecomputeOptions): Stmt[
 /**
  * Re-derives the projection, persists it and reports what changed (Python `recompute`). One read and one write;
  * a concurrent recompute that wins the race makes this one re-read and try again. `mutate` lets a caller apply its
- * own change in memory and in the same write batch (`prefix`), so the projection includes it with no extra trip.
+ * own change in memory and in the same write batch (`prefix`), so the projection includes it with no extra trip;
+ * `before` puts a caller's write in the read batch instead (see `BeforeRead`).
  */
 export async function recompute(
   ctx: Ctx,
   userId: string,
   opts: RecomputeOptions = {},
-  change?: { authed?: AuthedBatch; apply?: (l: Loaded) => Stmt[] },
+  change?: { authed?: AuthedBatch; apply?: (l: Loaded) => Stmt[]; before?: BeforeRead },
 ): Promise<Outcome & { snapshot: Snapshot }> {
   const scoped = opts.scope === undefined ? { ...opts, scope: NO_SCOPE } : opts;
   for (let attempt = 1; ; attempt++) {
-    const l = await load(ctx, userId, recomputeExtra(ctx, userId, scoped), change?.authed);
+    const before = attempt === 1 ? change?.before : undefined;
+    const l = await load(ctx, userId, recomputeExtra(ctx, userId, scoped), change?.authed, before);
     const prefix = change?.apply?.(l) ?? [];
     const p = plan(ctx, l, scoped, prefix);
     try {

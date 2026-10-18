@@ -953,3 +953,16 @@ export const internal = { startSession, recordFailure, event, dbUser, commit, BA
 export async function sweepExpiredChallenges(ctx: Ctx): Promise<void> {
   await commit(ctx, [repo.sweepChallenges(ctx.db, ctx.clock.now())]);
 }
+
+/** A security-event insert for another module's write batch (Python `account.service.record`). */
+export const securityEvent = (
+  ctx: Ctx,
+  userId: string,
+  kind: string,
+  meta: Meta | null,
+  extra?: Record<string, unknown>,
+) => event(ctx, userId, kind, meta, extra);
+
+/** Python `revoke_all_sessions` for another module's write batch: every session ends, every access token dies. */
+export const revokeAllStatements = (ctx: Ctx, userId: string) =>
+  repo.revokeAllSessions(ctx.db, userId, ctx.clock.now());

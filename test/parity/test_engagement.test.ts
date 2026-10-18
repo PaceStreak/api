@@ -2,9 +2,13 @@
  * Port of tests/test_engagement.py: quests, PR streaks, wagers, the monthly recap and similar boards.
  * Workouts go through the game fixture's write path (test/fixtures/game.ts) until the TRAINING unit lands.
  */
+
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { QUEST_BY_ID, QUEST_POOL, QUESTS_PER_WEEK, questsFor } from "../../src/catalog/quests.ts";
+import { exerciseNotes, gyms, workouts } from "../../src/db/schema/index.ts";
 import { addDays } from "../../src/lib/time.ts";
+import { uuid7 } from "../../src/lib/uuid7.ts";
 import {
   computePrStreak,
   computeQuests,
@@ -12,8 +16,10 @@ import {
   weekFacts,
 } from "../../src/modules/game/engine/quests.ts";
 import { computeChain, FREEZE_CAP } from "../../src/modules/game/engine/streak.ts";
+import { testDb } from "../fixtures/db.ts";
 import { person, putWorkout, setProfile } from "../fixtures/game.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
+import { person as onboarded, upload } from "../fixtures/profile.ts";
 
 // Still owned by other units (missing until they port them): test_gyms_carry_equipment_and_plates_and_stay_private,
 // test_exercise_notes_stick_to_the_exercise, test_weight_goal_starts_from_the_trend_and_is_private (TRAINING);
@@ -165,5 +171,63 @@ describe("test_engagement", () => {
     expect(rows.status).toBe(200);
     const handles = new Set((await jsonOf<{ rows: { handle: string }[] }>(rows)).rows.map((r) => r.handle));
     expect(handles.has(a.handle) && handles.has(b.handle)).toBe(true);
+  });
+
+  it("favourite_disciplines_round_trip", async () => {
+    const { token } = await onboarded();
+    const fav = async () =>
+      (await jsonOf<{ profile: { favourite_disciplines: string[] } }>(await api("/v1/me", { token }))).profile
+        .favourite_disciplines;
+    expect(await fav()).toEqual([]);
+    const res = await api("/v1/me/profile", {
+      token,
+      method: "PATCH",
+      json: { favourite_disciplines: ["running", "climbing"] },
+    });
+    expect(res.status).toBe(200);
+    expect(
+      (await jsonOf<{ profile: { favourite_disciplines: string[] } }>(res)).profile.favourite_disciplines,
+    ).toEqual(["running", "climbing"]);
+    // Persists across requests, not just echoed back.
+    expect(await fav()).toEqual(["running", "climbing"]);
+  });
+
+  it("export_and_import_carry_gyms_notes_goal", async () => {
+    // Gyms, sessions and notes are seeded in D1 until TRAINING lands their routes.
+    const me = await onboarded();
+    const { db } = testDb();
+    const now = Date.now();
+    const gym = uuid7(now);
+    await db
+      .insert(gyms)
+      .values({ id: gym, userId: me.userId, name: "Home", createdAt: now, updatedAt: now });
+    const w = await putWorkout(me.userId);
+    await db.update(workouts).set({ gymId: gym }).where(eq(workouts.id, w.id));
+    await db.insert(exerciseNotes).values({
+      id: uuid7(now),
+      userId: me.userId,
+      exerciseId: "back-squat",
+      note: "Belt on",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const data = await jsonOf<{
+      gyms: { name: string }[];
+      exercise_notes: unknown[];
+      workouts: { gym_id: string }[];
+    }>(await api("/v1/me/export?format=json", { token: me.token }));
+    expect(data.gyms[0]?.name).toBe("Home");
+    expect(data.exercise_notes).toEqual([{ exercise_id: "back-squat", note: "Belt on" }]);
+    expect(data.workouts[0]?.gym_id).toBe(gym);
+
+    const other = await onboarded();
+    expect((await upload("/v1/me/import", other.token, JSON.stringify(data))).status).toBe(200);
+    const theirGyms = await db.select().from(gyms).where(eq(gyms.userId, other.userId));
+    expect(theirGyms.map((g) => g.name)).toEqual(["Home"]);
+    expect(theirGyms[0]?.id).not.toBe(gym);
+    const theirs = await db.select().from(workouts).where(eq(workouts.userId, other.userId));
+    expect(theirs[0]?.gymId).toBe(theirGyms[0]?.id);
+    const notes = await db.select().from(exerciseNotes).where(eq(exerciseNotes.userId, other.userId));
+    expect(Object.fromEntries(notes.map((n) => [n.exerciseId, n.note]))).toEqual({ "back-squat": "Belt on" });
   });
 });

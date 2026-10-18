@@ -636,7 +636,12 @@ export async function recompute(
   ctx: Ctx,
   userId: string,
   opts: RecomputeOptions = {},
-  change?: { authed?: AuthedBatch; apply?: (l: Loaded) => Stmt[] },
+  change?: {
+    authed?: AuthedBatch;
+    apply?: (l: Loaded) => Stmt[];
+    /** Receives the results of the `apply` statements once the batch commits (e.g. an `UPDATE ... RETURNING`). */
+    written?: (results: unknown[]) => void;
+  },
 ): Promise<Outcome & { snapshot: Snapshot }> {
   const scoped = opts.scope === undefined ? { ...opts, scope: NO_SCOPE } : opts;
   for (let attempt = 1; ; attempt++) {
@@ -648,6 +653,7 @@ export async function recompute(
       const results = (
         change?.authed === undefined ? await runBatch(ctx.db, all) : await change.authed.write(...all)
       ) as unknown[];
+      change?.written?.(results.slice(1, 1 + prefix.length));
       dispatchNotified(ctx, ...p.notes.map((i) => (results[i] ?? []) as NotifyResult));
       return { ...p.outcome, snapshot: p.snap };
     } catch (err) {

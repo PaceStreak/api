@@ -2,7 +2,16 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!worker-configuration.d.ts", "!migrations/meta", "!docs", "!dist", "!.wrangler"]
+    "includes": [
+      "**",
+      "!worker-configuration.d.ts",
+      "!test/contract/app-types.ts",
+      "!test/contract/app-routes.json",
+      "!migrations/meta",
+      "!docs",
+      "!dist",
+      "!.wrangler"
+    ]
   },
   "formatter": {
     "enabled": true,

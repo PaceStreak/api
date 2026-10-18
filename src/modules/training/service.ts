@@ -6,6 +6,7 @@
 export { hrSummary, kmSplits, zoneSeconds } from "./importers.ts";
 export { blockWeek } from "./personal.ts";
 export {
+  MAX_PLANS,
   matchWeek,
   materialize,
   PLAN_FORMAT,
@@ -17,7 +18,7 @@ export {
   viewRange,
 } from "./plans.ts";
 export { buildRacePlan, RacePlanError } from "./race.ts";
-export { cleanTags } from "./schemas.ts";
+export { cleanTags, SharedPlan, type SharedPlanInput } from "./schemas.ts";
 export {
   DEFAULT_PROFILE,
   feedVisible,

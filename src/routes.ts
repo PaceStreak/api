@@ -6,6 +6,8 @@ import type { App } from "./app.ts";
 import { adminRoutes } from "./modules/admin/routes.ts";
 import { authRoutes, passkeyRoutes } from "./modules/auth/routes.ts";
 import { gameRoutes, leaderboardRoutes } from "./modules/game/routes.ts";
+import { habitRoutes, habitRoutineRoutes } from "./modules/habits/routes.ts";
+import { insightRoutes } from "./modules/insights/routes.ts";
 import { notificationRoutes } from "./modules/notifications/routes.ts";
 import { healthRoutes, opsRoutes } from "./modules/ops/routes.ts";
 
@@ -16,6 +18,9 @@ export function mountRoutes(app: App): void {
   app.route("/v1/auth", authRoutes);
   // 3 profile (PROFILE-ACCOUNT) mounts here.
   app.route("/v1/me", gameRoutes);
+  app.route("/v1/habits", habitRoutes);
+  app.route("/v1/habit-routines", habitRoutineRoutes);
+  app.route("/v1", insightRoutes);
   // ... modules 5-20 mount here, in spec/core.md §0 order ...
   app.route("/v1/leaderboards", leaderboardRoutes);
   app.route("/v1/notifications", notificationRoutes);

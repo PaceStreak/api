@@ -110,50 +110,75 @@ export const streakWagers = sqliteTable(
 );
 
 /**
- * Precomputed per-day aggregates, UPSERTed inside the write batch of every workout, habit-log, pause and rest-day
- * write (DESIGN.md §4). `chain_id` is a streak chain id or `""` for the whole-life aggregate, so it is not a
- * foreign key.
+ * Game aggregates (DESIGN.md §4 "Precomputed aggregates"). Each is a pure function of `workouts` and
+ * `workout_sets`, rebuilt by SQL (`INSERT ... SELECT ... GROUP BY`) for the touched days or exercises inside the
+ * write batch that changed them (`statRefresh` in src/modules/game/service.ts), or for everything on a full
+ * rebuild. They are recomputed from source rows, never patched with deltas, so an incremental refresh and a full
+ * rebuild produce the same rows (property-tested). Habits, pauses and rest days are small and read directly.
  */
+
+/** One row per user and local date with any non-deleted workout (future-dated ones included). */
 export const statDays = sqliteTable(
   "stat_days",
   {
     userId: userFk(),
-    chainId: text().notNull(),
     localDate: text().notNull(),
     sessions: integer().notNull().default(0),
+    /** Workouts with sets, a duration or a distance. */
     detailed: integer().notNull().default(0),
-    minutes: real().notNull().default(0),
+    durationSec: real().notNull().default(0),
     distanceM: real().notNull().default(0),
-    xp: integer().notNull().default(0),
+    /** Heatmap score: minutes (30 when unknown) weighted by effort. */
+    heat: real().notNull().default(0),
+    /** Sessions of 1 s to 20 minutes. */
+    short: integer().notNull().default(0),
+    /** Sessions started before 07:00 / at or after 21:00 local. */
+    early: integer().notNull().default(0),
+    late: integer().notNull().default(0),
+    /** Completed non-warm-up sets with any RPE (the quest; the badge counts RPE 5-10 per exercise). */
+    rpeSets: integer().notNull().default(0),
+    /** `{discipline: sessions}`. */
+    disciplines: json<Record<string, number>>().notNull().default({}),
+    /** Distinct exercise ids of completed non-warm-up sets. */
+    exercises: json<string[]>().notNull().default([]),
   },
-  (t) => [primaryKey({ name: "pk_stat_days", columns: [t.userId, t.chainId, t.localDate] })],
+  (t) => [primaryKey({ name: "pk_stat_days", columns: [t.userId, t.localDate] })],
 );
 
-export const statWeeks = sqliteTable(
-  "stat_weeks",
+/** Lifetime per-exercise totals over completed non-warm-up sets of non-deleted workouts. */
+export const statExercises = sqliteTable(
+  "stat_exercises",
   {
     userId: userFk(),
-    chainId: text().notNull(),
-    weekStart: text().notNull(),
-    /** Bit 0 = first day of the week. */
-    daysMask: integer().notNull().default(0),
-    sessions: integer().notNull().default(0),
-    detailed: integer().notNull().default(0),
-    minutes: real().notNull().default(0),
-    distanceM: real().notNull().default(0),
+    exerciseId: text().notNull(),
+    firstSeen: text().notNull(),
+    sets: integer().notNull().default(0),
+    /** Sets rated RPE 5-10 (the honest-logger badge). */
+    rpeSets: integer().notNull().default(0),
+    /** Sum of weight x reps over sets with both positive; the engine applies the load-type filter. */
+    tonnage: real().notNull().default(0),
   },
-  (t) => [primaryKey({ name: "pk_stat_weeks", columns: [t.userId, t.chainId, t.weekStart] })],
+  (t) => [primaryKey({ name: "pk_stat_exercises", columns: [t.userId, t.exerciseId] })],
 );
 
-/** Current best per record key, so old-session edits rescan only the touched keys. */
-export const recordsBest = sqliteTable(
-  "records_best",
+/**
+ * The best candidate per raw record key and day: the input to PR detection. Raw keys are `e1rm:<ex>` (sets with
+ * weight and reps; value 0 past 12 reps), `reps:<ex>` (any set with reps), `repsbw:<ex>` (reps without load),
+ * `hold:<ex>`, `distance:<discipline>` and `pace_<band>:run` (seconds per km, lower is better). The engine maps
+ * raw keys to record keys by the exercise's load type, which lives in the bundle, not in SQL.
+ */
+export const recordDays = sqliteTable(
+  "record_days",
   {
     userId: userFk(),
     key: text().notNull(),
+    localDate: text().notNull(),
     value: real().notNull(),
-    achievedOn: text().notNull(),
-    workoutId: text(),
+    workoutId: text().notNull(),
+    rewardable: bool().notNull(),
   },
-  (t) => [primaryKey({ name: "pk_records_best", columns: [t.userId, t.key] })],
+  (t) => [
+    primaryKey({ name: "pk_record_days", columns: [t.userId, t.key, t.localDate] }),
+    index("ix_record_days_user_date").on(t.userId, t.localDate),
+  ],
 );

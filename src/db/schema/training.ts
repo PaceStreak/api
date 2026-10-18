@@ -63,6 +63,8 @@ export const workouts = sqliteTable(
     startedAt: ms().notNull(),
     /** The user's local date at write time; stored, never derived. */
     localDate: text().notNull(),
+    /** The user's local start hour at write time (early/late badges, smart reminders). NULL falls back to UTC. */
+    localHour: integer(),
     durationSec: integer(),
     distanceM: real(),
     elevationM: real(),

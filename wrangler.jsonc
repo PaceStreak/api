@@ -17,6 +17,8 @@
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "limits": { "cpu_ms": 30000 },
   "upload_source_maps": true,
+  // Minified (source maps keep stack traces readable): the bundle has a 400 KiB gzip budget.
+  "minify": true,
   "d1_databases": [
     {
       "binding": "DB",

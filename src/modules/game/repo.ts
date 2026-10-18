@@ -6,6 +6,7 @@
  * parameter (`IN (SELECT value FROM json_each(?))`), so a scope of any size binds one parameter.
  */
 import { and, asc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { ENDURANCE } from "../../catalog/exercises.ts";
 import type { Db } from "../../db/client.ts";
 import type { ExplainCase } from "../../db/explain.ts";
@@ -340,11 +341,19 @@ export const ensureProfile = (db: Db, userId: string, id: string, hue: number, n
     .values({ id, userId, avatarHue: hue, createdAt: now, updatedAt: now })
     .onConflictDoNothing({ target: profiles.userId });
 
+/** The chain everyone starts with ("Everything", three days a week); `ensureChain` writes it on first use. */
+export const DEFAULT_CHAIN = {
+  name: "Everything",
+  disciplines: [] as string[],
+  targetHistory: [{ from: "2000-01-03", target: 3 }],
+  requirementsHistory: [] as never[],
+};
+
 /** The default all-disciplines chain, only while the user has no active chain (Python `get_chains`). */
 export const ensureChain = (db: Db, userId: string, id: string, now: number) =>
   db.run(sql`INSERT INTO streak_chains (id, created_at, updated_at, user_id, name, disciplines, target_history,
       requirements_history, position, archived)
-    SELECT ${id}, ${now}, ${now}, ${userId}, 'Everything', '[]', ${JSON.stringify([{ from: "2000-01-03", target: 3 }])},
+    SELECT ${id}, ${now}, ${now}, ${userId}, ${DEFAULT_CHAIN.name}, '[]', ${JSON.stringify(DEFAULT_CHAIN.targetHistory)},
       '[]', 0, 0
     WHERE NOT EXISTS (SELECT 1 FROM streak_chains WHERE user_id = ${userId} AND archived = 0)`);
 
@@ -716,6 +725,65 @@ export function refreshStatements(db: Db, userId: string, scope: RefreshScope) {
   return out;
 }
 
+// ---- many users at once (a coach's view of a group) ------------------------------------------------------------
+
+/**
+ * `user_id IN (...)` over one JSON parameter: any number of users in one statement, each probing the table's
+ * user index. D1 counts every statement of a batch against its 1,000-queries-per-invocation limit, so reads that
+ * cover a whole group must be per table, not per member.
+ */
+export const usersIn = (col: SQLiteColumn, userIds: readonly string[]) =>
+  sql`${col} IN (SELECT value FROM json_each(${JSON.stringify(userIds)}))`;
+
+export const profilesOf = (db: Db, userIds: readonly string[]) =>
+  db.select().from(profiles).where(usersIn(profiles.userId, userIds));
+
+/** Every live chain, in each user's chain order; the first per user is the main chain. */
+export const chainsOf = (db: Db, userIds: readonly string[]) =>
+  db
+    .select({
+      userId: streakChains.userId,
+      id: streakChains.id,
+      name: streakChains.name,
+      disciplines: streakChains.disciplines,
+      targetHistory: streakChains.targetHistory,
+      requirementsHistory: streakChains.requirementsHistory,
+    })
+    .from(streakChains)
+    .where(and(usersIn(streakChains.userId, userIds), eq(streakChains.archived, false)))
+    .orderBy(asc(streakChains.userId), asc(streakChains.position), asc(streakChains.createdAt));
+
+export const repairsOf = (db: Db, userIds: readonly string[]) =>
+  db
+    .select({
+      userId: streakRepairs.userId,
+      chainId: streakRepairs.chainId,
+      weekStart: streakRepairs.weekStart,
+      month: streakRepairs.month,
+    })
+    .from(streakRepairs)
+    .where(usersIn(streakRepairs.userId, userIds));
+
+export const pausesOf = (db: Db, userIds: readonly string[]) =>
+  db
+    .select({ userId: streakPauses.userId, startsOn: streakPauses.startsOn, endsOn: streakPauses.endsOn })
+    .from(streakPauses)
+    .where(usersIn(streakPauses.userId, userIds));
+
+export const wagersOf = (db: Db, userIds: readonly string[]) =>
+  db
+    .select({ userId: streakWagers.userId, weekStart: streakWagers.weekStart, days: streakWagers.days })
+    .from(streakWagers)
+    .where(usersIn(streakWagers.userId, userIds));
+
+/** Only what a chain and a plan's progress need from each active day. */
+export const dayDisciplinesOf = (db: Db, userIds: readonly string[]) =>
+  db
+    .select({ userId: statDays.userId, localDate: statDays.localDate, disciplines: statDays.disciplines })
+    .from(statDays)
+    .where(usersIn(statDays.userId, userIds))
+    .orderBy(asc(statDays.userId), asc(statDays.localDate));
+
 // ---- EXPLAIN registry -----------------------------------------------------------------------------------------
 
 const JSON_SCOPE = "scoped by json_each over the touched values; each value probes the user's primary key";
@@ -757,6 +825,20 @@ export const explain: ExplainCase[] = [
   { name: "game.restDayDates", build: (db) => restDayDates(db, "u") },
   { name: "game.wakingDates", build: (db) => wakingDates(db, "u") },
   { name: "game.stats", build: (db) => stats(db, "u") },
+  ...(
+    [
+      ["profilesOf", profilesOf],
+      ["chainsOf", chainsOf],
+      ["repairsOf", repairsOf],
+      ["pausesOf", pausesOf],
+      ["wagersOf", wagersOf],
+      ["dayDisciplinesOf", dayDisciplinesOf],
+    ] as const
+  ).map(([name, q]) => ({
+    name: `game.${name}`,
+    build: (db: Db) => q(db, ["u", "v"]),
+    scanOk: "walks the JSON id list; each id probes the table's user index",
+  })),
   { name: "game.recordDayRows", build: (db) => recordDayRows(db, "u", null) },
   { name: "game.recordDayRowsScoped", build: (db) => recordDayRows(db, "u", ["e1rm:x"]), scanOk: JSON_SCOPE },
   { name: "game.recentStartHours", build: (db) => recentStartHours(db, "u", "2026-01-01", 0) },

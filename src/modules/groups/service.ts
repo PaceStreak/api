@@ -15,7 +15,7 @@ import { conflict, forbidden, HttpError, notFound } from "../../lib/errors.ts";
 import { BUCKETS } from "../../lib/ratelimit.ts";
 import { addDays, daysBetween, localDate, toWire, weekStart, zone } from "../../lib/time.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
-import { jointStreak, type Snapshot, snapshotsFor } from "../game/service.ts";
+import { jointStreak, type MainChain, mainChainsFor } from "../game/service.ts";
 import { dispatchNotified, type NotifyResult, notify } from "../notifications/service.ts";
 import {
   cleanText,
@@ -349,10 +349,11 @@ export async function patchMe(
 // ---- coaching -------------------------------------------------------------------------------------------------
 
 /** Logged (date, discipline) pairs from the snapshot's day aggregates, for a plan view over every source. */
-function loggedFrom(snap: Snapshot, range: [string, string] | null) {
+function loggedFrom(days: MainChain["days"], range: [string, string] | null) {
   if (range === null) return [];
   const out: { d: string; discipline: string }[] = [];
-  for (const [d, day] of snap.dayRows) {
+  for (const day of days) {
+    const d = day.localDate;
     if (d < range[0] || d > range[1]) continue;
     for (const [discipline, n] of Object.entries(day.disciplines))
       for (let i = 0; i < n; i++) out.push({ d, discipline });
@@ -360,17 +361,21 @@ function loggedFrom(snap: Snapshot, range: [string, string] | null) {
   return out;
 }
 
-type Running = Awaited<ReturnType<typeof repo.runningPlan>>;
-type Recent = Awaited<ReturnType<typeof repo.recentWorkouts>>;
+type Running = Awaited<ReturnType<typeof repo.runningPlansOf>>[number];
 
 /** One coached member (Python `coach_view` row): streak, plan progress, the last 8 weeks and 10 sessions. */
-function coachRow(coach: string, row: PersonRow, snap: Snapshot, running: Running, recent: Recent) {
-  const main = snap.chains[0].result;
-  const plan = running[0];
+function coachRow(
+  coach: string,
+  row: PersonRow,
+  m: MainChain,
+  plan: Running | undefined,
+  recent: readonly repo.RecentWorkout[],
+) {
+  const main = m.main;
   let progress = null;
   if (plan !== undefined) {
-    const wso = snap.profile.weekStartsOn;
-    const view = planView(plan, snap.today, wso, loggedFrom(snap, viewRange(plan, snap.today, wso)));
+    const wso = m.profile.weekStartsOn;
+    const view = planView(plan, m.today, wso, loggedFrom(m.days, viewRange(plan, m.today, wso)));
     progress = {
       name: plan.name,
       week: (view.current_week ?? 0) + 1,
@@ -390,27 +395,40 @@ function coachRow(coach: string, row: PersonRow, snap: Snapshot, running: Runnin
     weeks: main.weeks
       .slice(-8)
       .map((c) => ({ week_start: c.weekStart, days: c.days, target: c.target, status: c.status })),
-    recent: recent.map((w) => ({ ...w })),
+    recent: recent.map(({ user_id: _, ...w }) => w),
   });
 }
 
+/**
+ * Coach rows for everyone who shares with `coach`: one batch of eight set-based statements however large the
+ * group (`mainChainsFor`), so a 200-member group stays far inside D1's 1,000 queries per invocation.
+ */
 async function coachRows(ctx: Ctx, coach: string, sharers: readonly repo.SharerRow[]) {
   const ids = [...new Set(sharers.map((s) => s.p_id))];
-  const snaps = await snapshotsFor(ctx, ids, (u) => [
-    repo.runningPlan(ctx.db, u),
-    repo.recentWorkouts(ctx.db, u),
-  ]);
   const rows = new Map<string, ReturnType<typeof coachRow>>();
+  if (ids.length === 0) return rows;
+  const got = await mainChainsFor(ctx, ids, [
+    repo.runningPlansOf(ctx.db, ids),
+    repo.recentWorkoutsOf(ctx.db, ids),
+  ]);
+  const plans = new Map<string, Running>();
+  for (const p of got.extra[0] as Running[]) if (!plans.has(p.userId)) plans.set(p.userId, p);
+  const recent = new Map<string, repo.RecentWorkout[]>();
+  for (const w of got.extra[1] as repo.RecentWorkout[]) {
+    const list = recent.get(w.user_id);
+    if (list === undefined) recent.set(w.user_id, [w]);
+    else list.push(w);
+  }
   for (const s of sharers) {
     if (rows.has(s.p_id)) continue;
-    const got = snaps.get(s.p_id);
-    if (got === undefined) continue;
-    rows.set(s.p_id, coachRow(coach, s, got.snapshot, got.extra[0] as Running, got.extra[1] as Recent));
+    const m = got.chains.get(s.p_id);
+    if (m === undefined) continue;
+    rows.set(s.p_id, coachRow(coach, s, m, plans.get(s.p_id), recent.get(s.p_id) ?? []));
   }
   return rows;
 }
 
-/** GET /groups/{id}/coach: members who share their training with their coach. Two round trips. */
+/** GET /groups/{id}/coach: members who share their training with their coach. Two round trips, ~12 statements. */
 export async function coachView(ctx: Ctx, authed: AuthedBatch, groupId: string) {
   const { group, me, rest } = await forMember(
     ctx,
@@ -452,7 +470,7 @@ export async function coaching(ctx: Ctx, authed: AuthedBatch) {
     }
   const today = todayIn(ctx, me[0]);
   const out = [...people.values()].map((e) => {
-    const recent = (e.recent ?? []) as Recent;
+    const recent = (e.recent ?? []) as { date: string }[];
     const last = recent.reduce<string | null>((m, r) => (m === null || r.date > m ? r.date : m), null);
     const quiet = last === null ? null : daysBetween(last, today);
     return Object.assign(e, {

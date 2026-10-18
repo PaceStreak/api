@@ -317,6 +317,49 @@ export interface Snapshot {
   customs: Map<string, CustomIn>;
 }
 
+/** What one chain's streak needs: a snapshot's inputs, or a coach's set-based read of many people. */
+export interface ChainContext {
+  today: string;
+  weekStartsOn: number;
+  days: readonly Pick<DayIn, "localDate" | "disciplines">[];
+  repairs: readonly { chainId: string; weekStart: string }[];
+  /** A repair was already used this month. */
+  repairUsed: boolean;
+  sheltered: ReadonlySet<string>;
+  /** Week start -> promised days; only the main chain carries wagers. */
+  wagers: ReadonlyMap<string, number>;
+}
+
+export function chainViewOf(chain: ChainIn, isMain: boolean, c: ChainContext): ChainView {
+  const allowed = new Set(chain.disciplines);
+  const active: string[] = [];
+  const dayDisciplines = new Map<string, Set<string>>();
+  const wantKinds = chain.requirementsHistory.length > 0;
+  for (const d of c.days) {
+    if (allowed.size === 0 && !wantKinds) {
+      active.push(d.localDate);
+      continue;
+    }
+    const ds = Object.keys(d.disciplines);
+    const matching = allowed.size === 0 ? ds : ds.filter((x) => allowed.has(x));
+    if (matching.length === 0) continue;
+    active.push(d.localDate);
+    if (wantKinds) dayDisciplines.set(d.localDate, new Set(matching));
+  }
+  return {
+    chain,
+    result: computeChain(active, c.today, c.weekStartsOn, targetResolver(chain.targetHistory), {
+      repaired: c.repairs.filter((r) => r.chainId === chain.id).map((r) => r.weekStart),
+      repairAvailable: !c.repairUsed,
+      pausedDays: c.sheltered,
+      requirementsFor: requirementsResolver(chain.requirementsHistory),
+      dayDisciplines,
+      // Wagers are made on the main chain only.
+      wagers: isMain ? c.wagers : null,
+    }),
+  };
+}
+
 /** `chains` must be non-empty (the service creates the default chain first). */
 export function buildSnapshot(inp: SnapshotInputs): Snapshot {
   const { profile, today } = inp;
@@ -329,35 +372,16 @@ export function buildSnapshot(inp: SnapshotInputs): Snapshot {
   const wagerMap = new Map(inp.wagers.map((w) => [w.weekStart, w.days]));
 
   // ---- streaks
-  const views: ChainView[] = inp.chains.map((chain, i) => {
-    const allowed = new Set(chain.disciplines);
-    const active: string[] = [];
-    const dayDisciplines = new Map<string, Set<string>>();
-    const wantKinds = chain.requirementsHistory.length > 0;
-    for (const d of inp.days) {
-      if (allowed.size === 0 && !wantKinds) {
-        active.push(d.localDate);
-        continue;
-      }
-      const ds = Object.keys(d.disciplines);
-      const matching = allowed.size === 0 ? ds : ds.filter((x) => allowed.has(x));
-      if (matching.length === 0) continue;
-      active.push(d.localDate);
-      if (wantKinds) dayDisciplines.set(d.localDate, new Set(matching));
-    }
-    return {
-      chain,
-      result: computeChain(active, today, wso, targetResolver(chain.targetHistory), {
-        repaired: inp.repairs.filter((r) => r.chainId === chain.id).map((r) => r.weekStart),
-        repairAvailable: !repairUsed,
-        pausedDays: sheltered,
-        requirementsFor: requirementsResolver(chain.requirementsHistory),
-        dayDisciplines,
-        // Wagers are made on the main chain only.
-        wagers: i === 0 ? wagerMap : null,
-      }),
-    };
-  });
+  const chainCtx: ChainContext = {
+    today,
+    weekStartsOn: wso,
+    days: inp.days,
+    repairs: inp.repairs,
+    repairUsed,
+    sheltered,
+    wagers: wagerMap,
+  };
+  const views: ChainView[] = inp.chains.map((chain, i) => chainViewOf(chain, i === 0, chainCtx));
   const main = views[0] as ChainView;
 
   // ---- habits and the whole-life streak

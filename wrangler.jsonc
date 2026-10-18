@@ -36,7 +36,9 @@
     "consumers": [
       {
         "queue": "pacestreak-jobs",
-        "max_batch_size": 10,
+        // One message per invocation: D1 counts each statement against 1,000 queries per invocation
+        // (src/jobs/dispatch.ts, D1_QUERIES_PER_INVOCATION).
+        "max_batch_size": 1,
         "max_batch_timeout": 2,
         "max_retries": 5,
         "dead_letter_queue": "pacestreak-jobs-dlq"
@@ -90,7 +92,9 @@
         "consumers": [
           {
             "queue": "pacestreak-jobs-staging",
-            "max_batch_size": 10,
+            // One message per invocation: D1 counts each statement against 1,000 queries per invocation
+            // (src/jobs/dispatch.ts, D1_QUERIES_PER_INVOCATION).
+            "max_batch_size": 1,
             "max_batch_timeout": 2,
             "max_retries": 5,
             "dead_letter_queue": "pacestreak-jobs-staging-dlq"

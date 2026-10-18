@@ -904,3 +904,33 @@ export async function deleteRoutine(ctx: Ctx, authed: AuthedBatch, routineId: st
   );
   return { trash_id: trashId };
 }
+
+// ---- trash restore --------------------------------------------------------------------------------------------
+
+/** Python's trash router checked this limit with its own wording. */
+export const MAX_LIVE_HABITS_ON_RESTORE = 30;
+
+/**
+ * Trash restore of a habit (the trash module builds `stmts`: the inserts and the removal of its entry). Runs inside
+ * the game recompute like every habit write, so the restored history counts in the streaks at once: one read, one
+ * write. The habit and its logs join the in-memory state the snapshot is built from.
+ */
+export async function restoreHabit(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  habit: HabitRow,
+  logs: readonly LogRow[],
+  stmts: readonly Stmt[],
+): Promise<void> {
+  await mutate(ctx, authed.userId, authed, false, (st) => {
+    if (habit.archivedAt === null) {
+      const live = st.habits.filter((h) => h.archivedAt === null).length;
+      if (live >= MAX_LIVE_HABITS_ON_RESTORE) {
+        throw conflict(`${MAX_LIVE_HABITS_ON_RESTORE} habits at once is the limit. Archive one first.`);
+      }
+    }
+    st.habits.push(habit);
+    st.logs.push(...logs);
+    return { stmts: [...stmts], result: null };
+  });
+}

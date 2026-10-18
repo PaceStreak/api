@@ -21,6 +21,7 @@ import {
   planRoutes,
   trainingRoutes,
 } from "./modules/training/routes.ts";
+import { trashRoutes } from "./modules/trash/routes.ts";
 
 export function mountRoutes(app: App): void {
   // Health lives outside /v1 and carries no PaceStreak-Version header.
@@ -46,6 +47,7 @@ export function mountRoutes(app: App): void {
   // ... modules 16-20 mount here, in spec/core.md §0 order ...
   app.route("/v1/leaderboards", leaderboardRoutes);
   app.route("/v1/notifications", notificationRoutes);
+  app.route("/v1/trash", trashRoutes);
   // ... modules 23-24 mount here ...
   app.route("/v1/admin", adminRoutes);
   app.route("/v1", opsRoutes);

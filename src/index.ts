@@ -3,10 +3,12 @@
  * Jobs and consumers are registered into `jobs` (jobs/scheduled.ts) and `consumers` (jobs/consumer.ts).
  */
 import { createApp } from "./app.ts";
-import { handleQueue } from "./jobs/consumer.ts";
+import { consumers, handleQueue } from "./jobs/consumer.ts";
 import { handleScheduled } from "./jobs/scheduled.ts";
+import { registerConsumers as registerNotificationConsumers } from "./modules/notifications/service.ts";
 import { mountRoutes } from "./routes.ts";
 
+registerNotificationConsumers(consumers);
 const app = createApp(mountRoutes);
 
 export default {

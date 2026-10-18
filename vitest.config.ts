@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
@@ -10,6 +11,13 @@ process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = "false";
 
 // Fixed, obviously fake secrets: tests must never depend on real credentials.
 const TEST_KEY = btoa("not-a-secret-test-key-32-bytes!!"); // 32 bytes, base64
+
+// A VAPID key pair made fresh for each run (never committed), so push routes run as configured.
+const vapid = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" });
+const b64url = (s: string | undefined) => Buffer.from(s ?? "", "base64url");
+const VAPID_PUBLIC_KEY = Buffer.concat([Buffer.of(4), b64url(vapid.x), b64url(vapid.y)]).toString(
+  "base64url",
+);
 
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.join(root, "migrations"));
@@ -30,8 +38,8 @@ export default defineConfig(async () => {
             JWT_KEYS: JSON.stringify({ current: "t1", keys: { t1: TEST_KEY } }),
             PEPPER: TEST_KEY,
             DATA_KEY: TEST_KEY,
-            VAPID_PRIVATE_JWK: "",
-            VAPID_PUBLIC_KEY: "",
+            VAPID_PRIVATE_JWK: JSON.stringify(vapid),
+            VAPID_PUBLIC_KEY,
             TURNSTILE_SECRET_KEY: "",
             R2_ACCESS_KEY_ID: "test-access-key",
             R2_SECRET_ACCESS_KEY: "test-secret-key",

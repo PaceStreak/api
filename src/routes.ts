@@ -4,6 +4,7 @@
  */
 import type { App } from "./app.ts";
 import { authRoutes, passkeyRoutes } from "./modules/auth/routes.ts";
+import { notificationRoutes } from "./modules/notifications/routes.ts";
 
 export function mountRoutes(app: App): void {
   // Health lives outside /v1 and carries no PaceStreak-Version header. The OPS-ADMIN unit replaces this with
@@ -11,4 +12,5 @@ export function mountRoutes(app: App): void {
   app.get("/health", (c) => c.json({ status: "healthy" }));
   app.route("/v1/auth/passkeys", passkeyRoutes);
   app.route("/v1/auth", authRoutes);
+  app.route("/v1/notifications", notificationRoutes);
 }

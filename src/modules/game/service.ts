@@ -46,6 +46,8 @@ import { pausedDays } from "./engine/streak.ts";
 import * as views from "./engine/views.ts";
 import * as repo from "./repo.ts";
 
+/** Memoised calendar arithmetic for other engines' hot loops (habits). */
+export { dayNum, dayStr } from "./engine/days.ts";
 export type { JointResult } from "./engine/quests.ts";
 export { inQuietHour, jointStreak, learnReminderHour, reminderHour } from "./engine/quests.ts";
 export { e1rm } from "./engine/records.ts";

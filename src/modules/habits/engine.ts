@@ -6,7 +6,7 @@
  * only days from the habit's start count. Strength is a slow average of how much of each week's target was met.
  */
 import { pyRound } from "../../lib/format.ts";
-import { type ChainResult, computeChain, type WeekCell } from "../game/service.ts";
+import { type ChainResult, computeChain, dayNum, dayStr, type WeekCell } from "../game/service.ts";
 
 /** Weight of each new week in the strength average: about a month's memory. */
 export const STRENGTH_ALPHA = 0.25;
@@ -28,11 +28,10 @@ export interface HabitView {
   lastSlip: string | null;
 }
 
-// Day numbers (days since 1970-01-01) keep the per-day loops of quit habits cheap.
-const DAY = 86_400_000;
-const num = (d: string) =>
-  Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10))) / DAY;
-const str = (n: number) => new Date(n * DAY).toISOString().slice(0, 10);
+// Day numbers (days since 1970-01-01) keep the per-day loops of quit habits cheap; the game engine's memoised
+// conversions make each one a map lookup (a five-year quit habit walks ~1,800 days several times per view).
+const num = dayNum;
+const str = dayStr;
 /** Python `weekday()`: Monday = 0. 1970-01-01 was a Thursday. */
 const weekdayOf = (n: number) => (((n + 3) % 7) + 7) % 7;
 

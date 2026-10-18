@@ -143,7 +143,8 @@ export function computeChain(
   targetFor: TargetFor,
   opts: ChainOptions = {},
 ): ChainResult {
-  const days = new Set(activeDays);
+  // A Set passed in (a habit's done days, often ~1,800 for a five-year quit habit) is only read: no copy.
+  const days: ReadonlySet<string> = activeDays instanceof Set ? activeDays : new Set(activeDays);
   const dayDisciplines = opts.dayDisciplines ?? new Map<string, ReadonlySet<string>>();
   const requirementsFor = opts.requirementsFor ?? null;
   const requirementDays = (week: string, req: Requirement): number => {

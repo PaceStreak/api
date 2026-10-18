@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: CONTRACT in progress, paused at 5h 93% (resume after 23:40 IST). Work is on branch wip-contract (pushed; local worktree scratchpad/api-contract, branch contract) and app branch api-next (local worktree scratchpad/app-next). Resume: finish CONTRACT on that branch, verify all checks, merge into next; then CUTOVER docs.
+Next step: CUTOVER (docs only): README, AGENTS.md, infra docs, privacy notes, terms_version; deploy steps documented, not executed. Leftovers: app e2e against Workers API, queue throughput watch.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -21,7 +21,7 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | SOCIAL | done (baaa7b1; ratchet 20, 1002 tests, 368.4 KiB) |
 | TRASH | done (c0da71b; ratchet 59, 950 tests, 346.7 KiB) |
 | JOBS-12 | done (88cb86b; ratchet 7, 1214 tests, 375.9 KiB, migration 0005) |
-| CONTRACT | todo |
+| CONTRACT | done (9994bae; parity 0 missing, 1325 tests, 376.8 KiB; app api-next 6904c72) |
 | CUTOVER (docs only) | todo |
 
 ## Gates

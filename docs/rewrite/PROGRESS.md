@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: GAME, then PROFILE-ACCOUNT, TRAINING, HABITS, NUTRITION and SOCIAL in parallel. AUTH, NOTIF and OPS-ADMIN are done; module agents read docs/rewrite/CONVENTIONS.md, mount behind `auth()` and create notifications with `notify()` from src/modules/notifications/service.ts.
+Next step: PROFILE-ACCOUNT, TRAINING, HABITS, NUTRITION and SOCIAL in parallel, then TRASH and JOBS-12. GAME is done: see its integration hooks (statRefresh, recompute, setHabitSource, jointStreak) in src/modules/game/.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -13,7 +13,7 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | P1-CRYPTO P1-GUARD P1-MAIL P1-PUSH P1-R2 P1-JOBS P1-HEAVY P1-CATALOG | done (328 tests on next) |
 | AUTH | done (29 routes; test_auth 20 + test_passkeys 10 ported) |
 | NOTIF OPS-ADMIN | done (442 tests; parity 231 missing) |
-| GAME | todo |
+| GAME | done (11 /me routes + leaderboards, recompute consumer; parity 200 missing) |
 | PROFILE-ACCOUNT TRAINING HABITS NUTRITION SOCIAL | todo |
 | TRASH JOBS-12 | todo |
 | CONTRACT | todo |

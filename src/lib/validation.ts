@@ -7,7 +7,7 @@
  * Use `json(schema)`, `query(schema)` and `param(schema)` as route middleware, then `c.req.valid("json")`.
  */
 import type { Env, MiddlewareHandler } from "hono";
-import type { z } from "zod";
+import type * as z from "zod";
 import { HttpError } from "./errors.ts";
 
 export type Loc = (string | number)[];

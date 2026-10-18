@@ -20,10 +20,10 @@ import { testDb } from "../fixtures/db.ts";
 import { person, putWorkout, setProfile } from "../fixtures/game.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
 import { person as onboarded, upload } from "../fixtures/profile.ts";
+import { at, get, HOUR, type Json, put, workout } from "../fixtures/training.ts";
 
-// Still owned by other units (missing until they port them): test_gyms_carry_equipment_and_plates_and_stay_private,
-// test_exercise_notes_stick_to_the_exercise, test_weight_goal_starts_from_the_trend_and_is_private (TRAINING);
-// test_favourite_disciplines_round_trip, test_export_and_import_carry_gyms_notes_goal (PROFILE-ACCOUNT).
+// Still owned by PROFILE-ACCOUNT (missing until ported): test_favourite_disciplines_round_trip,
+// test_export_and_import_carry_gyms_notes_goal.
 
 const MON = "2026-09-07";
 const fixed = (t: number) => () => t;
@@ -229,5 +229,90 @@ describe("test_engagement", () => {
     expect(theirs[0]?.gymId).toBe(theirGyms[0]?.id);
     const notes = await db.select().from(exerciseNotes).where(eq(exerciseNotes.userId, other.userId));
     expect(Object.fromEntries(notes.map((n) => [n.exerciseId, n.note]))).toEqual({ "back-squat": "Belt on" });
+  });
+});
+
+describe("test_engagement (training routes)", () => {
+  it("gyms_carry_equipment_and_plates_and_stay_private", async () => {
+    const me = await person();
+    const home = await api("/v1/gyms", {
+      json: { name: "Garage", equipment: ["barbell", "dumbbell"], plates_kg: [5, 20, 10, 20] },
+      token: me.token,
+    });
+    expect(home.status).toBe(201);
+    const h: Json = await jsonOf(home);
+    expect(h.is_default).toBe(true);
+    expect(h.plates_kg).toEqual([20, 10, 5]);
+    expect(
+      (await api("/v1/gyms", { json: { name: "X", equipment: ["trampoline"] }, token: me.token })).status,
+    ).toBe(422);
+    const work: Json = await jsonOf(
+      await api("/v1/gyms", { json: { name: "Work", is_default: true }, token: me.token }),
+    );
+    const listed = await get(me.token, "/v1/gyms");
+    expect(listed.map((g: Json) => [g.name, g.is_default])).toEqual([
+      ["Work", true],
+      ["Garage", false],
+    ]);
+    const body = workout({ gym_id: h.id });
+    const saved: Json = await jsonOf(await put(me.token, crypto.randomUUID(), body));
+    expect(saved.workout.gym_id).toBe(h.id);
+    const other = await person();
+    const theirs: Json = await jsonOf(await put(other.token, crypto.randomUUID(), body));
+    expect(theirs.workout.gym_id).toBeNull();
+    expect((await api(`/v1/gyms/${work.id}`, { method: "DELETE", token: other.token })).status).toBe(404);
+    expect((await api(`/v1/gyms/${h.id}`, { method: "DELETE", token: me.token })).status).toBe(204);
+    expect((await get(me.token, "/v1/workouts"))[0].gym_id).toBeNull();
+  });
+
+  it("exercise_notes_stick_to_the_exercise", async () => {
+    const me = await person();
+    const res = await api("/v1/exercise-notes/back-squat", {
+      method: "PUT",
+      json: { note: " Seat 4, narrow grip " },
+      token: me.token,
+    });
+    expect(await jsonOf(res)).toEqual({ exercise_id: "back-squat", note: "Seat 4, narrow grip" });
+    expect(await get(me.token, "/v1/exercise-notes")).toEqual({ "back-squat": "Seat 4, narrow grip" });
+    const bad = await api("/v1/exercise-notes/not-a-lift", {
+      method: "PUT",
+      json: { note: "x" },
+      token: me.token,
+    });
+    expect(bad.status).toBe(404);
+    const foreign = await api(`/v1/exercise-notes/custom-${crypto.randomUUID()}`, {
+      method: "PUT",
+      json: { note: "x" },
+      token: me.token,
+    });
+    expect(foreign.status).toBe(404);
+    await api("/v1/exercise-notes/back-squat", { method: "PUT", json: { note: "" }, token: me.token });
+    expect(await get(me.token, "/v1/exercise-notes")).toEqual({});
+  });
+
+  it("weight_goal_starts_from_the_trend_and_is_private", async () => {
+    const me = await person();
+    const goal = { target_kg: 75, milestone_kg: 2 };
+    expect((await api("/v1/weight-goal", { method: "PUT", json: goal, token: me.token })).status).toBe(409);
+    for (const [hours, kg] of [
+      [30, 80.0],
+      [2, 81.0],
+    ] as const) {
+      await api(`/v1/weigh-ins/${crypto.randomUUID()}`, {
+        method: "PUT",
+        json: { weighed_at: at(-hours * HOUR), moment: "waking", weight_kg: kg },
+        token: me.token,
+      });
+    }
+    const saved: Json = await jsonOf(
+      await api("/v1/weight-goal", { method: "PUT", json: goal, token: me.token }),
+    );
+    expect(saved.start_kg).toBe(80.5);
+    expect(saved.target_kg).toBe(75);
+    expect((await get(me.token, "/v1/weight-goal")).target_kg).toBe(75);
+    const stats = await (await api("/v1/me/stats", { token: me.token })).text();
+    expect(stats).not.toContain("target_kg");
+    expect((await api("/v1/weight-goal", { method: "DELETE", token: me.token })).status).toBe(204);
+    expect(await get(me.token, "/v1/weight-goal")).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 /** Request schemas (Python app/notifications/router.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 
 const TRUE = new Set(["1", "on", "t", "true", "y", "yes"]);
 const FALSE = new Set(["0", "f", "false", "n", "no", "off"]);

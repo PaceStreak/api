@@ -7,7 +7,7 @@
  * Sections are planned in Python's order (custom exercises, gear and gyms first, because sessions refer to them).
  * A queued import runs two passes over the file: everything but `workouts` first, then `workouts` with the maps.
  */
-import { z } from "zod";
+import * as z from "zod";
 import {
   CUSTOM_PREFIX,
   DISCIPLINE_IDS,

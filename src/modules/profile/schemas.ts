@@ -1,5 +1,5 @@
 /** Request schemas (Python app/profile/router.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 
 const unit = (re: RegExp) => z.string().regex(re);
 const WEIGHT = /^(kg|lb)$/;

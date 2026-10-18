@@ -1,5 +1,5 @@
 /** Request schemas (Python app/habits/router.py, routines.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 import { HABIT_CATEGORIES } from "../../catalog/habit-templates.ts";
 import { HABIT_KINDS, ROUTINE_TIMES } from "../../db/schema/index.ts";
 

@@ -52,6 +52,8 @@ export default defineConfig(async () => {
       include:
         process.env.BENCH === "1" ? ["test/bench/**/*.bench.ts"] : ["src/**/*.test.ts", "test/**/*.test.ts"],
       setupFiles: ["./test/setup.ts"],
+      // Route tests sign people up (PBKDF2) and run in parallel workerd isolates; 5 s flakes under full load.
+      testTimeout: 20_000,
     },
   };
 });

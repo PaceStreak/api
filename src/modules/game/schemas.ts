@@ -1,5 +1,5 @@
 /** Request schemas (Python app/game/router.py, leaderboards.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 
 export const WagerIn = z.object({ week: z.enum(["this", "next"]) });
 

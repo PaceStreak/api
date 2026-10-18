@@ -2,7 +2,7 @@
  * Request schemas (Python app/admin/router.py). Python used `pattern=` for the choice fields, so they stay
  * regexes (the 422 says "String should match pattern ..."), narrowed to their unions after validation.
  */
-import { z } from "zod";
+import * as z from "zod";
 
 const choice = <T extends string>(values: readonly T[]) =>
   z

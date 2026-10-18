@@ -3,7 +3,7 @@
  * A production misconfiguration makes every request return 500 and logs `refusing to start: <reason>`, the
  * Workers equivalent of the Python service refusing to boot.
  */
-import { z } from "zod";
+import * as z from "zod";
 import { b64ToBytes } from "./lib/b64url.ts";
 import { parseOrigins } from "./lib/http.ts";
 

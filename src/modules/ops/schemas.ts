@@ -1,5 +1,5 @@
 /** Request schemas (Python app/ops/router.py). */
-import { z } from "zod";
+import * as z from "zod";
 
 export const ClientErrorIn = z.object({
   message: z.string().min(1).max(2000),

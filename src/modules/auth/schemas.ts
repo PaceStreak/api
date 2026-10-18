@@ -1,5 +1,5 @@
 /** Request schemas (Python app/auth/schemas.py and passkeys.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 
 const email = z.email();
 const password = z.string().min(16).max(256);

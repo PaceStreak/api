@@ -7,7 +7,7 @@
  * - no handler registered: retried, so a deploy that adds the handler (or the DLQ) still sees it.
  * - handler throws: retried with exponential backoff.
  */
-import { z } from "zod";
+import * as z from "zod";
 import { type Ctx, createCtx, type Deferrer } from "../ctx.ts";
 import { loadConfig } from "../env.ts";
 import { createLogger } from "../lib/logger.ts";

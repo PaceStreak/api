@@ -1,0 +1,1 @@
+CREATE INDEX `ix_workouts_user_started` ON `workouts` (`user_id`,`started_at`);

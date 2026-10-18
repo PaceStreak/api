@@ -3,7 +3,7 @@
  * (mounted after game's) and the public feed `/v1/calendar/{token}.ics`.
  */
 import { type Context, Hono } from "hono";
-import { z } from "zod";
+import * as z from "zod";
 import type { AppEnv } from "../../ctx.ts";
 import { notFound } from "../../lib/errors.ts";
 import { json, query } from "../../lib/validation.ts";

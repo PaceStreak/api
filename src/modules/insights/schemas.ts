@@ -1,5 +1,5 @@
 /** Request schemas (Python app/insights/router.py). Objects are non-strict, like pydantic. */
-import { z } from "zod";
+import * as z from "zod";
 
 export const JournalQuery = z.object({
   days: z.coerce.number().int().min(1).max(1100).default(366),

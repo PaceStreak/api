@@ -1,6 +1,6 @@
 # Rewrite progress
 
-Next step: SOCIAL (paused for the 5h usage window; resume after 18:40 IST), then TRASH and JOBS-12, then CONTRACT and CUTOVER. GAME hooks: statRefresh, recompute, snapshotWith, setHabitSource, jointStreak in src/modules/game/.
+Next step: SOCIAL (agent running), then JOBS-12 (must batch trash purgeExpired and sweepExpiredChallenges), then CONTRACT and CUTOVER. GAME hooks: statRefresh, recompute, snapshotWith, setHabitSource, jointStreak in src/modules/game/.
 
 Started 2026-10-18 03:48 IST from a scheduled session in the owner's VS Code. Work runs in
 hour-long legs gated on plan usage; each leg resumes from the `Next step:` line above.
@@ -19,7 +19,8 @@ hour-long legs gated on plan usage; each leg resumes from the `Next step:` line 
 | TRAINING | done |
 | NUTRITION | done |
 | SOCIAL | todo |
-| TRASH JOBS-12 | todo |
+| TRASH | done (c0da71b; ratchet 59, 950 tests, 346.7 KiB) |
+| JOBS-12 | todo |
 | CONTRACT | todo |
 | CUTOVER (docs only) | todo |
 

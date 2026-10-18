@@ -4,7 +4,8 @@
  */
 import { createApp } from "./app.ts";
 import { consumers, handleQueue } from "./jobs/consumer.ts";
-import { handleScheduled } from "./jobs/scheduled.ts";
+import { handleScheduled, jobs } from "./jobs/scheduled.ts";
+import { registerConsumers as registerJobConsumers, registerJobs } from "./jobs/tasks/index.ts";
 import { registerConsumers as registerAccountConsumers } from "./modules/account/service.ts";
 import { registerConsumers as registerGameConsumers } from "./modules/game/service.ts";
 import { registerConsumers as registerNotificationConsumers } from "./modules/notifications/service.ts";
@@ -13,6 +14,8 @@ import { mountRoutes } from "./routes.ts";
 registerNotificationConsumers(consumers);
 registerGameConsumers(consumers);
 registerAccountConsumers(consumers);
+registerJobConsumers(consumers);
+registerJobs(jobs);
 const app = createApp(mountRoutes);
 
 export default {

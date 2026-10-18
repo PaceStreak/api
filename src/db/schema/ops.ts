@@ -134,6 +134,8 @@ export const importJobs = sqliteTable(
   },
   (t) => [
     index("ix_import_jobs_user_id").on(t.userId),
+    // Housekeeping drops jobs (and their staged objects) a week after they were created.
+    index("ix_import_jobs_created_at").on(t.createdAt),
     index("ix_import_jobs_open").on(t.status, t.createdAt).where(sql`${t.status} IN ('queued', 'running')`),
     enumCheck("ck_import_jobs_kind", t.kind, IMPORT_KINDS),
     enumCheck("ck_import_jobs_status", t.status, JOB_STATUSES),
@@ -157,6 +159,8 @@ export const exportJobs = sqliteTable(
   },
   (t) => [
     index("ix_export_jobs_user_id").on(t.userId),
+    // Housekeeping drops jobs (and their staged objects) a week after they were created.
+    index("ix_export_jobs_created_at").on(t.createdAt),
     index("ix_export_jobs_open").on(t.status, t.createdAt).where(sql`${t.status} IN ('queued', 'running')`),
     enumCheck("ck_export_jobs_kind", t.kind, EXPORT_KINDS),
     enumCheck("ck_export_jobs_status", t.status, JOB_STATUSES),

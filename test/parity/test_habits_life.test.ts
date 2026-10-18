@@ -16,8 +16,7 @@ import { testDb } from "../fixtures/db.ts";
 import { person, putWorkout, setProfile } from "../fixtures/game.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
 import { person as profilePerson, upload } from "../fixtures/profile.ts";
-
-// Still owned by other units: test_habit_reminder_fires_at_the_chosen_hour_until_done (JOBS-12: the habit_reminders job).
+import { runFor } from "../jobs/helpers.ts";
 
 const MON = "2026-09-07";
 const days = (...offsets: number[]): HabitDay[] => offsets.map((o) => ({ day: addDays(MON, o), amount: 1 }));
@@ -372,5 +371,30 @@ describe("test_habits_life export", () => {
     expect(mine).toHaveLength(1);
     const logs = await db.select().from(habitLogs).where(eq(habitLogs.userId, other.userId));
     expect(logs.map((l) => [l.day, l.amount])).toEqual([[today, 6]]);
+  });
+});
+
+describe("test_habits_life: reminders", () => {
+  it("habit_reminder_fires_at_the_chosen_hour_until_done", async () => {
+    const me = await profilePerson();
+    const hour = new Date().getUTCHours();
+    const post = (token: string, json: unknown) => api("/v1/habits", { token, json });
+    const habit = await jsonOf<{ id: string; remind_hour: number }>(
+      await post(me.token, { template_id: "meditate", remind_hour: hour }),
+    );
+    await post(me.token, { template_id: "no-vaping", remind_hour: hour });
+    expect(await runFor("habits", me.userId)).toHaveLength(1); // the quit habit never reminds
+    expect(await runFor("habits", me.userId)).toEqual([]); // once a day
+    const other = await profilePerson();
+    const done = await jsonOf<{ id: string }>(
+      await post(other.token, { template_id: "meditate", remind_hour: hour }),
+    );
+    await api(`/v1/habits/${done.id}/days/${today()}`, {
+      token: other.token,
+      method: "PUT",
+      json: { amount: 10 },
+    });
+    expect(await runFor("habits", other.userId)).toEqual([]);
+    expect(habit.remind_hour).toBe(hour);
   });
 });

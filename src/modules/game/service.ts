@@ -325,16 +325,16 @@ export const SNAPSHOT_CHUNK = 20;
 /**
  * Snapshots of other people (a profile page, a coach's roster): their reads, plus `extra(userId)` statements next to
  * each, go out `SNAPSHOT_CHUNK` users per batch, the batches in parallel. A user still missing a profile or the
- * default chain falls back to `load`, which creates them. No session: the caller has already authorised the read.
+ * default chain falls back to `load`, which creates them. `held` (badges) feeds `buildRecap` for the weekly digest. No session: the caller has already authorised the read.
  */
 export async function snapshotsFor(
   ctx: Ctx,
   userIds: readonly string[],
   extra: (userId: string) => Stmt[] = () => [],
-): Promise<Map<string, { snapshot: Snapshot; extra: unknown[] }>> {
+): Promise<Map<string, { snapshot: Snapshot; extra: unknown[]; held: Loaded["achievements"] }>> {
   const chunks: string[][] = [];
   for (let i = 0; i < userIds.length; i += SNAPSHOT_CHUNK) chunks.push(userIds.slice(i, i + SNAPSHOT_CHUNK));
-  const out = new Map<string, { snapshot: Snapshot; extra: unknown[] }>();
+  const out = new Map<string, { snapshot: Snapshot; extra: unknown[]; held: Loaded["achievements"] }>();
   await Promise.all(
     chunks.map(async (chunk) => {
       const plans = chunk.map((userId) => {
@@ -350,7 +350,7 @@ export async function snapshotsFor(
         const slice = results.slice(at, at + p.list.length);
         at += p.list.length;
         const l = parse(ctx, slice, p.ex.length) ?? (await load(ctx, p.userId, p.ex));
-        out.set(p.userId, { snapshot: snapshotOf(l), extra: l.extra });
+        out.set(p.userId, { snapshot: snapshotOf(l), extra: l.extra, held: l.achievements });
       }
     }),
   );

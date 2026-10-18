@@ -1,10 +1,14 @@
 /** Port of tests/test_social_plans.py: plan challenges, coach-suggested plans, announcements, coaching overview. */
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { buddyPairs, profiles, userStats } from "../../src/db/schema/index.ts";
+import { buddyClock } from "../../src/jobs/tasks/buddies.ts";
+import { uuid7 } from "../../src/lib/uuid7.ts";
+import { testDb } from "../fixtures/db.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
 import { person } from "../fixtures/profile.ts";
 import { get, type Json, logSession } from "../fixtures/training.ts";
-
-// test_buddy_nudge_fires_once_near_the_end_of_the_week is a worker job (buddy_nudges): JOBS-12 ports it.
+import { runFor } from "../jobs/helpers.ts";
 
 const post = (path: string, token: string, json?: unknown) =>
   api(path, { token, method: "POST", ...(json === undefined ? {} : { json }) });
@@ -180,5 +184,76 @@ describe("test_social_plans", () => {
     );
     const joined = await post("/v1/challenges/join", b.token, { code: c.invite_code });
     expect(joined.status, await joined.clone().text()).toBe(200);
+  });
+});
+
+/** Python's `update(UserStats)`: one session short this week (the rows are created when missing). */
+async function shortThisWeek(userIds: readonly string[]): Promise<void> {
+  const { db } = testDb();
+  const now = Date.now();
+  const short = { recentWeeks: ["kept" as const, "open" as const], thisWeekDays: 2, thisWeekTarget: 3 };
+  for (const userId of userIds) {
+    await db
+      .insert(userStats)
+      .values({
+        id: uuid7(now),
+        userId,
+        computedAt: now,
+        computedFor: today(),
+        seasonId: "2026-Q4",
+        createdAt: now,
+        updatedAt: now,
+        ...short,
+      })
+      .onConflictDoUpdate({ target: userStats.userId, set: short });
+  }
+}
+
+/** Python monkeypatched BUDDY_NUDGE_HOUR to now and week_start to six days ago: 5pm on the week's last day. */
+async function atLastDayFivePm<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = { ...buddyClock };
+  buddyClock.hour = new Date().getUTCHours();
+  buddyClock.weekStart = () => addDays(today(), -6);
+  try {
+    return await fn();
+  } finally {
+    Object.assign(buddyClock, saved);
+  }
+}
+
+/** Two buddies, b with a session logged and one short this week, the pair active. */
+async function buddies(prefix: string) {
+  const a = await person(`${prefix}a`, { visibility: "public" });
+  const b = await person(`${prefix}b`, { visibility: "public" });
+  await post(`/v1/people/${b.handle}/follow`, a.token);
+  const pair = await jsonOf<Json>(await post("/v1/buddies", a.token, { handle: b.handle }));
+  await post(`/v1/buddies/${pair.id}/accept`, b.token);
+  await logSession(b.token);
+  await shortThisWeek([a.userId, b.userId]);
+  await testDb().db.update(buddyPairs).set({ status: "active" }).where(eq(buddyPairs.id, pair.id));
+  return { a, b, pair };
+}
+
+describe("test_social_plans: buddy nudges", () => {
+  it("buddy_nudge_fires_once_near_the_end_of_the_week", async () => {
+    const { a, b } = await buddies("bn");
+    await atLastDayFivePm(async () => {
+      const first = await runFor("buddies", [a.userId, b.userId]);
+      const again = await runFor("buddies", [a.userId, b.userId]);
+      expect(first).toHaveLength(2); // both are one short: each hears about the other
+      expect(again).toEqual([]);
+    });
+  });
+
+  it("changed: a buddy scheduled for deletion is never the subject of a nudge (test_buddy_nudge_fires_once_near_the_end_of_the_week)", async () => {
+    const { a, b } = await buddies("bd");
+    await testDb()
+      .db.update(profiles)
+      .set({ deletionScheduledAt: Date.now() + 86_400_000 })
+      .where(eq(profiles.userId, b.userId));
+    await atLastDayFivePm(async () => {
+      // a hears nothing about the leaving b; b, leaving, hears nothing either.
+      expect(await runFor("buddies", [a.userId, b.userId])).toEqual([]);
+    });
   });
 });

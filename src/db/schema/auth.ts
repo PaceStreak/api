@@ -29,6 +29,8 @@ export const users = sqliteTable(
     uniqueIndex("ix_users_email").on(t.email),
     // confirm-email-change looks users up by the address they are moving to.
     index("ix_users_pending_email").on(t.pendingEmail).where(sql`${t.pendingEmail} IS NOT NULL`),
+    // The hourly error alert mails every active admin.
+    index("ix_users_role").on(t.role),
     enumCheck("ck_users_role", t.role, USER_ROLES),
     maxLength("ck_users_email_len", t.email, 320),
     maxLength("ck_users_pending_email_len", t.pendingEmail, 320),

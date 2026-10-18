@@ -34,6 +34,8 @@ export const notifications = sqliteTable(
     unique("uq_notification_dedupe").on(t.userId, t.dedupeKey),
     index("ix_notifications_inbox").on(t.userId, t.createdAt),
     index("ix_notifications_actor_id").on(t.actorId),
+    // The daily 180-day retention sweep (jobs housekeeping).
+    index("ix_notifications_created_at").on(t.createdAt),
     index("ix_notifications_undelivered").on(t.createdAt).where(sql`${t.deliveredAt} IS NULL`),
   ],
 );

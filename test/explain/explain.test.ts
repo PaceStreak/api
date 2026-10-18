@@ -16,7 +16,13 @@ import { testDb } from "../fixtures/db.ts";
 const SMALL_TABLES = new Set(["sync_seq", "job_leases", "batch_guards", "worker_heartbeats"]);
 
 const modules = import.meta.glob<{ explain?: ExplainCase[] }>("../../src/modules/*/repo.ts", { eager: true });
-const cases: ExplainCase[] = [...core, ...Object.values(modules).flatMap((m) => m.explain ?? [])];
+const jobRepos = import.meta.glob<{ explain?: ExplainCase[] }>("../../src/jobs/tasks/repo.ts", {
+  eager: true,
+});
+const cases: ExplainCase[] = [
+  ...core,
+  ...[...Object.values(modules), ...Object.values(jobRepos)].flatMap((m) => m.explain ?? []),
+];
 
 const dialect = new SQLiteAsyncDialect({ casing: "snake_case" });
 

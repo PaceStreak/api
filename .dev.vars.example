@@ -4,6 +4,14 @@ ENVIRONMENT=development
 MAILER=console
 # 0 (production today): no outgoing email; 1 sends through MAILER (console prints codes to this log)
 EMAIL_ENABLED=0
+# MAILER is console | smtp | brevo | cloudflare. Secrets below: never commit a value.
+# MAILER=brevo: a Brevo API key (xkeysib-...)
+BREVO_API_KEY=
+# MAILER=smtp: Brevo SMTP login and SMTP key (xsmtpsib-...); host and port default to smtp-relay.brevo.com:587
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
 # 1 skips the per-IP minute limits (development only) for the app's e2e suite
 IP_LIMITS_OFF=0
 COOKIE_DOMAIN=

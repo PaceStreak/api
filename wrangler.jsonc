@@ -45,7 +45,9 @@
       }
     ]
   },
-  "send_email": [{ "name": "EMAIL" }],
+  // No send_email binding in production: the Workers Free plan cannot send through Cloudflare Email Service, so
+  // mail goes through Brevo's SMTP relay (MAILER=smtp, secrets SMTP_USER and SMTP_PASSWORD). To switch to Email Service later, add back
+  // `"send_email": [{ "name": "EMAIL" }]` and set "MAILER": "cloudflare".
   "ratelimits": [
     { "name": "RL_SIGNUP", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
     { "name": "RL_LOGIN", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
@@ -57,9 +59,13 @@
   "triggers": { "crons": ["*/5 * * * *", "2,17,32,47 * * * *", "23 3 * * *"] },
   "vars": {
     "ENVIRONMENT": "production",
-    "MAILER": "cloudflare",
-    // Outgoing email off until the Workers Paid plan (Email Service sending); "1" turns every email feature on.
-    "EMAIL_ENABLED": "0",
+    // console | smtp | brevo | cloudflare (README "Email switch"). smtp needs the SMTP_USER and SMTP_PASSWORD
+    // secrets; brevo needs BREVO_API_KEY.
+    "MAILER": "smtp",
+    "SMTP_HOST": "smtp-relay.brevo.com",
+    "SMTP_PORT": "587",
+    // "0" turns every email feature off (no sending, recovery codes instead of emailed codes).
+    "EMAIL_ENABLED": "1",
     "COOKIE_DOMAIN": "pacestreak.com",
     "CORS_ORIGINS": "https://app.pacestreak.com",
     "FRONTEND_URL": "https://app.pacestreak.com",
@@ -116,7 +122,7 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "MAILER": "cloudflare",
-        // Outgoing email off until the Workers Paid plan (Email Service sending); "1" turns every email feature on.
+        // Staging keeps email off: it never mails real people. "1" plus MAILER=brevo and its own key turns it on.
         "EMAIL_ENABLED": "0",
         "COOKIE_DOMAIN": "",
         "CORS_ORIGINS": "http://localhost:5173,https://staging.pacestreak-app.pages.dev",

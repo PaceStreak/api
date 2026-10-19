@@ -18,6 +18,7 @@ import { leafParts } from "../fixtures/mime.ts";
 
 const FROM = "PaceStreak <hello@pacestreak.com>";
 const log = createLogger({ test: "mailer" });
+const SMTP_OFF = { host: "smtp.invalid", port: 587, user: null, password: null };
 
 function headerOf(raw: string, name: string): string | undefined {
   const head = raw.split("\r\n\r\n")[0] ?? "";
@@ -48,7 +49,11 @@ describe("console transport", () => {
 
   it("createMailer picks console from config and logs through console.log", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const mailer = createMailer({ mailer: "console", mailFrom: FROM, emailEnabled: true }, env, log);
+    const mailer = createMailer(
+      { mailer: "console", mailFrom: FROM, emailEnabled: true, brevoApiKey: null, smtp: SMTP_OFF },
+      env,
+      log,
+    );
     await sendVerificationEmail(mailer, "c@example.com", "111222");
     expect(
       spy.mock.calls.some(([l]) =>
@@ -65,9 +70,9 @@ describe("EMAIL_ENABLED=0", () => {
   it("createMailer hands nothing to either transport", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const send = vi.fn(async () => {});
-    for (const kind of ["console", "cloudflare"] as const) {
+    for (const kind of ["console", "cloudflare", "brevo", "smtp"] as const) {
       const mailer = createMailer(
-        { mailer: kind, mailFrom: FROM, emailEnabled: false },
+        { mailer: kind, mailFrom: FROM, emailEnabled: false, brevoApiKey: null, smtp: SMTP_OFF },
         { ...env, EMAIL: { send } } as unknown as Env,
         log,
       );

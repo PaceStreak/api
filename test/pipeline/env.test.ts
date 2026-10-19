@@ -16,6 +16,8 @@ const prodEnv = (over: Record<string, unknown> = {}) =>
     PEPPER: KEY,
     DATA_KEY: KEY,
     TURNSTILE_SECRET_KEY: "turnstile-secret",
+    // wrangler.jsonc has no send_email binding in production (MAILER=smtp); a stand-in for MAILER=cloudflare.
+    EMAIL: { send: async () => ({ messageId: "test" }) },
     ...over,
   }) as Env;
 
@@ -43,9 +45,49 @@ describe("config gate", () => {
       "PUBLIC_API_URL must be https://",
     );
     expect(reasons(prodEnv({ MAILER: "console" }))).toContain(
-      "MAILER must be cloudflare when EMAIL_ENABLED=1",
+      "MAILER must be smtp, brevo or cloudflare when EMAIL_ENABLED=1",
     );
     expect(reasons(prodEnv({ EMAIL: undefined }))).toContain("the EMAIL send_email binding is missing");
+  });
+
+  it("smtp and brevo: each needs its secrets when email is on, and neither needs the EMAIL binding", () => {
+    const smtp = { MAILER: "smtp", EMAIL_ENABLED: "1", EMAIL: undefined };
+    expect(reasons(prodEnv({ ...smtp, SMTP_USER: "u", SMTP_PASSWORD: "p" }))).toEqual([]);
+    const ok = parseConfig(prodEnv({ ...smtp, SMTP_USER: "u", SMTP_PASSWORD: "p" }));
+    if (ok.ok)
+      expect(ok.config.smtp).toEqual({ host: "smtp-relay.brevo.com", port: 587, user: "u", password: "p" });
+    expect(reasons(prodEnv(smtp))).toEqual([
+      "SMTP_USER must be set when MAILER=smtp and EMAIL_ENABLED=1",
+      "SMTP_PASSWORD must be set when MAILER=smtp and EMAIL_ENABLED=1",
+    ]);
+    expect(reasons(prodEnv({ ...smtp, SMTP_USER: "u", SMTP_PASSWORD: "p", SMTP_PORT: "25" }))).toEqual([
+      "SMTP_PORT 25 is blocked on Workers: use 587",
+    ]);
+    const custom = parseConfig(
+      prodEnv({
+        ...smtp,
+        SMTP_USER: "u",
+        SMTP_PASSWORD: "p",
+        SMTP_HOST: "smtp.example.net",
+        SMTP_PORT: "2525",
+      }),
+    );
+    if (custom.ok)
+      expect([custom.config.smtp.host, custom.config.smtp.port]).toEqual(["smtp.example.net", 2525]);
+    expect(custom.ok).toBe(true);
+
+    const brevo = { MAILER: "brevo", EMAIL_ENABLED: "1", EMAIL: undefined };
+    expect(reasons(prodEnv({ ...brevo, BREVO_API_KEY: "k" }))).toEqual([]);
+    expect(reasons(prodEnv(brevo))).toEqual([
+      "BREVO_API_KEY must be set when MAILER=brevo and EMAIL_ENABLED=1",
+    ]);
+    // Email off: no transport secret is needed.
+    expect(reasons(prodEnv({ ...smtp, EMAIL_ENABLED: "0" }))).toEqual([]);
+    expect(reasons(prodEnv({ ...brevo, EMAIL_ENABLED: "0" }))).toEqual([]);
+    // The gate applies outside production too (a dev run that would send).
+    expect(reasons({ ...env, ENVIRONMENT: "development", ...smtp } as unknown as Env)).toContain(
+      "SMTP_USER must be set when MAILER=smtp and EMAIL_ENABLED=1",
+    );
   });
 
   it("EMAIL_ENABLED: off by default, and off needs no mailer, binding or verified addresses", () => {

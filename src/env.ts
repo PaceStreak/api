@@ -36,7 +36,11 @@ export const SETTINGS = {
 export interface Config {
   environment: Environment;
   isProduction: boolean;
-  mailer: "cloudflare" | "console";
+  mailer: "cloudflare" | "brevo" | "smtp" | "console";
+  /** MAILER=smtp: host and port (vars), user and password (secrets); null user/password when unset. */
+  smtp: { host: string; port: number; user: string | null; password: string | null };
+  /** Secret for MAILER=brevo; null when unset. */
+  brevoApiKey: string | null;
   /**
    * Outgoing email as a capability (`EMAIL_ENABLED`). Off: nothing is sent or queued for email, no address needs
    * confirming, and the email-code routes answer 404 `{"detail": "Email is turned off"}`. Account recovery is then
@@ -120,7 +124,12 @@ const jwtKeys = z.string().transform((s, ctx) => {
 
 const RawEnv = z.object({
   ENVIRONMENT: z.enum(ENVIRONMENTS),
-  MAILER: z.enum(["cloudflare", "console"]),
+  MAILER: z.enum(["cloudflare", "brevo", "smtp", "console"]),
+  SMTP_HOST: z.string().trim().min(1).default("smtp-relay.brevo.com"),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_USER: optional,
+  SMTP_PASSWORD: optional,
+  BREVO_API_KEY: optional,
   EMAIL_ENABLED: z.enum(["0", "1"]).default("0"),
   COOKIE_DOMAIN: optional,
   CORS_ORIGINS: z.string(),
@@ -152,8 +161,9 @@ function productionReasons(c: Config, env: Env): string[] {
   if (!c.frontendUrl.startsWith("https://")) r.push("FRONTEND_URL must be https://");
   // Email off needs neither: nothing is ever handed to a transport.
   if (c.emailEnabled) {
-    if (c.mailer !== "cloudflare") r.push("MAILER must be cloudflare when EMAIL_ENABLED=1");
-    if ((env as { EMAIL?: unknown }).EMAIL === undefined) r.push("the EMAIL send_email binding is missing");
+    if (c.mailer === "console") r.push("MAILER must be smtp, brevo or cloudflare when EMAIL_ENABLED=1");
+    if (c.mailer === "cloudflare" && (env as { EMAIL?: unknown }).EMAIL === undefined)
+      r.push("the EMAIL send_email binding is missing");
   }
   return r;
 }
@@ -175,6 +185,8 @@ export function parseConfig(env: Env): ConfigResult {
     environment: e.ENVIRONMENT,
     isProduction: e.ENVIRONMENT === "production",
     mailer: e.MAILER,
+    brevoApiKey: e.BREVO_API_KEY,
+    smtp: { host: e.SMTP_HOST, port: e.SMTP_PORT, user: e.SMTP_USER, password: e.SMTP_PASSWORD },
     emailEnabled: e.EMAIL_ENABLED === "1",
     cookieDomain: e.COOKIE_DOMAIN,
     cookieSecure: e.ENVIRONMENT === "production" || e.ENVIRONMENT === "staging",
@@ -209,6 +221,16 @@ export function parseConfig(env: Env): ConfigResult {
   };
   if (config.ipLimitsOff && config.environment !== "development") {
     reasons.push("IP_LIMITS_OFF is accepted only in development");
+  }
+  // Any environment: a Brevo mailer that would send needs its key.
+  if (config.emailEnabled && config.mailer === "brevo" && config.brevoApiKey === null)
+    reasons.push("BREVO_API_KEY must be set when MAILER=brevo and EMAIL_ENABLED=1");
+  if (config.emailEnabled && config.mailer === "smtp") {
+    if (config.smtp.user === null) reasons.push("SMTP_USER must be set when MAILER=smtp and EMAIL_ENABLED=1");
+    if (config.smtp.password === null)
+      reasons.push("SMTP_PASSWORD must be set when MAILER=smtp and EMAIL_ENABLED=1");
+    // Workers cannot open outbound connections on port 25.
+    if (config.smtp.port === 25) reasons.push("SMTP_PORT 25 is blocked on Workers: use 587");
   }
   if (config.isProduction) reasons.push(...productionReasons(config, env));
   return reasons.length > 0 ? { ok: false, reasons } : { ok: true, config };

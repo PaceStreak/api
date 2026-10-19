@@ -20,7 +20,7 @@ running a modified version over a network must offer its source to its users.
 | Runtime | Cloudflare Workers (Paid plan), Smart Placement |
 | Storage | D1 `pacestreak` (location `apac`), R2 `pacestreak-photos` and `pacestreak-staging` |
 | Background work | Three cron triggers and the `pacestreak-jobs` queue (one message per invocation, DLQ `pacestreak-jobs-dlq`) |
-| Mail | Off (`EMAIL_ENABLED=0`, see Email switch); Cloudflare Email Service (`send_email` binding) when on; a `console` transport in dev and tests |
+| Mail | Brevo SMTP relay (`MAILER=smtp`, see Email switch); Brevo HTTP API or Cloudflare Email Service by config; a `console` transport in dev and tests |
 | Hostname | `api.pacestreak.com`, a Workers custom domain (after cutover) |
 | Consumer | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
 | Deploys | Workers Builds: push to `main` applies D1 migrations, then deploys; other branches deploy `--env staging` |
@@ -56,12 +56,26 @@ Run the app against it with `PUBLIC_API_BASE_URL=http://localhost:8787` in
 
 ## Email switch
 
-`EMAIL_ENABLED` in `wrangler.jsonc` `vars` is a capability, not a transport. It is **`"0"` in production and
-staging today**: the Workers Free plan has no Cloudflare Email Service sending.
+Two settings. `EMAIL_ENABLED` (`wrangler.jsonc` `vars`) is a capability: whether the product has email at all.
+`MAILER` is the transport that carries it. **Production: `EMAIL_ENABLED=1`, `MAILER=smtp` (Brevo's SMTP relay).**
+Staging keeps `EMAIL_ENABLED=0` so it never mails real people.
+
+| `MAILER` | How it sends | Needs |
+| --- | --- | --- |
+| `smtp` (production) | SMTP submission over Workers TCP sockets: `SMTP_HOST:SMTP_PORT` (default `smtp-relay.brevo.com:587`), STARTTLS, AUTH LOGIN, the same MIME as `cloudflare` | secrets `SMTP_USER` (the Brevo SMTP login) and `SMTP_PASSWORD` (the `xsmtpsib-...` SMTP key) |
+| `brevo` | Brevo's HTTP API, `POST https://api.brevo.com/v3/smtp/email` with `api-key` | secret `BREVO_API_KEY` (an `xkeysib-...` API key; an SMTP key is refused with 401) |
+| `cloudflare` | Cloudflare Email Service through the `send_email` binding `EMAIL` | Workers Paid, the domain onboarded, and `"send_email": [{ "name": "EMAIL" }]` added back to `wrangler.jsonc` |
+| `console` | Prints to the log (dev and tests); refused in production when email is on | nothing |
+
+The config gate refuses to serve when email is on and the chosen transport's secrets (or, for `cloudflare`, the
+binding) are missing. To switch: change `MAILER` in `wrangler.jsonc`, `wrangler secret put` its secrets, deploy.
+Port 25 is blocked on Workers; use 587.
+
+With `EMAIL_ENABLED=0`:
 
 | | `EMAIL_ENABLED=0` | `EMAIL_ENABLED=1` |
 | --- | --- | --- |
-| Sending | Nothing is ever handed to a transport (`createMailer` drops it) | `MAILER` (`cloudflare` in production) |
+| Sending | Nothing is ever handed to a transport (`createMailer` drops it) | `MAILER` (`smtp` in production) |
 | Signup | Usable at once; the response carries 10 `recovery_codes` | A 6-digit code is mailed |
 | Confirmed address | Never required (sign-in, follows, groups) | Required in production and staging |
 | `verify-email`, `resend-verification`, `forgot-password`, `reset-password`, `confirm-email-change` | 404 `{"detail": "Email is turned off"}` | As before |
@@ -71,9 +85,8 @@ staging today**: the Workers Free plan has no Cloudflare Email Service sending.
 | App | `email_enabled` in `GET /v1/config` (public) and `GET /v1/me` hides every email feature | Everything shows |
 
 Recovery codes (`POST /v1/auth/recovery-codes` with the password, and a TOTP code when 2FA is on) work for every
-account in both modes. To turn email on: onboard `pacestreak.com` for sending, set `"EMAIL_ENABLED": "1"`, deploy.
-Accounts made while it was off are unconfirmed, so their next sign-in goes through the app's confirm-your-email
-step once.
+account in both modes. Accounts made while email was off are unconfirmed, so with it on their next sign-in goes
+through the app's confirm-your-email step once.
 
 ## Testing email locally
 
@@ -88,7 +101,28 @@ curl -s localhost:8788/v1/auth/signup -H 'content-type: application/json' \
 pnpm email:last                      # headers and decoded text of the newest captured message
 ```
 
-The log shows `send_email binding called with the following message:` and the file's path, under
+To try a **real send through Brevo SMTP** from your machine (`wrangler dev` supports `connect()`), put your own
+credentials in `.dev.vars` (gitignored), then sign up with an address you can read:
+
+```bash
+# .dev.vars
+MAILER=smtp
+EMAIL_ENABLED=1
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USER=<your Brevo SMTP login>
+SMTP_PASSWORD=<your xsmtpsib-... SMTP key>
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+
+pnpm dev
+curl -s localhost:8787/v1/auth/signup -H 'content-type: application/json' \
+  -d '{"email":"you@yours.example","password":"a-long-local-password","turnstile_token":"x"}'
+```
+
+A failure logs `failed to send email` with `smtp <step> answered <code>` (for example `auth answered 535` for a
+wrong key); credentials and bodies are never logged.
+
+With `pnpm dev:email`, the log shows `send_email binding called with the following message:` and the file's path, under
 `.wrangler/tmp/email/miniflare-*/email/<message-id>.eml`. `PORT=8790 pnpm dev:email` picks another port.
 
 ## Commands

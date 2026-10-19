@@ -2,7 +2,9 @@
  * Outbound email (DESIGN.md §10, spec/core.md §6). Two transports, chosen by `MAILER`:
  *
  *   console     dev and tests: prints the plain-text body on one `[email:console]` line that tests read codes from.
- *   cloudflare  production: a MIME message through the `EMAIL` send_email binding (Cloudflare Email Service).
+ *   cloudflare  a MIME message through the `EMAIL` send_email binding (Cloudflare Email Service, Workers Paid).
+ *   smtp        SMTP submission (587, STARTTLS, AUTH LOGIN) over TCP sockets: Brevo's relay with an SMTP key.
+ *   brevo       Brevo's transactional HTTP API with `BREVO_API_KEY` (works on the Workers Free plan).
  *
  * `EMAIL_ENABLED=0` (the Workers Free plan has no Email Service sending) turns both off: `createMailer` then returns
  * a mailer that drops everything.
@@ -12,8 +14,10 @@
  */
 import type { Config } from "../../env.ts";
 import type { Logger } from "../logger.ts";
+import { brevoTransport } from "./brevo.ts";
 import { cloudflareTransport } from "./cloudflare.ts";
 import { consoleTransport } from "./console.ts";
+import { smtpTransport } from "./smtp.ts";
 
 export interface Attachment {
   filename: string;
@@ -77,12 +81,31 @@ export function wrapTransport(transport: Transport, log: Logger): Mailer {
 const OFF: Mailer = { send: async () => false };
 
 export function createMailer(
-  cfg: Pick<Config, "mailer" | "mailFrom" | "emailEnabled">,
+  cfg: Pick<Config, "mailer" | "mailFrom" | "emailEnabled" | "brevoApiKey" | "smtp">,
   env: Env,
   log: Logger,
 ): Mailer {
   if (!cfg.emailEnabled) return OFF;
-  const transport =
-    cfg.mailer === "cloudflare" ? cloudflareTransport(env.EMAIL, cfg.mailFrom) : consoleTransport();
+  // The config gate refuses a missing binding or key when email is on; `missing` only guards misuse in code.
+  const missing =
+    (what: string): Transport =>
+    async () => {
+      throw new Error(`${what} is not configured`);
+    };
+  let transport: Transport;
+  if (cfg.mailer === "cloudflare") {
+    const binding = (env as { EMAIL?: SendEmail }).EMAIL;
+    transport =
+      binding === undefined ? missing("the EMAIL binding") : cloudflareTransport(binding, cfg.mailFrom);
+  } else if (cfg.mailer === "brevo") {
+    const key = cfg.brevoApiKey;
+    transport = key === null ? missing("BREVO_API_KEY") : brevoTransport(key, cfg.mailFrom);
+  } else if (cfg.mailer === "smtp") {
+    const { host, port, user, password } = cfg.smtp;
+    transport =
+      user === null || password === null
+        ? missing("SMTP_USER/SMTP_PASSWORD")
+        : smtpTransport({ host, port, user, password, from: cfg.mailFrom });
+  } else transport = consoleTransport();
   return wrapTransport(transport, log);
 }

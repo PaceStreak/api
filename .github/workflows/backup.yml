@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          # package.json names pnpm, which setup-node would try to cache; this job needs only npx.
+          package-manager-cache: false
       - name: Export D1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

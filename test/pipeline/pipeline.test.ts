@@ -151,9 +151,11 @@ describe("CORS (Starlette semantics)", () => {
     const ok = await call(app, "/v1/ok", { headers: { Origin: ORIGIN } });
     expect(ok.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(ok.headers.get("Vary")).toBe("Origin");
+    expect(ok.headers.get("Access-Control-Expose-Headers")).toBe("Content-Disposition");
     const evil = await call(app, "/v1/ok", { headers: { Origin: "https://evil.example" } });
     expect(evil.status).toBe(200);
     expect(evil.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(evil.headers.get("Access-Control-Expose-Headers")).toBeNull();
     const none = await call(app, "/v1/ok");
     expect(none.headers.get("Access-Control-Allow-Credentials")).toBeNull();
   });

@@ -80,6 +80,8 @@ export function cors(origins: (env: { CORS_ORIGINS: string }) => ReadonlySet<str
     c.res.headers.set("Access-Control-Allow-Credentials", "true");
     if (allowed) {
       c.res.headers.set("Access-Control-Allow-Origin", origin);
+      // Lets the app name a download (data exports) from the server's filename.
+      c.res.headers.set("Access-Control-Expose-Headers", "Content-Disposition");
       addVary(c.res.headers, "Origin");
     }
   };

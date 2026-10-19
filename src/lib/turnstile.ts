@@ -1,11 +1,13 @@
 /**
  * Cloudflare Turnstile siteverify (spec/core.md §2.4). Off when no secret is configured; otherwise fails closed:
- * an unreachable or garbled siteverify is a 503, never a pass.
+ * an unreachable or garbled siteverify is a 503, never a pass. A failed attempt (network error, timeout, 5xx or
+ * non-JSON) is retried once, so one dropped connection doesn't fail a sign-in; a definite answer is never retried.
  */
 import { HttpError } from "./errors.ts";
 
 export const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-export const TURNSTILE_TIMEOUT_MS = 5000;
+export const TURNSTILE_TIMEOUT_MS = 4000;
+export const TURNSTILE_ATTEMPTS = 2;
 export const NEED_TOKEN = "Complete the verification challenge";
 export const VERIFY_FAILED = "Verification failed, please try again";
 export const VERIFY_UNAVAILABLE = "Verification is temporarily unavailable";
@@ -22,16 +24,21 @@ export interface TurnstileOptions {
 export async function verifyTurnstile({ secret, token, remoteIp }: TurnstileOptions): Promise<void> {
   if (secret === null) return;
   if (!token) throw new HttpError(400, NEED_TOKEN);
+  const body = new URLSearchParams({ secret, response: token, remoteip: remoteIp ?? "" });
   let payload: unknown;
-  try {
-    const res = await fetch(SITEVERIFY_URL, {
-      method: "POST",
-      body: new URLSearchParams({ secret, response: token, remoteip: remoteIp ?? "" }),
-      signal: AbortSignal.timeout(TURNSTILE_TIMEOUT_MS),
-    });
-    payload = await res.json();
-  } catch {
-    throw new HttpError(503, VERIFY_UNAVAILABLE);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(SITEVERIFY_URL, {
+        method: "POST",
+        body,
+        signal: AbortSignal.timeout(TURNSTILE_TIMEOUT_MS),
+      });
+      if (res.status >= 500) throw new Error(`siteverify ${res.status}`);
+      payload = await res.json();
+      break;
+    } catch {
+      if (attempt >= TURNSTILE_ATTEMPTS) throw new HttpError(503, VERIFY_UNAVAILABLE);
+    }
   }
   const ok = typeof payload === "object" && payload !== null && (payload as { success?: unknown }).success;
   if (!ok) throw new HttpError(400, VERIFY_FAILED);

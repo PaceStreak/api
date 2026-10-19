@@ -44,12 +44,9 @@ Contents:
   (`fef2509f0377fba1f3201a655090ec0a`, the R2 host in `wrangler.jsonc`).
   The existing `zone:read` token cannot do any of this.
 - A password manager entry ready for the new secrets (step 8).
-- **Known fix needed in `wrangler.jsonc` before staging works:**
-  `env.staging.vars.PUBLIC_API_URL` is `https://pacestreak-api-staging.workers.dev`,
-  but a workers.dev URL includes the account subdomain:
-  `https://pacestreak-api-staging.<subdomain>.workers.dev`. Read the subdomain
-  in the dashboard (Workers & Pages → Overview, right-hand side) and fix the
-  var in the same commit as the database ids (step 2).
+- `env.staging.vars.PUBLIC_API_URL` is already
+  `https://pacestreak-api-staging.alzywelzy.workers.dev` (the account's workers.dev
+  subdomain is `alzywelzy`).
 
 ## 1. Workers Paid plan
 
@@ -73,7 +70,7 @@ The location hint is given once, at creation; it is not in `wrangler.jsonc`.
 Copy each printed `database_id` into `wrangler.jsonc`, replacing
 `00000000-0000-0000-0000-000000000000` (production) and
 `...0001` (`env.staging`). Database ids are not secrets. Commit on `next`:
-`chore(wrangler): real D1 ids and the staging workers.dev URL`.
+`chore(wrangler): real D1 ids`.
 
 - **Check:** `pnpm wrangler d1 info pacestreak` and `... pacestreak-staging`
   print the ids you pasted; the dashboard (Storage & Databases → D1) shows the
@@ -269,7 +266,7 @@ token has it.
 pnpm wrangler deploy --env staging
 ```
 
-- **Check:** `curl https://pacestreak-api-staging.<subdomain>.workers.dev/health`
+- **Check:** `curl https://pacestreak-api-staging.alzywelzy.workers.dev/health`
   → `{"status":"healthy"}`; `/health/ready` → 200 `ready`; within 15 minutes
   `/health/worker` → 200. Settings → Triggers shows three crons; Queues shows
   the staging consumer.

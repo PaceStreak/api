@@ -89,6 +89,40 @@ describe("test_turnstile", () => {
     );
   });
 
+  it("one dropped siteverify call is retried, a second fails closed", async () => {
+    let calls = 0;
+    mockFetch(SITEVERIFY_URL, () => {
+      calls++;
+      if (calls === 1) throw new TypeError("connection reset");
+      return Response.json({ success: true });
+    });
+    expect((await outcome(verifyTurnstile({ secret: SECRET, token: "tok", remoteIp: null }))).status).toBe(
+      200,
+    );
+    expect(calls).toBe(2);
+    calls = 0;
+    mockFetch(SITEVERIFY_URL, () => {
+      calls++;
+      throw new TypeError("down");
+    });
+    expect((await outcome(verifyTurnstile({ secret: SECRET, token: "tok", remoteIp: null }))).status).toBe(
+      503,
+    );
+    expect(calls).toBe(2);
+  });
+
+  it("a definite rejection is not retried", async () => {
+    let calls = 0;
+    mockFetch(SITEVERIFY_URL, () => {
+      calls++;
+      return Response.json({ success: false });
+    });
+    expect((await outcome(verifyTurnstile({ secret: SECRET, token: "tok", remoteIp: null }))).status).toBe(
+      400,
+    );
+    expect(calls).toBe(1);
+  });
+
   it("resend_verification_needs_a_token_when_anonymous", async () => {
     mockJson(SITEVERIFY_URL, { success: true });
     expect((await outcome(resendGuard(null, "someone@example.com"))).status).toBe(400);

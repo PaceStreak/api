@@ -46,6 +46,19 @@ describe("config gate", () => {
     expect(reasons(prodEnv({ EMAIL: undefined }))).toContain("the EMAIL send_email binding is missing");
   });
 
+  it("accepts IP_LIMITS_OFF only in development", () => {
+    expect(reasons(prodEnv({ IP_LIMITS_OFF: "1" }))).toContain(
+      "IP_LIMITS_OFF is accepted only in development",
+    );
+    expect(reasons({ ...env, ENVIRONMENT: "staging", IP_LIMITS_OFF: "1" } as Env)).toContain(
+      "IP_LIMITS_OFF is accepted only in development",
+    );
+    const dev = parseConfig({ ...env, ENVIRONMENT: "development", IP_LIMITS_OFF: "1" } as Env);
+    expect(dev.ok && dev.config.ipLimitsOff).toBe(true);
+    const off = parseConfig(prodEnv());
+    expect(off.ok && off.config.ipLimitsOff).toBe(false);
+  });
+
   it("refuses a wildcard origin in any environment", () => {
     expect(reasons({ ...env, CORS_ORIGINS: "*" } as Env)[0]).toMatch(/must not contain "\*"/);
   });

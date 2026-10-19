@@ -55,6 +55,8 @@ export interface Config {
   /** WebAuthn relying party: hostname of FRONTEND_URL, origin without a trailing slash. */
   /** Sign-in needs a verified address. Off in development and tests, like the Python default. */
   requireVerifiedEmail: boolean;
+  /** Per-IP minute limits skipped, for local end-to-end runs. Accepted only in development. */
+  ipLimitsOff: boolean;
   rpId: string;
   passkeyOrigin: string;
 }
@@ -129,6 +131,7 @@ const RawEnv = z.object({
   R2_ACCOUNT_HOST: z.string().min(1),
   MAIL_FROM: z.string().min(3),
   PUSH_HOST_ALLOWLIST: z.string().default(""),
+  IP_LIMITS_OFF: z.enum(["0", "1"]).default("0"),
 });
 
 export type ConfigResult = { ok: true; config: Config } | { ok: false; reasons: string[] };
@@ -188,9 +191,13 @@ export function parseConfig(env: Env): ConfigResult {
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0),
     requireVerifiedEmail: e.ENVIRONMENT === "production" || e.ENVIRONMENT === "staging",
+    ipLimitsOff: e.IP_LIMITS_OFF === "1",
     rpId: frontend.hostname,
     passkeyOrigin: frontend.origin,
   };
+  if (config.ipLimitsOff && config.environment !== "development") {
+    reasons.push("IP_LIMITS_OFF is accepted only in development");
+  }
   if (config.isProduction) reasons.push(...productionReasons(config, env));
   return reasons.length > 0 ? { ok: false, reasons } : { ok: true, config };
 }

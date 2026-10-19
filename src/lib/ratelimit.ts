@@ -11,6 +11,7 @@ import { type SQL, sql } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
 import type { Db } from "../db/client.ts";
 import { rateCounters } from "../db/schema/index.ts";
+import { loadConfig } from "../env.ts";
 import { ipRateLimited, slowDown } from "./errors.ts";
 import { clientIp } from "./http.ts";
 
@@ -27,9 +28,13 @@ export type IpLimitBinding = keyof typeof IP_LIMITS;
 /**
  * Per-IP per-minute limit for one route. `route` names the endpoint (slowapi keys per route function), so two
  * routes sharing a binding still get separate counters. A request with no client IP shares the `unknown` key.
+ * Skipped when development sets `IP_LIMITS_OFF=1`, so the app's end-to-end suite can make an account per test;
+ * the config gate refuses that flag in every other environment.
  */
 export function ipRateLimit(binding: IpLimitBinding, route: string): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
+    const cfg = loadConfig(c.env);
+    if (cfg.ok && cfg.config.ipLimitsOff) return next();
     const ip = clientIp(c.req) ?? "unknown";
     const { success } = await c.env[binding].limit({ key: `${route}:${ip}` });
     if (!success) throw ipRateLimited(IP_LIMITS[binding]);

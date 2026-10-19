@@ -43,6 +43,8 @@ export default defineConfig(async () => {
             TURNSTILE_SECRET_KEY: "",
             R2_ACCESS_KEY_ID: "test-access-key",
             R2_SECRET_ACCESS_KEY: "test-secret-key",
+            // Pinned: the pool also reads a developer's .dev.vars, which may set it to 1 for e2e runs.
+            IP_LIMITS_OFF: "0",
           },
         },
       }),

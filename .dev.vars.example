@@ -2,6 +2,8 @@
 # Generate local values with: pnpm tsx scripts/dev-secrets.ts
 ENVIRONMENT=development
 MAILER=console
+# 1 skips the per-IP minute limits (development only) for the app's e2e suite
+IP_LIMITS_OFF=0
 COOKIE_DOMAIN=
 CORS_ORIGINS=http://localhost:5173
 FRONTEND_URL=http://localhost:5173

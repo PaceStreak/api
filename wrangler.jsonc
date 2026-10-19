@@ -10,12 +10,13 @@
   "name": "pacestreak-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "workers_dev": false,
+  // workers.dev until the cutover moves api.pacestreak.com off FastAPI Cloud.
+  "workers_dev": true,
   "preview_urls": false,
-  "routes": [{ "pattern": "api.pacestreak.com", "custom_domain": true }],
+  "routes": [],
   "placement": { "mode": "smart" },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
-  "limits": { "cpu_ms": 30000 },
+  // No "limits": the Workers Free plan refuses cpu_ms (OWNER-DECISIONS, 2026-10-19: try Free first).
   "upload_source_maps": true,
   // Minified (source maps keep stack traces readable): the bundle has a 400 KiB gzip budget.
   "minify": true,
@@ -23,7 +24,7 @@
     {
       "binding": "DB",
       "database_name": "pacestreak",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "66803bc7-f7b4-40c7-ba13-e93c63753183",
       "migrations_dir": "migrations"
     }
   ],

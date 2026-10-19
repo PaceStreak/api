@@ -35,7 +35,17 @@ export const healthRoutes = new Hono<AppEnv>()
     return c.json(r.body, r.status);
   });
 
+/** Seconds `/v1/config` may be cached: it changes only with a deploy. */
+export const CONFIG_CACHE_SECONDS = 300;
+
 export const opsRoutes = new Hono<AuthedEnv>()
+  // Public server capabilities for screens shown before sign-in (login, signup, recovery). Signed in, the app
+  // reads the same flags from GET /v1/me, so this is fetched only by signed-out visitors.
+  .get("/config", (c) =>
+    c.json({ email_enabled: c.var.ctx.cfg.emailEnabled, push_available: c.var.ctx.cfg.vapid !== null }, 200, {
+      "Cache-Control": `public, max-age=${CONFIG_CACHE_SECONDS}`,
+    }),
+  )
   .post("/client-errors", json(ClientErrorIn), ipRateLimit("RL_30", "client-errors"), async (c) =>
     c.json(await service.reportClientError(c.var.ctx, c.req.valid("json"), c.req.header("User-Agent")), 202),
   )

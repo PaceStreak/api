@@ -61,11 +61,19 @@ export const NUDGE_CATEGORIES: ReadonlySet<string> = new Set(["streak_risk", "re
 
 type StoredChannels = Record<string, Partial<Record<string, boolean>>>;
 
-/** Python `channels_for`: stored choice, else the category default; locked categories always email. */
-export function channelsFor(prefs: StoredChannels | null | undefined, category: string) {
+/**
+ * Python `channels_for`: stored choice, else the category default; locked categories always email. With email off
+ * (`emailEnabled` false) the email channel is off everywhere; stored choices are kept for when it comes back.
+ */
+export function channelsFor(
+  prefs: StoredChannels | null | undefined,
+  category: string,
+  emailEnabled: boolean,
+) {
   const base: CategoryMeta = categoryMeta(category) ?? { label: category, push: false, email: false };
   const chosen = prefs?.[category] ?? {};
   const push = Boolean(chosen.push ?? base.push);
+  if (!emailEnabled) return { push, email: false };
   if (base.locked) return { push, email: true };
   return { push, email: Boolean(chosen.email ?? base.email) };
 }
@@ -247,9 +255,10 @@ function preferencesOut(ctx: Ctx, row: PrefRow | undefined) {
       id,
       label: meta.label,
       locked: "locked" in meta && meta.locked,
-      ...channelsFor(row?.channels, id),
+      ...channelsFor(row?.channels, id, ctx.cfg.emailEnabled),
     })),
     push_available: ctx.cfg.vapid !== null,
+    email_available: ctx.cfg.emailEnabled,
   };
 }
 
@@ -270,7 +279,8 @@ export async function putPreferences(ctx: Ctx, authed: AuthedBatch, body: Prefer
       const meta = categoryMeta(cat);
       if (meta === undefined || meta.locked) continue;
       const target = merged[cat] ?? {};
-      for (const k of ["push", "email"] as const) {
+      // Email off: email choices are ignored, so what was stored before stays for when it comes back.
+      for (const k of ctx.cfg.emailEnabled ? (["push", "email"] as const) : (["push"] as const)) {
         const v = chans[k];
         if (v !== undefined) target[k] = v;
       }
@@ -369,6 +379,7 @@ export async function pushTest(ctx: Ctx, authed: AuthedBatch) {
 
 // ---- email unsubscribe ------------------------------------------------------------------------------------
 
+/** Kept with email off: it only turns email off, and links in mail sent while it was on must keep working. */
 export async function emailUnsubscribe(ctx: Ctx, body: EmailUnsubscribeInput) {
   const meta = categoryMeta(body.c);
   if (meta === undefined || meta.locked) throw badRequest("Invalid link");
@@ -459,7 +470,7 @@ async function deliverPart(ctx: Ctx, ids: string[]): Promise<void> {
     try {
       const groupId = note.data?.group_id;
       if (typeof groupId === "string" && mutedKeys.has(`${note.userId}:${groupId}`)) continue;
-      const channels = channelsFor(note.channels, note.category);
+      const channels = channelsFor(note.channels, note.category, ctx.cfg.emailEnabled);
       const profile: QuietProfile | null = note.timezone === null ? null : note;
       const quietDay = isQuietDay(profile, note.category, now);
       if (

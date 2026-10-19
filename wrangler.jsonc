@@ -58,6 +58,8 @@
   "vars": {
     "ENVIRONMENT": "production",
     "MAILER": "cloudflare",
+    // Outgoing email off until the Workers Paid plan (Email Service sending); "1" turns every email feature on.
+    "EMAIL_ENABLED": "0",
     "COOKIE_DOMAIN": "pacestreak.com",
     "CORS_ORIGINS": "https://app.pacestreak.com",
     "FRONTEND_URL": "https://app.pacestreak.com",
@@ -114,6 +116,8 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "MAILER": "cloudflare",
+        // Outgoing email off until the Workers Paid plan (Email Service sending); "1" turns every email feature on.
+        "EMAIL_ENABLED": "0",
         "COOKIE_DOMAIN": "",
         "CORS_ORIGINS": "http://localhost:5173,https://staging.pacestreak-app.pages.dev",
         "FRONTEND_URL": "https://staging.pacestreak-app.pages.dev",

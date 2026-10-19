@@ -53,6 +53,8 @@ export interface Me {
   unread_notifications: number;
   follow_requests: number;
   push_public_key: string | null;
+  /** Outgoing email on this server; absent (an old cached payload) reads as off. See lib/capabilities.ts. */
+  email_enabled?: boolean;
 }
 
 export interface Discipline {

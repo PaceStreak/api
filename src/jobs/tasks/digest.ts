@@ -95,7 +95,7 @@ export const monthlyBackup: SlicedJob = {
     );
     const stmts: Stmt[] = [];
     for (const r of rows) {
-      const wanted = channelsFor(r.channels, "backup");
+      const wanted = channelsFor(r.channels, "backup", ctx.cfg.emailEnabled);
       if (!(wanted.email || wanted.push)) continue;
       const local = localParts(now, r.timezone);
       if (local.hour !== MORNING_HOUR) continue;

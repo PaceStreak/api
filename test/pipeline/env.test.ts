@@ -42,8 +42,23 @@ describe("config gate", () => {
     expect(reasons(prodEnv({ PUBLIC_API_URL: "http://api.pacestreak.com" }))).toContain(
       "PUBLIC_API_URL must be https://",
     );
-    expect(reasons(prodEnv({ MAILER: "console" }))).toContain("MAILER must be cloudflare");
+    expect(reasons(prodEnv({ MAILER: "console" }))).toContain(
+      "MAILER must be cloudflare when EMAIL_ENABLED=1",
+    );
     expect(reasons(prodEnv({ EMAIL: undefined }))).toContain("the EMAIL send_email binding is missing");
+  });
+
+  it("EMAIL_ENABLED: off by default, and off needs no mailer, binding or verified addresses", () => {
+    const { EMAIL_ENABLED: _drop, ...rest } = prodEnv() as unknown as Record<string, unknown>;
+    const unset = parseConfig(rest as unknown as Env);
+    expect(unset.ok && unset.config.emailEnabled).toBe(false);
+    const off = parseConfig(prodEnv({ EMAIL_ENABLED: "0", MAILER: "console", EMAIL: undefined }));
+    expect(off.ok).toBe(true);
+    if (off.ok) expect([off.config.emailEnabled, off.config.requireVerifiedEmail]).toEqual([false, false]);
+    const on = parseConfig(prodEnv({ EMAIL_ENABLED: "1" }));
+    expect(on.ok).toBe(true);
+    if (on.ok) expect([on.config.emailEnabled, on.config.requireVerifiedEmail]).toEqual([true, true]);
+    expect(reasons(prodEnv({ EMAIL_ENABLED: "yes" })).join()).toContain("EMAIL_ENABLED");
   });
 
   it("accepts IP_LIMITS_OFF only in development", () => {

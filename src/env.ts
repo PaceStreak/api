@@ -37,6 +37,12 @@ export interface Config {
   environment: Environment;
   isProduction: boolean;
   mailer: "cloudflare" | "console";
+  /**
+   * Outgoing email as a capability (`EMAIL_ENABLED`). Off: nothing is sent or queued for email, no address needs
+   * confirming, and the email-code routes answer 404 `{"detail": "Email is turned off"}`. Account recovery is then
+   * by recovery code, issued at signup (README "Email switch").
+   */
+  emailEnabled: boolean;
   /** Null when unset: cookies are then host-only (staging, dev, tests). */
   cookieDomain: string | null;
   /** `__Secure-` cookie names and the `Secure` attribute; off only for local http development and tests. */
@@ -53,7 +59,7 @@ export interface Config {
   mailFrom: string;
   pushHostAllowlist: readonly string[];
   /** WebAuthn relying party: hostname of FRONTEND_URL, origin without a trailing slash. */
-  /** Sign-in needs a verified address. Off in development and tests, like the Python default. */
+  /** Sign-in needs a verified address: production and staging with email on. Off in development and tests. */
   requireVerifiedEmail: boolean;
   /** Per-IP minute limits skipped, for local end-to-end runs. Accepted only in development. */
   ipLimitsOff: boolean;
@@ -115,6 +121,7 @@ const jwtKeys = z.string().transform((s, ctx) => {
 const RawEnv = z.object({
   ENVIRONMENT: z.enum(ENVIRONMENTS),
   MAILER: z.enum(["cloudflare", "console"]),
+  EMAIL_ENABLED: z.enum(["0", "1"]).default("0"),
   COOKIE_DOMAIN: optional,
   CORS_ORIGINS: z.string(),
   FRONTEND_URL: z.url(),
@@ -143,8 +150,11 @@ function productionReasons(c: Config, env: Env): string[] {
   if (c.turnstileSecret === null) r.push("TURNSTILE_SECRET_KEY must be set");
   if (!c.publicApiUrl.startsWith("https://")) r.push("PUBLIC_API_URL must be https://");
   if (!c.frontendUrl.startsWith("https://")) r.push("FRONTEND_URL must be https://");
-  if (c.mailer !== "cloudflare") r.push("MAILER must be cloudflare");
-  if ((env as { EMAIL?: unknown }).EMAIL === undefined) r.push("the EMAIL send_email binding is missing");
+  // Email off needs neither: nothing is ever handed to a transport.
+  if (c.emailEnabled) {
+    if (c.mailer !== "cloudflare") r.push("MAILER must be cloudflare when EMAIL_ENABLED=1");
+    if ((env as { EMAIL?: unknown }).EMAIL === undefined) r.push("the EMAIL send_email binding is missing");
+  }
   return r;
 }
 
@@ -165,6 +175,7 @@ export function parseConfig(env: Env): ConfigResult {
     environment: e.ENVIRONMENT,
     isProduction: e.ENVIRONMENT === "production",
     mailer: e.MAILER,
+    emailEnabled: e.EMAIL_ENABLED === "1",
     cookieDomain: e.COOKIE_DOMAIN,
     cookieSecure: e.ENVIRONMENT === "production" || e.ENVIRONMENT === "staging",
     corsOrigins: origins,
@@ -190,7 +201,8 @@ export function parseConfig(env: Env): ConfigResult {
     pushHostAllowlist: e.PUSH_HOST_ALLOWLIST.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0),
-    requireVerifiedEmail: e.ENVIRONMENT === "production" || e.ENVIRONMENT === "staging",
+    requireVerifiedEmail:
+      e.EMAIL_ENABLED === "1" && (e.ENVIRONMENT === "production" || e.ENVIRONMENT === "staging"),
     ipLimitsOff: e.IP_LIMITS_OFF === "1",
     rpId: frontend.hostname,
     passkeyOrigin: frontend.origin,

@@ -38,6 +38,12 @@ export const unauthorized = (detail: string) => new HttpError(401, detail);
 export const forbidden = (detail: string) => new HttpError(403, detail);
 export const notFound = (detail = "Not found") => new HttpError(404, detail);
 export const conflict = (detail: string) => new HttpError(409, detail);
+/**
+ * An email-only route while `EMAIL_ENABLED=0`. 404, like push routes without VAPID keys ("Push is not configured on
+ * this server"): the feature is absent on this server, and nothing the caller sends would change that.
+ */
+export const EMAIL_OFF = "Email is turned off";
+export const emailOff = () => new HttpError(404, EMAIL_OFF);
 /** Per-user bucket exceeded (spec/core.md §2.3 B). */
 export const slowDown = () => new HttpError(429, SLOW_DOWN);
 /** Per-IP minute limit exceeded: slowapi's body shape, `{"error": "Rate limit exceeded: 10 per 1 minute"}`. */

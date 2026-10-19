@@ -10,6 +10,8 @@
   },
   "scripts": {
     "dev": "wrangler dev",
+    "dev:email": "bash scripts/email-local.sh",
+    "email:last": "bash scripts/email-last.sh",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "lint": "biome ci .",
     "format": "biome check --write .",

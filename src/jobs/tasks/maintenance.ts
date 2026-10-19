@@ -129,6 +129,8 @@ const codePoints = (s: string, n: number) => Array.from(s).slice(0, n).join("");
  * it recurs. Anonymous like the reports themselves: message, path, count. Returns how many groups it reported.
  */
 export async function errorAlerts(ctx: Ctx): Promise<number> {
+  // Email off: the groups stay unalerted (Admin > Ops lists them); nothing is sent or marked.
+  if (!ctx.cfg.emailEnabled) return 0;
   const now = ctx.clock.now();
   const [fresh, admins] = await runBatch(ctx.db, [
     unalertedErrors(ctx.db, now - DAY_MS),

@@ -152,6 +152,8 @@ export async function me(ctx: Ctx, authed: AuthedBatch) {
     unread_notifications: unread[0]?.n ?? 0,
     follow_requests: requests[0]?.n ?? 0,
     push_public_key: ctx.cfg.vapid?.publicKey ?? null,
+    /** EMAIL_ENABLED: false hides every email feature in the app (confirmation, codes, email notifications). */
+    email_enabled: ctx.cfg.emailEnabled,
   };
 }
 

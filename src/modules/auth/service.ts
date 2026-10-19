@@ -298,36 +298,47 @@ export async function signup(
   const now = ctx.clock.now();
   const email = lower(body.email);
   const userId = uuid7(now);
-  const code = sixDigitCode();
-  const [hashed, codeHmac] = await Promise.all([
-    hashPassword(body.password, ctx.cfg.pepper),
-    emailCodeHmac(ctx, "email_verify", userId, code),
-  ]);
-  try {
-    await commit(ctx, [
-      ctx.db
-        .insert(repo.tables.users)
-        .values({ id: userId, email, hashedPassword: hashed, createdAt: now, updatedAt: now }),
-      event(ctx, userId, "signup", meta),
+  const hashed = await hashPassword(body.password, ctx.cfg.pepper);
+  // Email on: a verification code goes out. Email off: there is no inbox to recover through, so the account starts
+  // with recovery codes instead, shown once in this response (the only time they exist in clear).
+  let code: string | null = null;
+  let recovery: { codes: string[]; hmacs: string[] } | null = null;
+  const follow: Stmt[] = [];
+  if (ctx.cfg.emailEnabled) {
+    code = sixDigitCode();
+    follow.push(
       ...repo.issueCode(
         ctx.db,
         {
           id: uuid7(now),
           userId,
           purpose: "email_verify",
-          codeHmac,
+          codeHmac: await emailCodeHmac(ctx, "email_verify", userId, code),
           expiresAt: now + SETTINGS.emailVerifyTokenHours * HOUR,
         },
         now,
       ),
+    );
+  } else {
+    recovery = await newRecoveryCodes(ctx, userId);
+    follow.push(...repo.replaceRecoveryCodes(ctx.db, userId, recovery.hmacs, now));
+  }
+  try {
+    await commit(ctx, [
+      ctx.db
+        .insert(repo.tables.users)
+        .values({ id: userId, email, hashedPassword: hashed, createdAt: now, updatedAt: now }),
+      event(ctx, userId, "signup", meta),
+      ...follow,
     ]);
   } catch (err) {
     if (isConstraintError(err)) throw conflict("Email already registered");
     throw err;
   }
+  const out = userOut({ id: userId, email, isActive: true, isVerified: false });
   // After the commit: a failed send leaves the account, and the user can ask for another code.
-  await sendVerificationEmail(mailer(ctx), email, code);
-  return userOut({ id: userId, email, isActive: true, isVerified: false });
+  if (code !== null) await sendVerificationEmail(mailer(ctx), email, code);
+  return recovery === null ? out : { ...out, recovery_codes: recovery.codes };
 }
 
 export async function login(
@@ -689,7 +700,8 @@ export async function recover(
     repo.unusedRecoveryCodesByEmail(ctx.db, email),
   ] as const);
   const u = rows[0];
-  if (u === undefined || !u.isActive || !u.totpEnabled) {
+  // Any account holding codes may recover: 2FA accounts, and every account made while email was off.
+  if (u === undefined || !u.isActive) {
     await recordFailure(ctx, "recover", meta, { email: body.email });
     throw unauthorized(fail);
   }
@@ -737,6 +749,7 @@ export async function changeEmail(
   if (u === undefined || !(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper)))
     throw unauthorized(BAD_PASSWORD);
   if (next === u.email) throw new HttpError(422, "That's already your address");
+  if (!ctx.cfg.emailEnabled) return changeEmailDirectly(ctx, authed, u, next, taken.length > 0, meta);
   const detail = `If ${next} can be used, a confirmation code is on its way there.`;
   if (taken.length > 0) return { detail };
   const now = ctx.clock.now();
@@ -748,6 +761,52 @@ export async function changeEmail(
   );
   await sendEmailChangeEmail(mailer(ctx), next, code);
   return { detail };
+}
+
+/**
+ * Email off: no code can prove the new address, so the current password (already checked) is the whole proof, the
+ * same bar as changing the password. The address stays unconfirmed, sessions stay, and a security notice lands in
+ * the inbox and on every pushed device. Recovery codes are bound to the account, not the address, so the change
+ * cannot lock the owner out.
+ */
+async function changeEmailDirectly(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  u: { id: string; email: string },
+  next: string,
+  taken: boolean,
+  meta: Meta,
+) {
+  if (taken) throw conflict("That address is already in use by another account");
+  const now = ctx.clock.now();
+  const notificationId = uuid7(now);
+  try {
+    await authed.write(
+      ctx.db
+        .update(repo.tables.users)
+        .set({ email: next, pendingEmail: null, isVerified: false, verifiedAt: null, updatedAt: now })
+        .where(repo.byUserId(u.id)),
+      event(ctx, u.id, "email_changed", meta, { from: u.email, to: next }),
+      repo.insertNotification(
+        ctx.db,
+        {
+          id: notificationId,
+          userId: u.id,
+          kind: "email_changed",
+          category: "security",
+          title: "Your sign-in email changed",
+          body: `It is now ${next}. If this was not you, change your password and sign out everywhere.`,
+          url: "/settings/security",
+        },
+        now,
+      ),
+    );
+  } catch (err) {
+    if (isConstraintError(err)) throw conflict("That address is already in use by another account");
+    throw err;
+  }
+  ctx.defer(dispatchDeliver(ctx.env.JOBS, [notificationId]));
+  return { detail: "Your email address is updated.", email: next };
 }
 
 export async function confirmEmailChange(ctx: Ctx, body: { email: string; code: string }) {
@@ -880,7 +939,8 @@ export async function twoFactorDisable(
         updatedAt: now,
       })
       .where(repo.byUserId(u.id)),
-    repo.deleteRecoveryCodes(ctx.db, u.id),
+    // Email off, the codes are the only way back in after a lost password: they outlive 2FA.
+    ...(ctx.cfg.emailEnabled ? [repo.deleteRecoveryCodes(ctx.db, u.id)] : []),
     event(ctx, u.id, "totp_disabled", null),
   ]);
   return { detail: "Two-factor authentication disabled" };
@@ -898,6 +958,37 @@ export async function regenerateRecoveryCodes(ctx: Ctx, authed: AuthedBatch, bod
     ...repo.replaceRecoveryCodes(ctx.db, u.id, hmacs, now),
     event(ctx, u.id, "recovery_codes_regenerated", null),
   ]);
+  return { recovery_codes: codes };
+}
+
+/**
+ * New recovery codes for any account, 2FA or not (they replace the old set). The password is required; with 2FA on,
+ * a fresh TOTP code too, so a password alone never mints codes that skip the second factor.
+ */
+export async function newAccountRecoveryCodes(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { password: string; code?: string | null | undefined },
+  meta: Meta,
+) {
+  const u = await dbUser(ctx, authed);
+  if (!(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper))) {
+    await recordFailure(ctx, "recovery_codes", meta, { userId: u.id });
+    throw unauthorized(BAD_PASSWORD);
+  }
+  const now = ctx.clock.now();
+  const { codes, hmacs } = await newRecoveryCodes(ctx, u.id);
+  const writes: Stmt[] = [
+    ...repo.replaceRecoveryCodes(ctx.db, u.id, hmacs, now),
+    event(ctx, u.id, "recovery_codes_regenerated", meta),
+  ];
+  if (u.totpEnabled) {
+    const step = body.code ? await freshTotpStep(ctx, u, body.code) : null;
+    if (step === null) throw badRequest("Invalid code");
+    await writeWithStep(ctx, authed, u.id, step, [repo.setTotpStep(ctx.db, u.id, step, now), ...writes]);
+  } else {
+    await authed.write(...(writes as [Stmt, ...Stmt[]]));
+  }
   return { recovery_codes: codes };
 }
 

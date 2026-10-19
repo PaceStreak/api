@@ -48,7 +48,7 @@ describe("console transport", () => {
 
   it("createMailer picks console from config and logs through console.log", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const mailer = createMailer({ mailer: "console", mailFrom: FROM }, env, log);
+    const mailer = createMailer({ mailer: "console", mailFrom: FROM, emailEnabled: true }, env, log);
     await sendVerificationEmail(mailer, "c@example.com", "111222");
     expect(
       spy.mock.calls.some(([l]) =>
@@ -57,6 +57,24 @@ describe("console transport", () => {
         ),
       ),
     ).toBe(true);
+    spy.mockRestore();
+  });
+});
+
+describe("EMAIL_ENABLED=0", () => {
+  it("createMailer hands nothing to either transport", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const send = vi.fn(async () => {});
+    for (const kind of ["console", "cloudflare"] as const) {
+      const mailer = createMailer(
+        { mailer: kind, mailFrom: FROM, emailEnabled: false },
+        { ...env, EMAIL: { send } } as unknown as Env,
+        log,
+      );
+      await expect(sendVerificationEmail(mailer, "off@example.com", "333444")).resolves.toBe(false);
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(spy.mock.calls.some(([l]) => String(l).includes("off@example.com"))).toBe(false);
     spy.mockRestore();
   });
 });

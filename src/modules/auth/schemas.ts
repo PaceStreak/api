@@ -29,6 +29,10 @@ export const Recover = z.object({
   new_password: password,
   turnstile_token: turnstile,
 });
+export const NewRecoveryCodes = z.object({
+  password: anyPassword,
+  code: z.string().min(6).max(10).nullable().optional(),
+});
 export const ChangeEmail = z.object({ password: anyPassword, new_email: email });
 
 // ---- passkeys ----

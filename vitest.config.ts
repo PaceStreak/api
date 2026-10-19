@@ -31,6 +31,8 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             ENVIRONMENT: "test",
             MAILER: "console",
+            // Email on in tests by default; test/email-off.test.ts runs the same Worker with "0".
+            EMAIL_ENABLED: "1",
             COOKIE_DOMAIN: "",
             CORS_ORIGINS: "http://localhost:5173,https://app.pacestreak.com",
             FRONTEND_URL: "http://localhost:5173",

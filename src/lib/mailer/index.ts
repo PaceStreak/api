@@ -4,6 +4,9 @@
  *   console     dev and tests: prints the plain-text body on one `[email:console]` line that tests read codes from.
  *   cloudflare  production: a MIME message through the `EMAIL` send_email binding (Cloudflare Email Service).
  *
+ * `EMAIL_ENABLED=0` (the Workers Free plan has no Email Service sending) turns both off: `createMailer` then returns
+ * a mailer that drops everything.
+ *
  * Sending is best-effort and never throws into a handler: by the time a mail goes out the caller has committed
  * its writes, and a mail outage must not turn "we sent you a code" into a 500. The user can always ask again.
  */
@@ -67,7 +70,18 @@ export function wrapTransport(transport: Transport, log: Logger): Mailer {
   };
 }
 
-export function createMailer(cfg: Pick<Config, "mailer" | "mailFrom">, env: Env, log: Logger): Mailer {
+/**
+ * With `EMAIL_ENABLED=0` nothing reaches a transport: every send resolves false. Callers gate email work themselves
+ * (no codes issued, no email channel); this is the backstop that makes "never sends" hold whatever a caller does.
+ */
+const OFF: Mailer = { send: async () => false };
+
+export function createMailer(
+  cfg: Pick<Config, "mailer" | "mailFrom" | "emailEnabled">,
+  env: Env,
+  log: Logger,
+): Mailer {
+  if (!cfg.emailEnabled) return OFF;
   const transport =
     cfg.mailer === "cloudflare" ? cloudflareTransport(env.EMAIL, cfg.mailFrom) : consoleTransport();
   return wrapTransport(transport, log);

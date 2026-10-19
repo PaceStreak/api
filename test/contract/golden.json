@@ -571,6 +571,7 @@
     "version": "number"
   },
   "GET /me": {
+    "email_enabled": "boolean",
     "follow_requests": "number",
     "min_age": "number",
     "needs_onboarding": "boolean",

@@ -20,7 +20,7 @@ running a modified version over a network must offer its source to its users.
 | Runtime | Cloudflare Workers (Paid plan), Smart Placement |
 | Storage | D1 `pacestreak` (location `apac`), R2 `pacestreak-photos` and `pacestreak-staging` |
 | Background work | Three cron triggers and the `pacestreak-jobs` queue (one message per invocation, DLQ `pacestreak-jobs-dlq`) |
-| Mail | Cloudflare Email Service (`send_email` binding); a `console` transport in dev and tests |
+| Mail | Off (`EMAIL_ENABLED=0`, see Email switch); Cloudflare Email Service (`send_email` binding) when on; a `console` transport in dev and tests |
 | Hostname | `api.pacestreak.com`, a Workers custom domain (after cutover) |
 | Consumer | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
 | Deploys | Workers Builds: push to `main` applies D1 migrations, then deploys; other branches deploy `--env staging` |
@@ -48,17 +48,55 @@ printf '{"current":"k1","keys":{"k1":"%s"}}\n' "$(openssl rand -base64 32)"   # 
 
 `TURNSTILE_SECRET_KEY` can be Cloudflare's always-pass test secret
 `1x0000000000000000000000000000000AA`; VAPID and R2 keys are optional locally
-(push and photo backup then answer 503). With `MAILER=console`,
-verification, reset and email-change codes print to the `wrangler dev` log.
+(push and photo backup then answer 503). With `EMAIL_ENABLED=1` and
+`MAILER=console`, verification, reset and email-change codes print to the `wrangler dev` log.
 
 Run the app against it with `PUBLIC_API_BASE_URL=http://localhost:8787` in
 `../app`.
+
+## Email switch
+
+`EMAIL_ENABLED` in `wrangler.jsonc` `vars` is a capability, not a transport. It is **`"0"` in production and
+staging today**: the Workers Free plan has no Cloudflare Email Service sending.
+
+| | `EMAIL_ENABLED=0` | `EMAIL_ENABLED=1` |
+| --- | --- | --- |
+| Sending | Nothing is ever handed to a transport (`createMailer` drops it) | `MAILER` (`cloudflare` in production) |
+| Signup | Usable at once; the response carries 10 `recovery_codes` | A 6-digit code is mailed |
+| Confirmed address | Never required (sign-in, follows, groups) | Required in production and staging |
+| `verify-email`, `resend-verification`, `forgot-password`, `reset-password`, `confirm-email-change` | 404 `{"detail": "Email is turned off"}` | As before |
+| `change-email` | Changes at once on the current password; 409 if taken; security notice in the inbox and on push | Code to the new address |
+| Lost password | `/v1/auth/recover` with a recovery code | Reset code by email, or a recovery code |
+| Email notifications | Channel off everywhere (stored choices kept); push and inbox unchanged | Per-category choice |
+| App | `email_enabled` in `GET /v1/config` (public) and `GET /v1/me` hides every email feature | Everything shows |
+
+Recovery codes (`POST /v1/auth/recovery-codes` with the password, and a TOTP code when 2FA is on) work for every
+account in both modes. To turn email on: onboard `pacestreak.com` for sending, set `"EMAIL_ENABLED": "1"`, deploy.
+Accounts made while it was off are unconfirmed, so their next sign-in goes through the app's confirm-your-email
+step once.
+
+## Testing email locally
+
+`wrangler dev` simulates the `send_email` binding: nothing is delivered, and each message is saved as a raw MIME
+`.eml` file. To exercise the real `MAILER=cloudflare` path:
+
+```bash
+pnpm dev:email                       # wrangler dev on :8788, MAILER=cloudflare, EMAIL_ENABLED=1,
+                                     # throwaway secrets and its own D1 under .wrangler/email-local
+curl -s localhost:8788/v1/auth/signup -H 'content-type: application/json' \
+  -d '{"email":"you@example.com","password":"a-long-local-password","turnstile_token":"x"}'
+pnpm email:last                      # headers and decoded text of the newest captured message
+```
+
+The log shows `send_email binding called with the following message:` and the file's path, under
+`.wrangler/tmp/email/miniflare-*/email/<message-id>.eml`. `PORT=8790 pnpm dev:email` picks another port.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `pnpm dev` | `wrangler dev` with local D1, R2 and Queues under `.wrangler/` |
+| `pnpm dev:email` / `pnpm email:last` | `wrangler dev` on the real mailer path, then print the newest captured email |
 | `pnpm typecheck` | TypeScript 7 over `src`, `test` and `scripts` |
 | `pnpm lint` / `pnpm format` | `biome ci .` / fix formatting and safe lints |
 | `pnpm test` | Vitest inside `workerd` (`@cloudflare/vitest-plugin`) |

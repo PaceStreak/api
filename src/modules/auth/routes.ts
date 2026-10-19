@@ -1,10 +1,10 @@
 /**
- * /v1/auth (22 routes) and /v1/auth/passkeys (7 routes), spec/auth.md §3. Order inside each route: validation,
+ * /v1/auth (23 routes) and /v1/auth/passkeys (7 routes), spec/auth.md §3. Order inside each route: validation,
  * then the per-IP limit (slowapi counted after validation), then the handler (Turnstile first in the service).
  */
-import { type Context, Hono } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
 import type { AppEnv } from "../../ctx.ts";
-import { HttpError } from "../../lib/errors.ts";
+import { emailOff, HttpError } from "../../lib/errors.ts";
 import { clientIp } from "../../lib/http.ts";
 import { ipRateLimit } from "../../lib/ratelimit.ts";
 import { json, param } from "../../lib/validation.ts";
@@ -18,6 +18,15 @@ const meta = (c: Context): service.Meta => ({
   ip: clientIp(c.req),
   userAgent: c.req.header("User-Agent")?.slice(0, 400) || null,
 });
+
+/**
+ * Routes that exist only to deliver or redeem an emailed code: 404 `{"detail": "Email is turned off"}` with
+ * `EMAIL_ENABLED=0`, before validation, since no body could make them work.
+ */
+const emailOn: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!c.var.ctx.cfg.emailEnabled) throw emailOff();
+  await next();
+};
 
 /** Sets the cookies and returns the body (the refresh token never appears in it). */
 function tokens(c: Context, pair: service.TokenPair) {
@@ -54,11 +63,12 @@ export const authRoutes = new Hono<AppEnv>()
     return c.body(null, 204);
   })
   .get("/me", auth(), async (c) => c.json(await service.me(c.var.authed)))
-  .post("/verify-email", json(s.EmailCode), ipRateLimit("RL_MFA", "verify-email"), async (c) =>
+  .post("/verify-email", emailOn, json(s.EmailCode), ipRateLimit("RL_MFA", "verify-email"), async (c) =>
     c.json(await service.verifyEmail(c.var.ctx, c.req.valid("json"))),
   )
   .post(
     "/resend-verification",
+    emailOn,
     optionalAuth(),
     json(s.EmailIn),
     ipRateLimit("RL_PWMAIL", "resend-verification"),
@@ -76,14 +86,24 @@ export const authRoutes = new Hono<AppEnv>()
       return c.json(await service.resendVerification(c.var.ctx, c.req.valid("json"), meta(c), callerEmail));
     },
   )
-  .post("/forgot-password", json(s.EmailIn), ipRateLimit("RL_PWMAIL", "forgot-password"), async (c) =>
-    c.json(await service.forgotPassword(c.var.ctx, c.req.valid("json"), meta(c))),
+  .post(
+    "/forgot-password",
+    emailOn,
+    json(s.EmailIn),
+    ipRateLimit("RL_PWMAIL", "forgot-password"),
+    async (c) => c.json(await service.forgotPassword(c.var.ctx, c.req.valid("json"), meta(c))),
   )
-  .post("/reset-password", json(s.ResetPassword), ipRateLimit("RL_MFA", "reset-password"), async (c) => {
-    const out = await service.resetPassword(c.var.ctx, c.req.valid("json"));
-    clearAuthCookies(c, c.var.ctx);
-    return c.json(out);
-  })
+  .post(
+    "/reset-password",
+    emailOn,
+    json(s.ResetPassword),
+    ipRateLimit("RL_MFA", "reset-password"),
+    async (c) => {
+      const out = await service.resetPassword(c.var.ctx, c.req.valid("json"));
+      clearAuthCookies(c, c.var.ctx);
+      return c.json(out);
+    },
+  )
   .post("/change-password", auth(), json(s.ChangePassword), async (c) =>
     tokens(c, await service.changePassword(c.var.ctx, c.var.authed, c.req.valid("json"), meta(c))),
   )
@@ -104,6 +124,14 @@ export const authRoutes = new Hono<AppEnv>()
   .post("/2fa/recovery-codes", auth(), json(s.TotpCode), async (c) =>
     c.json(await service.regenerateRecoveryCodes(c.var.ctx, c.var.authed, c.req.valid("json"))),
   )
+  .post(
+    "/recovery-codes",
+    auth(),
+    json(s.NewRecoveryCodes),
+    ipRateLimit("RL_MFA", "recovery-codes"),
+    async (c) =>
+      c.json(await service.newAccountRecoveryCodes(c.var.ctx, c.var.authed, c.req.valid("json"), meta(c))),
+  )
   .post("/2fa/verify", json(s.MfaVerify), ipRateLimit("RL_MFA", "2fa-verify"), async (c) =>
     tokens(c, await service.mfaVerify(c.var.ctx, c.req.valid("json"), meta(c))),
   )
@@ -117,6 +145,7 @@ export const authRoutes = new Hono<AppEnv>()
   )
   .post(
     "/confirm-email-change",
+    emailOn,
     json(s.EmailCode),
     ipRateLimit("RL_MFA", "confirm-email-change"),
     async (c) => c.json(await service.confirmEmailChange(c.var.ctx, c.req.valid("json"))),

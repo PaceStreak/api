@@ -1,9 +1,9 @@
 {
   "DELETE /v1/admin/client-errors/:param": [
-    "src/routes/Admin.tsx:359"
+    "src/routes/Admin.tsx:362"
   ],
   "DELETE /v1/auth/sessions/:param": [
-    "src/routes/settings/Security.tsx:129"
+    "src/routes/settings/Security.tsx:152"
   ],
   "DELETE /v1/body-metrics/:param": [
     "src/routes/progress/Body.tsx:116"
@@ -33,13 +33,13 @@
     "src/routes/settings/GearSettings.tsx:69"
   ],
   "DELETE /v1/groups/:param": [
-    "src/routes/social/GroupDetail.tsx:97"
+    "src/routes/social/GroupDetail.tsx:98"
   ],
   "DELETE /v1/groups/:param/announcements/:param": [
-    "src/routes/social/GroupDetail.tsx:515"
+    "src/routes/social/GroupDetail.tsx:516"
   ],
   "DELETE /v1/groups/:param/members/:param": [
-    "src/routes/social/GroupDetail.tsx:343"
+    "src/routes/social/GroupDetail.tsx:344"
   ],
   "DELETE /v1/gyms/:param": [
     "src/routes/settings/GymSettings.tsx:56"
@@ -97,34 +97,34 @@
     "src/routes/progress/Body.tsx:417"
   ],
   "GET /v1/admin/abuse": [
-    "src/routes/Admin.tsx:355"
+    "src/routes/Admin.tsx:358"
   ],
   "GET /v1/admin/audit": [
-    "src/routes/Admin.tsx:183"
+    "src/routes/Admin.tsx:186"
   ],
   "GET /v1/admin/client-errors": [
-    "src/routes/Admin.tsx:354"
+    "src/routes/Admin.tsx:357"
   ],
   "GET /v1/admin/metrics": [
-    "src/routes/Admin.tsx:209"
+    "src/routes/Admin.tsx:212"
   ],
   "GET /v1/admin/reports": [
-    "src/routes/Admin.tsx:60",
-    "src/routes/Admin.tsx:60",
-    "src/routes/Admin.tsx:60"
+    "src/routes/Admin.tsx:61",
+    "src/routes/Admin.tsx:61",
+    "src/routes/Admin.tsx:61"
   ],
   "GET /v1/admin/users": [
-    "src/routes/Admin.tsx:127"
+    "src/routes/Admin.tsx:130"
   ],
   "GET /v1/auth/2fa": [
-    "src/routes/settings/Security.tsx:54"
+    "src/routes/settings/Security.tsx:55"
   ],
   "GET /v1/auth/passkeys": [
     "src/components/GettingStarted.tsx:26",
     "src/routes/settings/PasskeySection.tsx:14"
   ],
   "GET /v1/auth/sessions": [
-    "src/routes/settings/Security.tsx:52"
+    "src/routes/settings/Security.tsx:53"
   ],
   "GET /v1/blocks/active": [
     "src/components/RaceAndBlocks.tsx:97",
@@ -148,7 +148,7 @@
   "GET /v1/challenges": [
     "src/routes/Today.tsx:97",
     "src/routes/social/Challenges.tsx:46",
-    "src/routes/social/GroupDetail.tsx:55"
+    "src/routes/social/GroupDetail.tsx:56"
   ],
   "GET /v1/challenges/:param": [
     "src/routes/social/ChallengeDetail.tsx:24"
@@ -159,6 +159,9 @@
   "GET /v1/coaching": [
     "src/routes/You.tsx:33",
     "src/routes/social/Coaching.tsx:28"
+  ],
+  "GET /v1/config": [
+    "src/lib/capabilities.ts:49"
   ],
   "GET /v1/day/:param": [
     "src/routes/Day.tsx:24"
@@ -195,16 +198,16 @@
     "src/routes/social/Leaderboards.tsx:29"
   ],
   "GET /v1/groups/:param": [
-    "src/routes/social/GroupDetail.tsx:47"
+    "src/routes/social/GroupDetail.tsx:48"
   ],
   "GET /v1/groups/:param/announcements": [
-    "src/routes/social/GroupDetail.tsx:494"
+    "src/routes/social/GroupDetail.tsx:495"
   ],
   "GET /v1/groups/:param/coach": [
-    "src/routes/social/GroupDetail.tsx:56"
+    "src/routes/social/GroupDetail.tsx:57"
   ],
   "GET /v1/groups/:param/feed": [
-    "src/routes/social/GroupDetail.tsx:51"
+    "src/routes/social/GroupDetail.tsx:52"
   ],
   "GET /v1/gyms": [
     "src/lib/queries.ts:128",
@@ -228,7 +231,7 @@
     "src/lib/queries.ts:141"
   ],
   "GET /v1/handles/:param": [
-    "src/routes/Welcome.tsx:58",
+    "src/routes/Welcome.tsx:60",
     "src/routes/settings/ProfileSettings.tsx:20"
   ],
   "GET /v1/insights": [
@@ -247,7 +250,7 @@
   ],
   "GET /v1/me": [
     "src/lib/session.tsx:34",
-    "src/routes/Welcome.tsx:103"
+    "src/routes/Welcome.tsx:105"
   ],
   "GET /v1/me/achievements": [
     "src/routes/progress/Achievements.tsx:22"
@@ -259,9 +262,9 @@
     "src/routes/settings/ActivityImport.tsx:109"
   ],
   "GET /v1/me/export": [
-    "src/routes/settings/Data.tsx:31",
-    "src/routes/settings/Data.tsx:31",
-    "src/routes/settings/Data.tsx:31"
+    "src/routes/settings/Data.tsx:32",
+    "src/routes/settings/Data.tsx:32",
+    "src/routes/settings/Data.tsx:32"
   ],
   "GET /v1/me/monthly-goal": [
     "src/components/MonthlyGoal.tsx:20"
@@ -289,7 +292,7 @@
     "src/routes/Review.tsx:44"
   ],
   "GET /v1/me/security-events": [
-    "src/routes/settings/Security.tsx:53"
+    "src/routes/settings/Security.tsx:54"
   ],
   "GET /v1/me/stats": [
     "src/lib/queries.ts:97"
@@ -301,8 +304,8 @@
     "src/routes/Notifications.tsx:16"
   ],
   "GET /v1/notifications/preferences": [
-    "src/routes/settings/Data.tsx:153",
-    "src/routes/settings/NotificationSettings.tsx:23"
+    "src/routes/settings/Data.tsx:161",
+    "src/routes/settings/NotificationSettings.tsx:25"
   ],
   "GET /v1/notifications/unread-count": [
     "src/shell/Shell.tsx:102"
@@ -349,7 +352,7 @@
   "GET /v1/plans": [
     "src/routes/plans/Plans.tsx:21",
     "src/routes/social/Challenges.tsx:136",
-    "src/routes/social/GroupDetail.tsx:426"
+    "src/routes/social/GroupDetail.tsx:427"
   ],
   "GET /v1/plans/:param": [
     "src/routes/plans/PlanDetail.tsx:122"
@@ -363,7 +366,7 @@
   "GET /v1/plans/templates": [
     "src/routes/plans/Plans.tsx:25",
     "src/routes/social/Challenges.tsx:135",
-    "src/routes/social/GroupDetail.tsx:425"
+    "src/routes/social/GroupDetail.tsx:426"
   ],
   "GET /v1/readiness": [
     "src/components/Readiness.tsx:27"
@@ -392,7 +395,7 @@
     "src/lib/sync.ts:230"
   ],
   "PATCH /v1/admin/users/:param": [
-    "src/routes/Admin.tsx:130"
+    "src/routes/Admin.tsx:133"
   ],
   "PATCH /v1/auth/passkeys/:param": [
     "src/routes/settings/PasskeySection.tsx:105"
@@ -405,51 +408,51 @@
     "src/routes/settings/GearSettings.tsx:57"
   ],
   "PATCH /v1/groups/:param": [
-    "src/routes/social/GroupDetail.tsx:159",
-    "src/routes/social/GroupDetail.tsx:357"
+    "src/routes/social/GroupDetail.tsx:160",
+    "src/routes/social/GroupDetail.tsx:358"
   ],
   "PATCH /v1/groups/:param/me": [
-    "src/routes/social/GroupDetail.tsx:139",
-    "src/routes/social/GroupDetail.tsx:150"
+    "src/routes/social/GroupDetail.tsx:140",
+    "src/routes/social/GroupDetail.tsx:151"
   ],
   "PATCH /v1/groups/:param/members/:param": [
-    "src/routes/social/GroupDetail.tsx:334",
-    "src/routes/social/GroupDetail.tsx:339"
+    "src/routes/social/GroupDetail.tsx:335",
+    "src/routes/social/GroupDetail.tsx:340"
   ],
   "PATCH /v1/habits/:param": [
     "src/routes/habits/HabitDetail.tsx:65"
   ],
   "PATCH /v1/me/profile": [
-    "src/routes/Welcome.tsx:92",
+    "src/routes/Welcome.tsx:94",
     "src/routes/settings/useProfilePatch.ts:14",
     "src/routes/social/Leaderboards.tsx:39"
   ],
   "POST /v1/admin/reports/:param/resolve": [
-    "src/routes/Admin.tsx:63"
+    "src/routes/Admin.tsx:64"
   ],
   "POST /v1/admin/users/:param/official": [
-    "src/routes/Admin.tsx:296"
+    "src/routes/Admin.tsx:299"
   ],
   "POST /v1/auth/2fa/disable": [
-    "src/routes/settings/Security.tsx:107"
+    "src/routes/settings/Security.tsx:116"
   ],
   "POST /v1/auth/2fa/enable": [
-    "src/routes/settings/Security.tsx:96"
+    "src/routes/settings/Security.tsx:105"
   ],
   "POST /v1/auth/2fa/recovery-codes": [
-    "src/routes/settings/Security.tsx:119"
+    "src/routes/settings/Security.tsx:128"
   ],
   "POST /v1/auth/2fa/setup": [
-    "src/routes/settings/Security.tsx:87"
+    "src/routes/settings/Security.tsx:96"
   ],
   "POST /v1/auth/2fa/verify": [
-    "src/routes/auth/Login.tsx:76"
+    "src/routes/auth/Login.tsx:78"
   ],
   "POST /v1/auth/change-email": [
-    "src/routes/settings/Security.tsx:64"
+    "src/routes/settings/Security.tsx:68"
   ],
   "POST /v1/auth/change-password": [
-    "src/routes/settings/Security.tsx:75"
+    "src/routes/settings/Security.tsx:84"
   ],
   "POST /v1/auth/confirm-email-change": [
     "src/routes/auth/ConfirmEmail.tsx:25"
@@ -458,8 +461,8 @@
     "src/routes/auth/ForgotPassword.tsx:21"
   ],
   "POST /v1/auth/login": [
-    "src/routes/auth/Login.tsx:78",
-    "src/routes/auth/Signup.tsx:35",
+    "src/routes/auth/Login.tsx:80",
+    "src/routes/auth/Signup.tsx:53",
     "src/routes/auth/VerifyEmail.tsx:45"
   ],
   "POST /v1/auth/logout": [
@@ -484,7 +487,10 @@
     "src/lib/passkeys.ts:136"
   ],
   "POST /v1/auth/recover": [
-    "src/routes/auth/Recover.tsx:27"
+    "src/routes/auth/Recover.tsx:30"
+  ],
+  "POST /v1/auth/recovery-codes": [
+    "src/routes/settings/Security.tsx:140"
   ],
   "POST /v1/auth/refresh": [
     "src/lib/api.ts:85"
@@ -492,13 +498,13 @@
   "POST /v1/auth/resend-verification": [
     "src/routes/Today.tsx:190",
     "src/routes/auth/VerifyEmail.tsx:69",
-    "src/routes/settings/Security.tsx:148"
+    "src/routes/settings/Security.tsx:171"
   ],
   "POST /v1/auth/reset-password": [
     "src/routes/auth/ResetPassword.tsx:21"
   ],
   "POST /v1/auth/signup": [
-    "src/routes/auth/Signup.tsx:28"
+    "src/routes/auth/Signup.tsx:45"
   ],
   "POST /v1/auth/verify-email": [
     "src/routes/auth/VerifyEmail.tsx:34"
@@ -526,7 +532,7 @@
     "src/routes/social/Buddies.tsx:48"
   ],
   "POST /v1/chains": [
-    "src/routes/Welcome.tsx:97",
+    "src/routes/Welcome.tsx:99",
     "src/routes/settings/Training.tsx:140"
   ],
   "POST /v1/chains/:param/repair": [
@@ -564,16 +570,16 @@
     "src/routes/social/Groups.tsx:82"
   ],
   "POST /v1/groups/:param/announcements": [
-    "src/routes/social/GroupDetail.tsx:504"
+    "src/routes/social/GroupDetail.tsx:505"
   ],
   "POST /v1/groups/:param/invite/rotate": [
-    "src/routes/social/GroupDetail.tsx:127"
+    "src/routes/social/GroupDetail.tsx:128"
   ],
   "POST /v1/groups/:param/leave": [
-    "src/routes/social/GroupDetail.tsx:90"
+    "src/routes/social/GroupDetail.tsx:91"
   ],
   "POST /v1/groups/:param/members/:param/plan": [
-    "src/routes/social/GroupDetail.tsx:435"
+    "src/routes/social/GroupDetail.tsx:436"
   ],
   "POST /v1/groups/join": [
     "src/routes/social/Groups.tsx:83"
@@ -586,7 +592,7 @@
   ],
   "POST /v1/habits": [
     "src/components/HabitForm.tsx:239",
-    "src/routes/Welcome.tsx:101"
+    "src/routes/Welcome.tsx:103"
   ],
   "POST /v1/habits/:param/archive": [
     "src/routes/habits/HabitDetail.tsx:93"
@@ -613,7 +619,7 @@
     "src/routes/settings/ActivityImport.tsx:117"
   ],
   "POST /v1/me/delete": [
-    "src/routes/settings/Data.tsx:67"
+    "src/routes/settings/Data.tsx:73"
   ],
   "POST /v1/me/delete/cancel": [
     "src/routes/Today.tsx:198"
@@ -625,10 +631,10 @@
     "src/routes/social/People.tsx:32"
   ],
   "POST /v1/me/import": [
-    "src/routes/settings/Data.tsx:53"
+    "src/routes/settings/Data.tsx:54"
   ],
   "POST /v1/me/onboarding": [
-    "src/routes/Welcome.tsx:77"
+    "src/routes/Welcome.tsx:79"
   ],
   "POST /v1/me/terms": [
     "src/components/TermsGate.tsx:24"
@@ -640,7 +646,7 @@
     "src/lib/pwa.ts:123"
   ],
   "POST /v1/notifications/push/test": [
-    "src/routes/settings/NotificationSettings.tsx:84"
+    "src/routes/settings/NotificationSettings.tsx:90"
   ],
   "POST /v1/notifications/push/unsubscribe": [
     "src/lib/pwa.ts:130"
@@ -743,10 +749,10 @@
     "src/routes/log/LogSheet.tsx:157"
   ],
   "PUT /v1/notifications/preferences": [
-    "src/routes/settings/Data.tsx:168",
-    "src/routes/settings/Data.tsx:182",
-    "src/routes/settings/NotificationSettings.tsx:36",
-    "src/routes/settings/NotificationSettings.tsx:45"
+    "src/routes/settings/Data.tsx:176",
+    "src/routes/settings/Data.tsx:190",
+    "src/routes/settings/NotificationSettings.tsx:38",
+    "src/routes/settings/NotificationSettings.tsx:47"
   ],
   "PUT /v1/nutrition/entries/:param": [
     "src/routes/progress/Food.tsx:325",

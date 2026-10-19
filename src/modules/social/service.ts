@@ -75,13 +75,14 @@ export function socialAllowed(
 }
 
 /**
- * Python `require_social`: onboarded, allowed social features, confirmed email; checked in that order. A caller
+ * Python `require_social`: onboarded, allowed social features, confirmed email (email on only); in that order. A caller
  * without a profile has not onboarded.
  */
 export function requireSocial(ctx: Ctx, user: AuthUser, me: ProfileRow | undefined): ProfileRow {
   if (me === undefined || me.onboardedAt === null) throw forbidden("Finish setting up your profile first");
   if (!socialAllowed(me, utcYear(ctx))) throw forbidden("Social features are not available");
-  if (!user.isVerified) throw forbidden("Confirm your email address first");
+  // Only while email is on: with it off no address can be confirmed, and nothing waits on one.
+  if (ctx.cfg.emailEnabled && !user.isVerified) throw forbidden("Confirm your email address first");
   return me;
 }
 

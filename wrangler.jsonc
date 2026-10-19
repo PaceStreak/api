@@ -10,10 +10,9 @@
   "name": "pacestreak-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  // workers.dev until the cutover moves api.pacestreak.com off FastAPI Cloud.
-  "workers_dev": true,
+  "workers_dev": false,
   "preview_urls": false,
-  "routes": [],
+  "routes": [{ "pattern": "api.pacestreak.com", "custom_domain": true }],
   "placement": { "mode": "smart" },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   // No "limits": the Workers Free plan refuses cpu_ms (OWNER-DECISIONS, 2026-10-19: try Free first).

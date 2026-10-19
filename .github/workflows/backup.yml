@@ -1,0 +1,38 @@
+# Nightly off-host backup: the production D1 database copied into Neon Postgres
+# (schema d1_backup), replaced in one transaction each night. Owner decision,
+# 2026-10-19. Restore notes: infra/OPERATING-GUIDE.md.
+name: Backup D1 to Neon
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 23:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Export D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.151.1 d1 export pacestreak --remote --output "$RUNNER_TEMP/d1.sql"
+      - name: Load into Neon
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: python3 scripts/backup-to-neon.py "$RUNNER_TEMP/d1.sql" "$NEON_DATABASE_URL"
+      - name: Remove the export
+        if: always()
+        run: rm -f "$RUNNER_TEMP/d1.sql"

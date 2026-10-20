@@ -36,8 +36,8 @@
     "consumers": [
       {
         "queue": "pacestreak-jobs",
-        // One message per invocation: D1 counts each statement against 1,000 queries per invocation
-        // (src/jobs/dispatch.ts, D1_QUERIES_PER_INVOCATION).
+        // One message per invocation: D1 counts each statement against the plan's queries per invocation
+        // (50 on Free; src/lib/plan.ts), and every message is sized to fit on its own.
         "max_batch_size": 1,
         "max_batch_timeout": 2,
         "max_retries": 5,
@@ -67,6 +67,9 @@
   "triggers": { "crons": ["*/5 * * * *", "2,17,32,47 * * * *", "23 3 * * *"] },
   "vars": {
     "ENVIRONMENT": "production",
+    // The Workers plan: "free" or "paid". The one switch for every plan limit the code sizes work by (D1 queries per
+    // invocation; src/lib/plan.ts). Moving to Workers Paid: set "paid" here and in env.staging.
+    "PLAN": "free",
     // console | smtp | brevo | cloudflare (README "Email switch"). smtp needs the SMTP_USER and SMTP_PASSWORD
     // secrets; brevo needs BREVO_API_KEY.
     "MAILER": "smtp",
@@ -106,8 +109,8 @@
         "consumers": [
           {
             "queue": "pacestreak-jobs-staging",
-            // One message per invocation: D1 counts each statement against 1,000 queries per invocation
-            // (src/jobs/dispatch.ts, D1_QUERIES_PER_INVOCATION).
+            // One message per invocation: D1 counts each statement against the plan's queries per invocation
+            // (50 on Free; src/lib/plan.ts), and every message is sized to fit on its own.
             "max_batch_size": 1,
             "max_batch_timeout": 2,
             "max_retries": 5,
@@ -135,6 +138,7 @@
       "triggers": { "crons": [] },
       "vars": {
         "ENVIRONMENT": "staging",
+        "PLAN": "free",
         "MAILER": "console",
         // Staging keeps email off: it never mails real people. "1" plus MAILER=brevo and its own key turns it on.
         "EMAIL_ENABLED": "0",

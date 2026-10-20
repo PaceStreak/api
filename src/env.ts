@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { b64ToBytes } from "./lib/b64url.ts";
 import { parseOrigins } from "./lib/http.ts";
+import { d1Budget, PLANS, type Plan } from "./lib/plan.ts";
 
 export const ENVIRONMENTS = ["production", "staging", "development", "test"] as const;
 export type Environment = (typeof ENVIRONMENTS)[number];
@@ -41,6 +42,10 @@ export const SETTINGS = {
 
 export interface Config {
   environment: Environment;
+  /** The Workers plan (`PLAN`): sizes queue packs and slices to its D1 query cap (src/lib/plan.ts). */
+  plan: Plan;
+  /** D1 statements one invocation may plan to spend on `plan` (90% of the cap). */
+  d1Budget: number;
   isProduction: boolean;
   mailer: "cloudflare" | "brevo" | "smtp" | "console";
   /** MAILER=smtp: host and port (vars), user and password (secrets); null user/password when unset. */
@@ -129,6 +134,7 @@ const jwtKeys = z.string().transform((s, ctx) => {
 
 const RawEnv = z.object({
   ENVIRONMENT: z.enum(ENVIRONMENTS),
+  PLAN: z.enum(PLANS).default("free"),
   MAILER: z.enum(["cloudflare", "brevo", "smtp", "console"]),
   SMTP_HOST: z.string().trim().min(1).default("smtp-relay.brevo.com"),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
@@ -185,6 +191,8 @@ export function parseConfig(env: Env): ConfigResult {
   const frontend = new URL(e.FRONTEND_URL);
   const config: Config = {
     environment: e.ENVIRONMENT,
+    plan: e.PLAN,
+    d1Budget: d1Budget(e.PLAN),
     isProduction: e.ENVIRONMENT === "production",
     mailer: e.MAILER,
     brevoApiKey: e.BREVO_API_KEY,

@@ -29,3 +29,11 @@ service and is a feature list, not a constraint: the rewrite is a new project.
 | Tooling | **pnpm** and **TypeScript 7**, as in the design. Fall back to 5.9 only if Phase 0 check G-2 fails, and record why. |
 | Tests | Each unit is done only when its ported tests pass. The CI name-diff check against the 285 pytest cases stays. |
 | Commits | Conventional commits as `AlzyWelzy <welzyalzy@gmail.com>`. **Never credit an AI tool** (no `Co-Authored-By`, no "Generated with"). Never commit secrets: the repo is public. |
+
+## Later decisions
+
+Dated rows, newest last. A row here overrides the table above where they disagree.
+
+| Date | Topic | Decision |
+| --- | --- | --- |
+| 2026-10-19 | Workers plan | **Try Workers Free first** (production runs there now). This replaces "Paid" above. The code fits Free's limits without lowering quality or security (PBKDF2 stays at 100,000 iterations): D1's 50 queries per invocation, 10 ms CPU, 100,000 requests and 10,000 queue operations a day. The one switch is the `PLAN` var in `wrangler.jsonc` (`"free"` or `"paid"`, read by `src/lib/plan.ts`); moving to Paid is that one line in each environment. This reverses "`PLAN`-based branching ... drop it", which assumed Paid. Only sizes branch on it (queue packs, merge slices, the delivery budget), never behaviour. |

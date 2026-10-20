@@ -431,8 +431,8 @@ Order matters: the app's `api-next` speaks the new contract, and `main` of
 ## 18. The first week: watch queues, crons and limits
 
 The consumer takes **one message per invocation** (`max_batch_size: 1`)
-because D1 counts every statement against 1,000 queries per invocation
-(`src/jobs/dispatch.ts`). Throughput therefore comes from **concurrency**,
+because D1 counts every statement against the plan's queries per invocation
+(50 on Free, 1,000 on Paid; `src/lib/plan.ts`). Throughput therefore comes from **concurrency**,
 not batch size: Queues autoscales consumer invocations with backlog.
 
 Daily, for a week:
@@ -579,12 +579,13 @@ stay backward compatible).
 List it in the dashboard (Queues → the DLQ → Messages), find the error in
 Workers Logs by the job name, fix and deploy, then send the body back to
 `pacestreak-jobs`. Consumers take one message per invocation, because D1
-allows 1,000 statements per invocation; never raise `max_batch_size`.
+allows 50 statements per invocation on Free (1,000 on Paid); never raise
+`max_batch_size`.
 
 ## D1 says "overloaded" or queries time out
 
 D1 is single-threaded per database. Workers Logs `D1_ERROR`, and D1 → Metrics
-query duration. Usual causes: a job slice too large (see `SLICE_IDS` in
+query duration. Usual causes: a job slice too large (see `SLICE_COSTS` in
 `src/jobs/dispatch.ts`) or a missing index (`test/explain`). Requests retry
 nothing; fix the query.
 
@@ -839,13 +840,16 @@ changed; `terms_version` bumped so every account accepts again). Push to
 ## Limits to check
 
 Read the current numbers on the linked pages before relying on them; these
-change.
+change. Production runs on **Workers Free** (OWNER-DECISIONS 2026-10-19);
+`PLAN` in `wrangler.jsonc` sizes the work to it (`src/lib/plan.ts`). Numbers
+below were read on 2026-10-20.
 
 | Product | What matters here | Where to check |
 | --- | --- | --- |
-| Workers Paid | 10 M requests/month and 30 M CPU-ms included; `cpu_ms` up to 5 min (we set 30 s); 1,000 subrequests per invocation; 128 MB memory | <https://developers.cloudflare.com/workers/platform/limits/>, <https://developers.cloudflare.com/workers/platform/pricing/> |
-| D1 | 1,000 queries per invocation (why consumers take one message); 10 GB per database; rows read/written included per month; Time Travel 30 days | <https://developers.cloudflare.com/d1/platform/limits/>, <https://developers.cloudflare.com/d1/platform/pricing/> |
-| Queues | Operations included per month (each message is about three: write, read, delete); consumer concurrency; message size 128 KB | <https://developers.cloudflare.com/queues/platform/limits/>, <https://developers.cloudflare.com/queues/platform/pricing/> |
+| Workers Free | 100,000 requests a day (resets 00:00 UTC; over it, error 1027); **10 ms CPU** per HTTP request and per cron trigger, no `cpu_ms` setting; 50 subrequests per invocation (1,000 to Cloudflare services); 5 cron triggers per account; 128 MB memory. Waiting on fetch or D1 is not CPU time; WebCrypto work (PBKDF2) is | <https://developers.cloudflare.com/workers/platform/limits/>, <https://developers.cloudflare.com/workers/platform/pricing/> |
+| Workers Paid | 10 M requests/month and 30 M CPU-ms included; `cpu_ms` up to 5 min (default 30 s); 10,000 subrequests per invocation | same pages |
+| D1 | Free: **50 queries per invocation**, every statement of a batch counted (why consumers take one message and requests fuse reads), 500 MB per database, 5 GB per account, 5 M rows read and 100,000 rows written a day. Paid: 1,000 queries, 10 GB, Time Travel 30 days | <https://developers.cloudflare.com/d1/platform/limits/>, <https://developers.cloudflare.com/d1/platform/pricing/> |
+| Queues | Free: **10,000 operations a day** (a message is about three: write, read, delete; each retry one more read), 24-hour retention; message size 128 KB; consumer wall time 15 min | <https://developers.cloudflare.com/queues/platform/limits/>, <https://developers.cloudflare.com/queues/platform/pricing/> |
 | R2 | 10 GB storage, Class A and B operations free each month; egress free | <https://developers.cloudflare.com/r2/pricing/> |
 | Cron triggers | Per-account and per-Worker trigger counts (we use 3 per environment, 6 total) | Workers limits page above |
 | Email Service | Sends included on Workers Paid (DESIGN.md §22 assumed 3,000 a month), per-message size (backup attachments cap at 10 MiB in `src/lib/mailer`) | <https://developers.cloudflare.com/email-service/> |

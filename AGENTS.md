@@ -60,8 +60,13 @@ deploys nothing and needs no secrets; workflow files are pushed over SSH.
 - No `any`, no non-null assertions, strict TypeScript. Handlers never touch
   `env.DB`; they use `ctx.db` and `AuthedBatch` (`src/db/batch.ts`).
 - One read batch and one write batch per request; tests assert round trips.
-- D1 allows 1,000 statements per invocation: queue consumers take one message
-  (`max_batch_size: 1`) and job slices are sized in `src/jobs/dispatch.ts`.
+- Production is on **Workers Free** (OWNER-DECISIONS 2026-10-19). D1 allows
+  50 queries per invocation there (1,000 on Paid), every statement of a batch
+  counted. `PLAN` in `wrangler.jsonc` is the one switch (`src/lib/plan.ts`);
+  each request and queue message stays within 90% of the cap. Route tests fail
+  above it (`test/fixtures/http.ts`). Fuse bounded reads (`packReads`), write
+  many rows as one `json_each` statement, and split work across queue messages
+  when it cannot fit. Queue consumers take one message (`max_batch_size: 1`).
 - If the API host or R2 host changes, `app/public/_headers` `connect-src`
   changes in the same commit, or every request fails silently.
 - The refresh cookie is `Domain=pacestreak.com`, `__Secure-`, `SameSite=Lax`.

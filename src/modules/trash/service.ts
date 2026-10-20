@@ -15,7 +15,6 @@ import { getTableColumns, sql } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Ctx } from "../../ctx.ts";
 import { type AuthedBatch, abortUnless, isCondAbort, type Stmt, withFold } from "../../db/batch.ts";
-import type { Db } from "../../db/client.ts";
 import {
   foods,
   habitLogs,
@@ -28,6 +27,7 @@ import {
 } from "../../db/schema/index.ts";
 import { conflict, HttpError, isConstraintError, notFound } from "../../lib/errors.ts";
 import { toWire } from "../../lib/time.ts";
+import { uuid7 } from "../../lib/uuid7.ts";
 import { recompute, statRefresh } from "../game/service.ts";
 import { restoreHabit } from "../habits/service.ts";
 import * as repo from "./repo.ts";
@@ -39,9 +39,6 @@ const GONE = "That can no longer be restored";
 const WORKOUT_GONE = "That session can no longer be restored";
 
 /** Rows per multi-row insert: D1 binds at most 100 parameters per statement. */
-const rowsPerInsert = (table: SQLiteTable) =>
-  Math.max(1, Math.floor(100 / Object.keys(getTableColumns(table)).length));
-
 /** GET /v1/trash: what can still be restored, newest first. One round trip. */
 export async function list(ctx: Ctx, authed: AuthedBatch) {
   const [, rows] = await authed.read(repo.listTrash(ctx.db, authed.userId, ctx.clock.now()));
@@ -87,13 +84,6 @@ function rebuild<T extends SQLiteTable>(
   out.updatedAt ??= now;
   // Library boundary: the shape is checked column by column above, not by the type system.
   return withFold(table, out as never);
-}
-
-function inserts<T extends SQLiteTable>(db: Db, table: T, rows: readonly T["$inferInsert"][]): Stmt[] {
-  const per = rowsPerInsert(table);
-  const out: Stmt[] = [];
-  for (let i = 0; i < rows.length; i += per) out.push(db.insert(table).values(rows.slice(i, i + per)));
-  return out;
 }
 
 /** POST /v1/trash/{id}/restore. */
@@ -161,7 +151,24 @@ export async function restore(ctx: Ctx, authed: AuthedBatch, rawId: string) {
           amount: l.amount,
           note: l.note ?? null,
         })),
-        [db.insert(habits).values({ ...habit, id: habitId }), ...inserts(db, habitLogs, logs), forgetIt],
+        [
+          db.insert(habits).values({ ...habit, id: habitId }),
+          ...repo
+            .insertLogsSql(
+              uid,
+              logs.map((l) => ({
+                id: l.id ?? uuid7(now),
+                habitId,
+                day: l.day,
+                amount: l.amount,
+                note: l.note ?? null,
+                createdAt: l.createdAt ?? now,
+                updatedAt: l.updatedAt ?? now,
+              })),
+            )
+            .map((q) => db.run(q)),
+          forgetIt,
+        ],
       );
       return done;
     }

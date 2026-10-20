@@ -16,6 +16,7 @@ import { timingSafeEqualStr } from "../../lib/crypto/consttime.ts";
 import { hmacSha256 } from "../../lib/crypto/hmac.ts";
 import { badRequest, conflict, HttpError, notFound } from "../../lib/errors.ts";
 import { type Attachment, attachmentBytes, createMailer } from "../../lib/mailer/index.ts";
+import { subrequestBudget } from "../../lib/plan.ts";
 import { isSafePushEndpoint } from "../../lib/push/guard.ts";
 import { type PushOutcome, sendPush } from "../../lib/push/send.ts";
 import { createVapidSigner } from "../../lib/push/vapid.ts";
@@ -185,22 +186,36 @@ const codePoints = (s: string, n: number) => Array.from(s).slice(0, n).join("");
  */
 export function notify(ctx: Ctx, n: NotifyInput) {
   const now = ctx.clock.now();
-  return repo.insertNotification(
+  return repo.insertNotification(ctx.db, inboxRow(n, now), now);
+}
+
+/**
+ * Several inbox inserts as ONE statement (a multi-row `INSERT ... ON CONFLICT DO NOTHING RETURNING id`): the Free
+ * plan counts every statement of a batch against 50 D1 queries per invocation. Its result is the ids actually
+ * inserted, like `notify()`'s.
+ */
+export function notifyMany(ctx: Ctx, ns: readonly NotifyInput[]) {
+  const now = ctx.clock.now();
+  return repo.insertNotifications(
     ctx.db,
-    {
-      id: n.id ?? uuid7(now),
-      userId: n.userId,
-      kind: n.kind,
-      category: n.category,
-      title: codePoints(n.title, 120),
-      body: n.body ? codePoints(n.body, 400) : null,
-      url: n.url ?? null,
-      actorId: n.actorId ?? null,
-      data: n.detail ? { ...n.data, detail: codePoints(n.detail, 400) } : (n.data ?? null),
-      dedupeKey: n.dedupeKey ?? null,
-    },
+    ns.map((n) => inboxRow(n, now)),
     now,
   );
+}
+
+function inboxRow(n: NotifyInput, now: number) {
+  return {
+    id: n.id ?? uuid7(now),
+    userId: n.userId,
+    kind: n.kind,
+    category: n.category,
+    title: codePoints(n.title, 120),
+    body: n.body ? codePoints(n.body, 400) : null,
+    url: n.url ?? null,
+    actorId: n.actorId ?? null,
+    data: n.detail ? { ...n.data, detail: codePoints(n.detail, 400) } : (n.data ?? null),
+    dedupeKey: n.dedupeKey ?? null,
+  };
 }
 
 export type NotifyResult = readonly { id: string }[];
@@ -460,17 +475,39 @@ interface SubState extends Sub {
  * least once: a crash between sending and the write sends again on retry.
  */
 export async function deliver(ctx: Ctx, ids: readonly string[]): Promise<void> {
-  for (const part of chunk([...new Set(ids.map((i) => i.toLowerCase()))], 50)) await deliverPart(ctx, part);
+  const unique = [...new Set(ids.map((i) => i.toLowerCase()))];
+  for (let i = 0; i < unique.length; i += 50) {
+    const left = await deliverPart(ctx, unique.slice(i, i + 50));
+    if (left.length > 0) {
+      // Over this invocation's budget: the rest goes to a fresh invocation (its own queries and subrequests).
+      await dispatchDeliver(ctx.env.JOBS, [...left, ...unique.slice(i + 50)]);
+      return;
+    }
+  }
 }
 
-async function deliverPart(ctx: Ctx, ids: string[]): Promise<void> {
+/** D1 statements a backup note's attachment costs: the packed export read (`exportPacked`). */
+export const ATTACHMENT_STATEMENTS = 16;
+/** Statements a delivery reserves for its own reads and the closing write batch. */
+const DELIVER_OWN_STATEMENTS = 8;
+
+/**
+ * Delivers what fits this invocation's budgets, in order, and returns the ids left over (not marked delivered):
+ * the Workers Free plan allows 50 subrequests (a push is one, an email one) and 50 D1 queries (a backup note
+ * builds the export) per invocation (src/lib/plan.ts). The first note always goes: one note never exceeds either.
+ */
+async function deliverPart(ctx: Ctx, ids: string[]): Promise<string[]> {
   const [notes, subs, muted] = await runBatch(ctx.db, [
     repo.pendingNotes(ctx.db, ids),
     repo.subscriptionsFor(ctx.db, ids),
     repo.mutedGroupsFor(ctx.db, ids),
   ] as const);
-  if (notes.length === 0) return;
+  if (notes.length === 0) return [];
   const now = ctx.clock.now();
+  let subrequestsLeft = subrequestBudget(ctx.cfg.plan);
+  let statementsLeft = ctx.cfg.d1Budget - ctx.stats.statements - DELIVER_OWN_STATEMENTS;
+  const sent: typeof notes = [];
+  const left: string[] = [];
   const mutedKeys = new Set(muted.map((m) => `${m.userId}:${m.groupId}`));
   const byUser = new Map<string, SubState[]>();
   for (const s of subs) {
@@ -483,6 +520,21 @@ async function deliverPart(ctx: Ctx, ids: string[]): Promise<void> {
   const mailer = createMailer(ctx.cfg, ctx.env, ctx.log);
 
   for (const note of notes) {
+    if (left.length > 0) {
+      left.push(note.id);
+      continue;
+    }
+    const channels0 = channelsFor(note.channels, note.category, ctx.cfg.emailEnabled);
+    const pushes = channels0.push ? (byUser.get(note.userId) ?? []).length : 0;
+    const cost = pushes + (channels0.email ? 1 : 0);
+    const reads = note.data?.export_attachment ? ATTACHMENT_STATEMENTS : 0;
+    if (sent.length > 0 && (cost > subrequestsLeft || reads > statementsLeft)) {
+      left.push(note.id);
+      continue;
+    }
+    subrequestsLeft -= cost;
+    statementsLeft -= reads;
+    sent.push(note);
     try {
       const groupId = note.data?.group_id;
       if (typeof groupId === "string" && mutedKeys.has(`${note.userId}:${groupId}`)) continue;
@@ -550,18 +602,19 @@ async function deliverPart(ctx: Ctx, ids: string[]): Promise<void> {
   const ok = all.filter((s) => s.outcome?.kind === "delivered").map((s) => s.id);
   for (const part of chunk(gone, 90)) stmts.push(repo.deleteSubscriptions(ctx.db, part));
   for (const part of chunk(ok, 90)) stmts.push(repo.subscriptionsSucceeded(ctx.db, part, done));
-  for (const s of all) {
-    if (s.outcome?.kind === "failed")
-      stmts.push(repo.subscriptionFailed(ctx.db, s.id, s.outcome.failures, done));
-  }
+  const failed = all.flatMap((s) =>
+    s.outcome?.kind === "failed" ? [{ id: s.id, failures: s.outcome.failures }] : [],
+  );
+  if (failed.length > 0) stmts.push(repo.subscriptionsFailed(ctx.db, failed, done));
   stmts.push(
     repo.markDelivered(
       ctx.db,
-      notes.map((n) => n.id),
+      sent.map((n) => n.id),
       done,
     ),
   );
   await runBatch(ctx.db, stmts);
+  return left;
 }
 
 /**

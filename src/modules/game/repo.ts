@@ -11,7 +11,6 @@ import { ENDURANCE } from "../../catalog/exercises.ts";
 import type { Db } from "../../db/client.ts";
 import type { ExplainCase } from "../../db/explain.ts";
 import {
-  activityEvents,
   customExercises,
   groupMembers,
   personalRecords,
@@ -94,43 +93,49 @@ export const deleteRecordDaysSql = (userId: string, dates: Scope) =>
 
 const ENDURANCE_LIST = sql.raw([...ENDURANCE].map((d) => `'${d.replace(/'/g, "''")}'`).join(", "));
 
+/** The set-based record families: key prefix and the value a set contributes (NULL when it does not count). */
+const SET_FAMILIES = ["e1rm:", "reps:", "repsbw:", "hold:"] as const;
+
 /**
- * One row per raw key and day, one statement per key family (D1 caps compound SELECTs, so no UNION ALL).
- * SQLite fills the bare `workout_id` / `rewardable` columns from the row holding the single `max()` / `min()` of
- * each group, which is exactly "the workout that set the day's best".
+ * One row per raw key and day, in three statements: every set-based family at once (a `json_each` of the family
+ * prefixes joined to the sets), endurance distance, and every run pace band at once. D1 caps compound SELECTs, so
+ * no UNION ALL, and the Workers Free plan counts each statement against 50 queries per invocation
+ * (src/lib/plan.ts), so not one statement per family either. SQLite fills the bare `workout_id` / `rewardable`
+ * columns from the row holding the single `max()` / `min()` of each group, which is exactly "the workout that set
+ * the day's best"; rows outside a family's filter carry NULL, which max/min skip, and `HAVING` drops a group that
+ * has no row at all.
  */
 export function insertRecordDaysSql(userId: string, dates: Scope) {
   const into = sql`INSERT INTO record_days (user_id, key, local_date, value, workout_id, rewardable)`;
-  const fromSets = (key: string, value: ReturnType<typeof sql>, where: ReturnType<typeof sql>) =>
-    sql`${into} SELECT s.user_id, ${key} || s.exercise_id, w.local_date, max(${value}), w.id, w.source <> 'import'
-    FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
-    WHERE s.user_id = ${userId} AND w.deleted_at IS NULL AND ${COUNTED_SET} AND ${where}${inScope(W("w.local_date"), dates)}
-    GROUP BY s.exercise_id, w.local_date`;
   const pace = sql`w.duration_sec / (w.distance_m / 1000.0)`;
   const fromRuns = sql`FROM workouts w WHERE w.user_id = ${userId} AND w.deleted_at IS NULL`;
+  const bands = JSON.stringify(RUN_BANDS.map(([metres, label]) => [metres, `pace_${label}:run`]));
   return [
-    fromSets(
-      "e1rm:",
-      sql`CASE WHEN s.reps = 1 THEN s.weight_kg WHEN s.reps <= 12 THEN s.weight_kg * (1 + s.reps / 30.0) ELSE 0 END`,
-      sql`s.weight_kg > 0 AND s.reps > 0`,
-    ),
-    fromSets("reps:", sql`s.reps`, sql`s.reps > 0`),
-    fromSets("repsbw:", sql`s.reps`, sql`s.reps > 0 AND coalesce(s.weight_kg, 0) <= 0`),
-    fromSets("hold:", sql`s.duration_sec`, sql`s.duration_sec > 0`),
+    sql`${into} SELECT s.user_id, f.value || s.exercise_id, w.local_date,
+        max(CASE f.value
+          WHEN 'e1rm:' THEN CASE WHEN s.weight_kg > 0 AND s.reps > 0 THEN
+            CASE WHEN s.reps = 1 THEN s.weight_kg WHEN s.reps <= 12 THEN s.weight_kg * (1 + s.reps / 30.0) ELSE 0 END END
+          WHEN 'reps:' THEN CASE WHEN s.reps > 0 THEN s.reps END
+          WHEN 'repsbw:' THEN CASE WHEN s.reps > 0 AND coalesce(s.weight_kg, 0) <= 0 THEN s.reps END
+          WHEN 'hold:' THEN CASE WHEN s.duration_sec > 0 THEN s.duration_sec END
+        END) AS best, w.id, w.source <> 'import'
+      FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
+        JOIN json_each(${JSON.stringify(SET_FAMILIES)}) f
+      WHERE s.user_id = ${userId} AND w.deleted_at IS NULL AND ${COUNTED_SET}${inScope(W("w.local_date"), dates)}
+      GROUP BY f.value, s.exercise_id, w.local_date
+      HAVING best IS NOT NULL`,
     sql`${into} SELECT w.user_id, 'distance:' || w.discipline, w.local_date, max(w.distance_m), w.id,
         w.source <> 'import'
       ${fromRuns} AND w.discipline IN (${ENDURANCE_LIST}) AND w.distance_m > 0${inScope(W("w.local_date"), dates)}
       GROUP BY w.discipline, w.local_date`,
-    ...RUN_BANDS.map(
-      ([
-        metres,
-        label,
-      ]) => sql`${into} SELECT w.user_id, ${`pace_${label}:run`}, w.local_date, min(${pace}), w.id,
-          w.source <> 'import'
-        ${fromRuns} AND w.discipline = 'run' AND w.duration_sec > 0 AND w.distance_m >= ${metres}
-          AND ${pace} >= 150${inScope(W("w.local_date"), dates)}
-        GROUP BY w.local_date`,
-    ),
+    sql`${into} SELECT w.user_id, b.value ->> 1, w.local_date,
+        min(CASE WHEN w.distance_m >= b.value ->> 0 AND ${pace} >= 150 THEN ${pace} END) AS best, w.id,
+        w.source <> 'import'
+      FROM workouts w JOIN json_each(${bands}) b
+      WHERE w.user_id = ${userId} AND w.deleted_at IS NULL AND w.discipline = 'run' AND w.duration_sec > 0
+        AND w.distance_m > 0${inScope(W("w.local_date"), dates)}
+      GROUP BY b.key, w.local_date
+      HAVING best IS NOT NULL`,
   ];
 }
 
@@ -253,25 +258,21 @@ export const achievements = (db: Db, userId: string) =>
     .from(userAchievements)
     .where(eq(userAchievements.userId, userId));
 
-export interface Counts {
-  kudos: number;
-  groups: number;
-  finished: number;
-  body_days: number;
-  first_weigh: string | null;
-}
-
-/** The small counts the badges look at, plus the first weigh-in day (quests), in one row. */
-export const countsSql = (userId: string) =>
-  sql`SELECT
-      (SELECT count(*) FROM kudos WHERE user_id = ${userId}) AS kudos,
-      (SELECT count(*) FROM group_members WHERE user_id = ${userId}) AS groups,
-      (SELECT count(*) FROM challenge_participants WHERE user_id = ${userId} AND completed = 1) AS finished,
-      (SELECT count(*) FROM (SELECT measured_on FROM body_metrics WHERE user_id = ${userId}
-                             UNION SELECT local_date FROM weigh_ins WHERE user_id = ${userId})) AS body_days,
-      (SELECT min(local_date) FROM weigh_ins WHERE user_id = ${userId}) AS first_weigh`;
-
-export const counts = (db: Db, userId: string) => db.all<Counts>(countsSql(userId));
+/**
+ * The small counts the badges look at, plus the first weigh-in day (quests), in one row. A select from a one-row
+ * subquery, so it can be fused with the other snapshot reads.
+ */
+export const counts = (db: Db, userId: string) =>
+  db
+    .select({
+      kudos: sql<number>`(SELECT count(*) FROM kudos WHERE user_id = ${userId})`,
+      groups: sql<number>`(SELECT count(*) FROM group_members WHERE user_id = ${userId})`,
+      finished: sql<number>`(SELECT count(*) FROM challenge_participants WHERE user_id = ${userId} AND completed = 1)`,
+      body_days: sql<number>`(SELECT count(*) FROM (SELECT measured_on FROM body_metrics WHERE user_id = ${userId}
+        UNION SELECT local_date FROM weigh_ins WHERE user_id = ${userId}))`,
+      first_weigh: sql<string | null>`(SELECT min(local_date) FROM weigh_ins WHERE user_id = ${userId})`,
+    })
+    .from(sql`(SELECT 1)`);
 
 export const restDayDates = (db: Db, userId: string) =>
   db.select({ day: restDays.day }).from(restDays).where(eq(restDays.userId, userId));
@@ -395,33 +396,6 @@ export const revIs = (userId: string, rev: number | null) =>
     ? sql`NOT EXISTS (SELECT 1 FROM user_stats WHERE user_id = ${userId})`
     : sql`EXISTS (SELECT 1 FROM user_stats WHERE user_id = ${userId} AND rev = ${rev})`;
 
-export const insertAchievement = (
-  db: Db,
-  row: {
-    id: string;
-    userId: string;
-    achievementId: string;
-    tier: string | null;
-    unlockedOn: string;
-    value: number;
-  },
-  now: number,
-) =>
-  db
-    .insert(userAchievements)
-    .values({
-      id: row.id,
-      userId: row.userId,
-      achievementId: row.achievementId,
-      tier: row.tier,
-      unlockedOn: row.unlockedOn,
-      evidence: { value: row.value },
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoNothing()
-    .returning({ id: userAchievements.id });
-
 export const deleteRecordsSql = (userId: string, keys: Scope) =>
   sql`DELETE FROM personal_records WHERE user_id = ${userId}${inScope(W("key"), keys)}`;
 
@@ -450,37 +424,47 @@ export const insertRecords = (db: Db, userId: string, rows: readonly RecordRow[]
 export const setLearnedHour = (db: Db, userId: string, hour: number | null, now: number) =>
   db.update(profiles).set({ learnedReminderHour: hour, updatedAt: now }).where(eq(profiles.userId, userId));
 
-/** Python `emit_event`: upsert on (user, kind, ref_key), refreshing `data`. */
-export const emitEvent = (
-  db: Db,
-  e: {
-    id: string;
-    userId: string;
-    kind: string;
-    refKey: string;
-    day: string;
-    data: Record<string, unknown>;
-    workoutId?: string | null;
-  },
-  now: number,
-) =>
-  db
-    .insert(activityEvents)
-    .values({
-      id: e.id,
-      userId: e.userId,
-      kind: e.kind,
-      refKey: e.refKey.slice(0, 120),
-      data: e.data,
-      occurredOn: e.day,
-      workoutId: e.workoutId ?? null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [activityEvents.userId, activityEvents.kind, activityEvents.refKey],
-      set: { data: e.data, updatedAt: now },
-    });
+export interface AchievementRow {
+  id: string;
+  achievementId: string;
+  tier: string | null;
+  unlockedOn: string;
+  value: number;
+}
+
+/** New badges in ONE statement and one bound parameter; a badge already held is skipped (both unique keys). */
+export const insertAchievementsSql = (userId: string, rows: readonly AchievementRow[], now: number) =>
+  sql`INSERT INTO user_achievements (id, created_at, updated_at, user_id, achievement_id, tier, unlocked_on,
+      evidence)
+    SELECT j.value ->> 'id', ${now}, ${now}, ${userId}, j.value ->> 'achievementId', j.value ->> 'tier',
+      j.value ->> 'unlockedOn', json_object('value', j.value -> 'value')
+    FROM json_each(${JSON.stringify(rows)}) AS j
+    WHERE true
+    ON CONFLICT DO NOTHING`;
+
+export const insertAchievements = (db: Db, userId: string, rows: readonly AchievementRow[], now: number) =>
+  db.run(insertAchievementsSql(userId, rows, now));
+
+export interface EventRow {
+  id: string;
+  kind: string;
+  refKey: string;
+  data: Record<string, unknown>;
+  workoutId: string | null;
+}
+
+/** `emitEvent` for many events of one user and day in ONE statement: each upserts on (user, kind, ref_key). */
+export const emitEventsSql = (userId: string, day: string, rows: readonly EventRow[], now: number) =>
+  sql`INSERT INTO activity_events (id, created_at, updated_at, user_id, kind, ref_key, data, occurred_on,
+      workout_id)
+    SELECT j.value ->> 'id', ${now}, ${now}, ${userId}, j.value ->> 'kind', substr(j.value ->> 'refKey', 1, 120),
+      j.value -> 'data', ${day}, j.value ->> 'workoutId'
+    FROM json_each(${JSON.stringify(rows)}) AS j
+    WHERE true
+    ON CONFLICT (user_id, kind, ref_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`;
+
+export const emitEvents = (db: Db, userId: string, day: string, rows: readonly EventRow[], now: number) =>
+  db.run(emitEventsSql(userId, day, rows, now));
 
 export const insertWager = (
   db: Db,
@@ -729,7 +713,7 @@ export function refreshStatements(db: Db, userId: string, scope: RefreshScope) {
 
 /**
  * `user_id IN (...)` over one JSON parameter: any number of users in one statement, each probing the table's
- * user index. D1 counts every statement of a batch against its 1,000-queries-per-invocation limit, so reads that
+ * user index. D1 counts every statement of a batch against its queries-per-invocation limit (src/lib/plan.ts), so reads that
  * cover a whole group must be per table, not per member.
  */
 export const usersIn = (col: SQLiteColumn, userIds: readonly string[]) =>
@@ -811,6 +795,16 @@ export const explain: ExplainCase[] = [
     build: () => q,
     scanOk: JSON_SCOPE,
   })),
+  {
+    name: "game.insertAchievements",
+    build: () => insertAchievementsSql("u", [], 0),
+    scanOk: "json_each over the bound rows; the conflict check probes the unique keys",
+  },
+  {
+    name: "game.emitEvents",
+    build: () => emitEventsSql("u", "2026-01-01", [], 0),
+    scanOk: "json_each over the bound rows; the upsert probes uq_activity_ref",
+  },
   { name: "game.profile", build: (db) => profile(db, "u") },
   { name: "game.chains", build: (db) => chains(db, "u") },
   { name: "game.repairs", build: (db) => repairs(db, "u") },
@@ -821,7 +815,7 @@ export const explain: ExplainCase[] = [
   { name: "game.customs", build: (db) => customs(db, "u") },
   { name: "game.records", build: (db) => records(db, "u") },
   { name: "game.achievements", build: (db) => achievements(db, "u") },
-  { name: "game.counts", build: () => countsSql("u") },
+  { name: "game.counts", build: (db) => counts(db, "u") },
   { name: "game.restDayDates", build: (db) => restDayDates(db, "u") },
   { name: "game.wakingDates", build: (db) => wakingDates(db, "u") },
   { name: "game.stats", build: (db) => stats(db, "u") },

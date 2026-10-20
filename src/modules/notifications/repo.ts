@@ -82,6 +82,23 @@ export const insertNotification = (db: Db, n: NewNotification, now: number) =>
     .onConflictDoNothing()
     .returning({ id: notifications.id });
 
+/**
+ * Any number of inbox rows in ONE statement and one bound parameter (D1 binds at most 100 per statement, and the
+ * Free plan counts statements): `ON CONFLICT DO NOTHING` per row, `RETURNING id` of the rows actually inserted.
+ */
+export const insertNotifications = (db: Db, ns: readonly NewNotification[], now: number) =>
+  db.all<{
+    id: string;
+  }>(sql`INSERT INTO notifications (id, created_at, updated_at, user_id, kind, category, title,
+      body, url, actor_id, data, dedupe_key, delivery_attempts)
+    SELECT j.value ->> 'id', ${now}, ${now}, j.value ->> 'userId', j.value ->> 'kind', j.value ->> 'category',
+      j.value ->> 'title', j.value ->> 'body', j.value ->> 'url', j.value ->> 'actorId', j.value ->> 'data',
+      j.value ->> 'dedupeKey', 0
+    FROM json_each(${JSON.stringify(ns.map((n) => ({ ...n, data: n.data == null ? null : JSON.stringify(n.data) })))}) AS j
+    WHERE true
+    ON CONFLICT DO NOTHING
+    RETURNING id`);
+
 /** Removes notification `id` again when `allowed` (a rate-limit predicate) is false: a rejected call still counts. */
 export const dropOverLimit = (db: Db, id: string, allowed: SQL) =>
   db.delete(notifications).where(and(eq(notifications.id, id), not(allowed)));
@@ -237,8 +254,17 @@ export const subscriptionsSucceeded = (db: Db, ids: readonly string[], now: numb
     .set({ lastSuccessAt: now, failures: 0, updatedAt: now })
     .where(inArray(pushSubscriptions.id, [...ids]));
 
-export const subscriptionFailed = (db: Db, id: string, failures: number, now: number) =>
-  db.update(pushSubscriptions).set({ failures, updatedAt: now }).where(eq(pushSubscriptions.id, id));
+/** Each failed subscription's new failure count, in ONE statement (`[{id, failures}]`). */
+export const subscriptionsFailedSql = (failed: readonly { id: string; failures: number }[], now: number) =>
+  sql`UPDATE push_subscriptions SET failures = j.value ->> 'failures', updated_at = ${now}
+    FROM json_each(${JSON.stringify(failed)}) AS j
+    WHERE push_subscriptions.id = j.value ->> 'id'`;
+
+export const subscriptionsFailed = (
+  db: Db,
+  failed: readonly { id: string; failures: number }[],
+  now: number,
+) => db.run(subscriptionsFailedSql(failed, now));
 
 /** Most notes one retry sweep re-enqueues (DESIGN.md §9 dispatchers: LIMIT 500). */
 export const RETRY_BATCH = 500;
@@ -273,6 +299,13 @@ export const claimRetries = (db: Db, now: number) =>
     .returning({ id: notifications.id });
 
 export const explain: ExplainCase[] = [
+  {
+    name: "notifications.insertMany",
+    build: () =>
+      sql`INSERT INTO notifications (id, created_at, updated_at, user_id, kind, category, title, dedupe_key)
+        SELECT j.value ->> 'id', 0, 0, j.value ->> 'u', 'k', 'c', 't', j.value ->> 'd' FROM json_each('[]') AS j
+        WHERE true ON CONFLICT DO NOTHING RETURNING id`,
+  },
   { name: "notifications.inbox", build: (db) => inbox(db, "u", null, 30) },
   { name: "notifications.inboxBefore", build: (db) => inbox(db, "u", 1, 30) },
   { name: "notifications.unreadCount", build: (db) => unreadCount(db, "u") },
@@ -287,6 +320,6 @@ export const explain: ExplainCase[] = [
   { name: "notifications.markDelivered", build: (db) => markDelivered(db, ["a"], 0) },
   { name: "notifications.deleteSubscriptions", build: (db) => deleteSubscriptions(db, ["a"]) },
   { name: "notifications.subscriptionsSucceeded", build: (db) => subscriptionsSucceeded(db, ["a"], 0) },
-  { name: "notifications.subscriptionFailed", build: (db) => subscriptionFailed(db, "a", 1, 0) },
+  { name: "notifications.subscriptionsFailed", build: () => subscriptionsFailedSql([], 0) },
   { name: "notifications.claimRetries", build: (db) => claimRetries(db, 0) },
 ];

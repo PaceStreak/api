@@ -154,6 +154,7 @@ function summaryOf(st: State, h: HabitRow) {
 
 setHabitSource({
   reads: (db: Db, userId: string) => [repo.habitRows(db, userId), repo.logRows(db, userId)],
+  bounded: 1,
   views(results, today, weekStartsOn, sheltered): GameHabitView[] {
     const habits = (results[0] ?? []) as HabitRow[];
     const byHabit = logsByHabit((results[1] ?? []) as LogRow[]);

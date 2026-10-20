@@ -402,7 +402,7 @@ function coachRow(
 
 /**
  * Coach rows for everyone who shares with `coach`: one batch of eight set-based statements however large the
- * group (`mainChainsFor`), so a 200-member group stays far inside D1's 1,000 queries per invocation.
+ * group (`mainChainsFor`), so a 200-member group stays inside D1's 50 queries per invocation on Free.
  */
 async function coachRows(ctx: Ctx, coach: string, sharers: readonly repo.SharerRow[]) {
   const ids = [...new Set(sharers.map((s) => s.p_id))];

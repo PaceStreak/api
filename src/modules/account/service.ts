@@ -11,7 +11,15 @@
  */
 import { sql } from "drizzle-orm";
 import type { Ctx } from "../../ctx.ts";
-import { type AuthedBatch, abortUnless, isCondAbort, runBatch, type Stmt, toWire } from "../../db/batch.ts";
+import {
+  type AuthedBatch,
+  abortUnless,
+  isCondAbort,
+  packReads,
+  runBatch,
+  type Stmt,
+  toWire,
+} from "../../db/batch.ts";
 import { importJobs } from "../../db/schema/index.ts";
 import { SETTINGS } from "../../env.ts";
 import {
@@ -39,7 +47,7 @@ import { BUCKETS, calendarFeedCounter, perUser } from "../../lib/ratelimit.ts";
 import { addDays, localDate, pyWeekday, zone } from "../../lib/time.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
 import { type Meta, revokeAllStatements, securityEvent } from "../auth/service.ts";
-import { enqueueRebuild, rebuild } from "../game/service.ts";
+import { enqueueRebuild, REBUILD_STATEMENTS, rebuild } from "../game/service.ts";
 import { dispatchNotified, notify, setExportAttachmentProvider } from "../notifications/service.ts";
 import { ensureStatements } from "../profile/service.ts";
 import { buildCalendar } from "./calendar.ts";
@@ -48,7 +56,7 @@ import {
   csvReads,
   csvSheets,
   type ExportRows,
-  exportReads,
+  exportPacked,
   photoName,
   README,
 } from "./export.ts";
@@ -148,12 +156,10 @@ export async function exportData(ctx: Ctx, authed: AuthedBatch, format: "json" |
   limit.check(counter);
   const stamp = new Date(now).toISOString().slice(0, 10);
   if (format === "json") {
-    const [, , , ...rows] = await authed.read(
-      ...ensureStatements(ctx, authed, true),
-      ...exportReads(ctx.db, u),
-    );
+    const reads = exportPacked(ctx.db, u);
+    const [, , , ...rows] = await authed.read(...ensureStatements(ctx, authed, true), ...reads.stmts);
     // One top-level array element per line: still plain JSON, and a large file can be re-imported in slices.
-    const body = accountJsonString(await exportDoc(ctx, rows as unknown as ExportRows));
+    const body = accountJsonString(await exportDoc(ctx, reads.unpack(rows) as unknown as ExportRows));
     return { body, contentType: "application/json", filename: `pacestreak-${stamp}.json` } satisfies FileOut;
   }
   if (format === "ics") {
@@ -189,7 +195,8 @@ export async function exportAttachment(
   userId: string,
   cap = MAX_ATTACHMENT_BYTES,
 ): Promise<Attachment | null> {
-  const rows = (await runBatch(ctx.db, exportReads(ctx.db, userId))) as unknown as ExportRows;
+  const reads = exportPacked(ctx.db, userId);
+  const rows = reads.unpack(await runBatch(ctx.db, reads.stmts)) as unknown as ExportRows;
   const doc = buildExport(ctx.clock.now(), rows);
   if (doc === null) return null;
   const name = `pacestreak-export-${new Date(ctx.clock.now()).toISOString().slice(0, 7)}`;
@@ -256,6 +263,13 @@ function contextReads(ctx: Ctx, userId: string, ids: { workouts: string[]; weigh
   ] as const;
 }
 type ContextReads = ReturnType<typeof contextReads>;
+
+/** Context reads that grow with the account (logged days, weigh-ins) or the file (id lookups) stay unfused. */
+const CONTEXT_UNBOUNDED: ReadonlySet<number> = new Set([5, 6, 10, 11, 13, 14]);
+
+/** `contextReads` packed for the per-invocation statement cap (src/lib/plan.ts). */
+const contextPacked = (ctx: Ctx, userId: string, ids: { workouts: string[]; weighIns: string[] }) =>
+  packReads(contextReads(ctx, userId, ids), (i) => CONTEXT_UNBOUNDED.has(i));
 type ContextRows = { -readonly [K in keyof ContextReads]: Awaited<ContextReads[K]> };
 
 function existingFrom(r: ContextRows): Existing {
@@ -339,10 +353,9 @@ export async function importData(
   if (workouts.length > MAX_IMPORT_WORKOUTS) throw new HttpError(413, "Too many sessions in one file");
 
   const sections = doc as Partial<Record<Section, unknown>>;
-  const [, , ...ctxRows] = await authed.read(
-    ...ensureStatements(ctx, authed),
-    ...contextReads(ctx, authed.userId, idsToCheck(sections)),
-  );
+  const reads = contextPacked(ctx, authed.userId, idsToCheck(sections));
+  const [, , ...packed] = await authed.read(...ensureStatements(ctx, authed), ...reads.stmts);
+  const ctxRows = reads.unpack(packed);
   const pl: Planner = {
     userId: authed.userId,
     now,
@@ -353,6 +366,10 @@ export async function importData(
   };
   for (const s of SECTION_ORDER) if (s in sections) planSection(pl, s, sections[s]);
   const stmts = rowStatements(ctx, authed.userId, now, pl.rows);
+  // A file whose inserts and rebuild would not fit this request's D1 budget (src/lib/plan.ts) goes to the queue,
+  // whose slices each fit their own invocation.
+  if (ctx.stats.statements + 1 + stmts.length + REBUILD_STATEMENTS > ctx.cfg.d1Budget)
+    return queueImport(ctx, authed, file.bytes);
   if (stmts.length > 0) {
     await authed.write(...(stmts as [Stmt, ...Stmt[]]));
     await rebuild(ctx, authed.userId, { notify: false });
@@ -466,7 +483,8 @@ export async function importSlice(ctx: Ctx, jobId: string): Promise<void> {
   const sections: Partial<Record<Section, unknown>> = {};
   for (const [s, v] of runs)
     sections[s] = Array.isArray(v) ? [...((sections[s] as unknown[]) ?? []), ...v] : v;
-  const results = await runBatch(ctx.db, contextReads(ctx, job.userId, idsToCheck(sections)));
+  const reads = contextPacked(ctx, job.userId, idsToCheck(sections));
+  const results = reads.unpack(await runBatch(ctx.db, reads.stmts));
   const pl: Planner = {
     userId: job.userId,
     now,

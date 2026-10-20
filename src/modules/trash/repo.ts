@@ -3,7 +3,7 @@
  * writers live in the modules that delete things (habits, insights, nutrition, training); this module reads,
  * restores and forgets.
  */
-import { and, desc, eq, gt, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, lt, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import type { ExplainCase } from "../../db/explain.ts";
 import { trashItems, workoutSets, workouts } from "../../db/schema/index.ts";
@@ -100,7 +100,55 @@ export const reviveWorkout = (db: Db, userId: string, id: string, now: number) =
 const U = "u";
 const T = "t";
 
+export interface RestoredLog {
+  id: string;
+  habitId: string;
+  day: string;
+  amount: number;
+  note: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** JSON text per restore insert: D1 caps a value at 2 MB. */
+const LOGS_JSON = 512 * 1024;
+
+/**
+ * A restored habit's logs as `INSERT ... SELECT ... FROM json_each(?)`, one statement per 512 KB of rows (about
+ * 5,000 logs): one parameter each, so a habit with years of logs costs one or two of the Free plan's 50 D1 queries
+ * per invocation instead of one per eleven rows.
+ */
+export function insertLogsSql(userId: string, rows: readonly RestoredLog[]): SQL[] {
+  const out: SQL[] = [];
+  let part: RestoredLog[] = [];
+  let size = 0;
+  const flush = () => {
+    if (part.length === 0) return;
+    out.push(sql`INSERT INTO habit_logs (id, created_at, updated_at, user_id, habit_id, day, amount, note)
+      SELECT j.value ->> 'id', j.value ->> 'createdAt', j.value ->> 'updatedAt', ${userId}, j.value ->> 'habitId', j.value ->> 'day',
+        j.value ->> 'amount', j.value ->> 'note'
+      FROM json_each(${JSON.stringify(part)}) AS j`);
+    part = [];
+    size = 0;
+  };
+  for (const r of rows) {
+    const n = JSON.stringify(r).length + 1;
+    if (size + n > LOGS_JSON) flush();
+    part.push(r);
+    size += n;
+  }
+  flush();
+  return out;
+}
+
 export const explain: ExplainCase[] = [
+  {
+    name: "trash.insertLogs",
+    build: () =>
+      insertLogsSql("u", [
+        { id: "l", habitId: "h", day: "2026-01-01", amount: 1, note: null, createdAt: 0, updatedAt: 0 },
+      ])[0] ?? sql`SELECT 1`,
+  },
   { name: "trash.listTrash", build: (db) => listTrash(db, U, 0) },
   { name: "trash.trashById", build: (db) => trashById(db, U, T) },
   { name: "trash.trashedWorkout", build: (db) => trashedWorkout(db, U, T) },

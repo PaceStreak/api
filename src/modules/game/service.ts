@@ -15,7 +15,14 @@
 import { RULES, reached, TIERS } from "../../catalog/achievements.ts";
 import { CUSTOM_PREFIX, ENDURANCE, EXERCISES } from "../../catalog/exercises.ts";
 import type { Ctx } from "../../ctx.ts";
-import { type AuthedBatch, abortUnless, isCondAbort, runBatch, type Stmt } from "../../db/batch.ts";
+import {
+  type AuthedBatch,
+  abortUnless,
+  isCondAbort,
+  packReads,
+  runBatch,
+  type Stmt,
+} from "../../db/batch.ts";
 import type { Db } from "../../db/client.ts";
 import type { ConsumerRegistry } from "../../jobs/consumer.ts";
 import { enqueue } from "../../jobs/dispatch.ts";
@@ -23,7 +30,7 @@ import { conflict, forbidden, HttpError, notFound } from "../../lib/errors.ts";
 import { pyRound } from "../../lib/format.ts";
 import { addDays, localDate, monthKey, seasonId, weekStart, zone } from "../../lib/time.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
-import { dispatchNotified, type NotifyResult, notify } from "../notifications/service.ts";
+import { dispatchNotified, type NotifyResult, type notify, notifyMany } from "../notifications/service.ts";
 import { learnReminderHour } from "./engine/quests.ts";
 import type { Best, PrEvent } from "./engine/records.ts";
 import { recordLabel, splitKey } from "./engine/records.ts";
@@ -85,6 +92,11 @@ export type { RefreshScope } from "./repo.ts";
  */
 export interface HabitSource {
   reads(db: Db, userId: string): Stmt[];
+  /**
+   * How many leading `reads` are bounded (a user's habit list) and may be fused into the snapshot's one statement;
+   * the rest (every log ever) stay statements of their own (src/db/batch.ts `fuse`, the 2 MB value cap).
+   */
+  bounded: number;
   views(
     results: readonly unknown[],
     today: string,
@@ -173,9 +185,19 @@ export interface Loaded {
   extra: unknown[];
 }
 
-/** Statement list for a snapshot read: the base reads, the habit source's reads, then `extra`. */
-function readList(db: Db, userId: string, extra: readonly Stmt[]): Stmt[] {
-  return [...baseReads(db, userId), ...(habitSource?.reads(db, userId) ?? []), ...extra];
+/**
+ * Statement list for a snapshot read: the base reads, the habit source's reads, then `extra`, packed (`packReads`):
+ * the fourteen base reads and the habit list are fused into ONE statement, because D1 counts every statement
+ * against the per-invocation query cap (src/lib/plan.ts). Every fused part is bounded by one user's settings and
+ * aggregates; the habit logs and the caller's `extra` (a record-day scan) stay separate. `unpack` restores the
+ * order above.
+ */
+function readList(db: Db, userId: string, extra: readonly Stmt[]): ReturnType<typeof packReads> {
+  const bounded = BASE + (habitSource?.bounded ?? 0);
+  return packReads(
+    [...baseReads(db, userId), ...(habitSource?.reads(db, userId) ?? []), ...extra],
+    (i) => i >= bounded,
+  );
 }
 
 /** Parses a read batch; `null` when the profile or the default chain still has to be created. */
@@ -251,30 +273,40 @@ export interface BeforeRead {
   done(results: readonly unknown[]): void;
 }
 
-/** Reads everything a snapshot needs plus `extra`, creating the profile/default chain when missing. */
+/**
+ * Reads everything a snapshot needs plus `extra`, creating the profile/default chain when missing. With `ensure`
+ * (write paths: a recompute), the two idempotent creates ride in front of the first read batch, so a first-ever
+ * write costs no second read; read paths create them only when the first read finds them missing.
+ */
 async function load(
   ctx: Ctx,
   userId: string,
   extra: readonly Stmt[],
   authed?: AuthedBatch,
   before?: BeforeRead,
+  ensure = false,
 ): Promise<Loaded> {
   let pending = before;
+  let creating = ensure;
   const run = async () => {
-    const list = readList(ctx.db, userId, extra);
-    if (pending !== undefined) {
-      const pre = pending;
-      pending = undefined;
-      const all = [...pre.stmts, ...list] as unknown as [Stmt, ...Stmt[]];
+    const packed = readList(ctx.db, userId, extra);
+    const list = packed.stmts;
+    const pre = pending;
+    const made = creating ? ensureStatements(ctx, userId) : [];
+    pending = undefined;
+    creating = false;
+    if (pre !== undefined || made.length > 0) {
+      const head = [...made, ...(pre?.stmts ?? [])];
+      const all = [...head, ...list] as unknown as [Stmt, ...Stmt[]];
       const res = (
         authed === undefined ? await runBatch(ctx.db, all) : await authed.write(...all)
       ) as unknown[];
-      pre.done(res.slice(0, pre.stmts.length));
-      return res.slice(pre.stmts.length);
+      pre?.done(res.slice(made.length, head.length));
+      return packed.unpack(res.slice(head.length));
     }
-    if (authed === undefined) return runBatch(ctx.db, list) as Promise<unknown[]>;
+    if (authed === undefined) return packed.unpack((await runBatch(ctx.db, list)) as unknown[]);
     const [, ...rest] = (await authed.read(...list)) as unknown[];
-    return rest;
+    return packed.unpack(rest);
   };
   const first = parse(ctx, await run(), extra.length);
   if (first !== null) return first;
@@ -322,7 +354,7 @@ export async function snapshotFor(ctx: Ctx, userId: string): Promise<Snapshot> {
   return snapshotOf(await load(ctx, userId, []));
 }
 
-/** Users whose snapshot reads share one D1 batch in `snapshotsFor` (about 16 statements each). */
+/** Users whose snapshot reads share one D1 batch in `snapshotsFor` (three statements each: `readList`). */
 export const SNAPSHOT_CHUNK = 20;
 
 /**
@@ -346,12 +378,12 @@ export async function snapshotsFor(
       });
       const results = (await runBatch(
         ctx.db,
-        plans.flatMap((p) => p.list),
+        plans.flatMap((p) => p.list.stmts),
       )) as unknown[];
       let at = 0;
       for (const p of plans) {
-        const slice = results.slice(at, at + p.list.length);
-        at += p.list.length;
+        const slice = p.list.unpack(results.slice(at, at + p.list.stmts.length));
+        at += p.list.stmts.length;
         const l = parse(ctx, slice, p.ex.length) ?? (await load(ctx, p.userId, p.ex));
         out.set(p.userId, { snapshot: snapshotOf(l), extra: l.extra, held: l.achievements });
       }
@@ -372,7 +404,7 @@ export interface MainChain {
 
 /**
  * The main streak of many people (a coach's view of a group) in ONE batch of six set-based statements plus
- * `extra`, however many people: D1 counts every statement of a batch against its 1,000 queries per invocation,
+ * `extra`, however many people: D1 counts every statement of a batch against its queries per invocation (50 on Free),
  * so `snapshotsFor` (about 16 statements a person) cannot serve a 200-member group. Same chain as the snapshot's
  * (`chainViewOf`). Someone whose default chain was never written gets it in memory (nothing to write on a read);
  * anyone without a profile goes through `snapshotsFor`, which creates it.
@@ -553,23 +585,17 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
   const held = new Set(l.achievements.map((a) => `${a.achievementId}:${a.tier ?? ""}`));
   const badges: NewBadge[] = [];
   const writes: Stmt[] = [];
+  const unlocked: repo.AchievementRow[] = [];
   for (const rule of RULES) {
     for (const tier of reached(rule, snap.context)) {
       if (held.has(`${rule.id}:${tier ?? ""}`)) continue;
-      writes.push(
-        repo.insertAchievement(
-          db,
-          {
-            id: uuid7(now),
-            userId,
-            achievementId: rule.id,
-            tier,
-            unlockedOn: snap.today,
-            value: pyRound(rule.value(snap.context), 1),
-          },
-          now,
-        ),
-      );
+      unlocked.push({
+        id: uuid7(now),
+        achievementId: rule.id,
+        tier,
+        unlockedOn: snap.today,
+        value: pyRound(rule.value(snap.context), 1),
+      });
       badges.push({
         id: rule.id,
         title: rule.title,
@@ -581,6 +607,8 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
       });
     }
   }
+  // Every new badge in one statement: the Free plan counts statements (src/lib/plan.ts).
+  if (unlocked.length > 0) writes.push(repo.insertAchievements(db, userId, unlocked, now));
   snap = withAchievements(
     snap,
     badges.map((b) => ({ tier: b.tier, day: snap.today })),
@@ -665,6 +693,9 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
 
   const notes: number[] = [];
   const gamified = profile.gamificationEnabled;
+  // Events and notes are collected and written as one statement each (src/lib/plan.ts: statements are counted).
+  const events: repo.EventRow[] = [];
+  const inbox: Parameters<typeof notify>[1][] = [];
   if (opts.notify ?? true) {
     const visible =
       profile.visibility !== "private" &&
@@ -676,18 +707,10 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
       data: Record<string, unknown>,
       workoutId?: string | null,
     ) => {
-      if (visible)
-        writes.push(
-          repo.emitEvent(
-            db,
-            { id: uuid7(now), userId, kind, refKey, day: snap.today, data, workoutId: workoutId ?? null },
-            now,
-          ),
-        );
+      if (visible) events.push({ id: uuid7(now), kind, refKey, data, workoutId: workoutId ?? null });
     };
     const note = (n: Parameters<typeof notify>[1]) => {
-      notes.push(writes.length);
-      writes.push(notify(ctx, n));
+      inbox.push(n);
     };
     for (const b of gamified ? badges : []) {
       event("achievement", `${b.id}:${b.tier ?? "None"}`, {
@@ -755,6 +778,12 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
         dedupeKey: `milestone:${ref}`,
       });
     }
+  }
+
+  if (events.length > 0) writes.push(repo.emitEvents(db, userId, snap.today, events, now));
+  if (inbox.length > 0) {
+    notes.push(writes.length);
+    writes.push(notifyMany(ctx, inbox));
   }
 
   const guard = abortUnless(db, repo.revIs(userId, prev?.rev ?? null));
@@ -853,7 +882,7 @@ export async function recompute(
   const scoped = opts.scope === undefined ? { ...opts, scope: NO_SCOPE } : opts;
   for (let attempt = 1; ; attempt++) {
     const before = attempt === 1 ? change?.before : undefined;
-    const l = await load(ctx, userId, recomputeExtra(ctx, userId, scoped), change?.authed, before);
+    const l = await load(ctx, userId, recomputeExtra(ctx, userId, scoped), change?.authed, before, true);
     const prefix = change?.apply?.(l) ?? [];
     const p = plan(ctx, l, scoped, prefix);
     try {
@@ -873,6 +902,12 @@ export async function recompute(
 
 /** The public Outcome (no snapshot), as the training routes return it. */
 export const publicOutcome = ({ snapshot: _, ...o }: Outcome & { snapshot: Snapshot }): Outcome => o;
+
+/**
+ * Most D1 statements `rebuild` spends (the aggregate refresh, the recompute's read and write, a records projection
+ * in 500-row inserts); test/jobs/d1-limits.test.ts measures it on the heavy account.
+ */
+export const REBUILD_STATEMENTS = 24;
 
 /** Rebuilds every aggregate from source rows, then recomputes with every record key (merge, import, restore). */
 export async function rebuild(ctx: Ctx, userId: string, opts: { notify?: boolean } = {}): Promise<Outcome> {

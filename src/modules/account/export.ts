@@ -3,8 +3,7 @@
  * sheets. Every section is read in one D1 batch (no per-habit query); building the document is pure.
  */
 import { CUSTOM_PREFIX, EXERCISE_BY_ID } from "../../catalog/exercises.ts";
-import type { Stmt } from "../../db/batch.ts";
-import { toWire } from "../../db/batch.ts";
+import { packReads, type Stmt, toWire } from "../../db/batch.ts";
 import type { Db } from "../../db/client.ts";
 import { type CsvCell, csvRow } from "../../heavy/csv.ts";
 import { pyStr } from "../../lib/format.ts";
@@ -66,6 +65,19 @@ type Reads = ReturnType<typeof exportReads>;
 export type ExportRows = { -readonly [K in keyof Reads]: Awaited<Reads[K]> };
 
 export const exportStatements = (db: Db, u: string): Stmt[] => [...exportReads(db, u)];
+
+/**
+ * Reads of `exportReads` that grow with a user's history (workouts, sets, logs, meals ...): each stays its own
+ * statement, because a fused part must fit D1's 2 MB value size. Everything else is fused into one statement.
+ */
+const EXPORT_UNBOUNDED: ReadonlySet<number> = new Set([6, 7, 9, 15, 17, 18, 22, 24, 25, 26, 27, 28, 32, 38]);
+
+/**
+ * `exportReads` packed for the Free plan's 50 D1 queries per invocation (src/lib/plan.ts): about fifteen statements
+ * instead of forty-two. `unpack` gives back the rows in `exportReads` order.
+ */
+export const exportPacked = (db: Db, u: string) =>
+  packReads(exportReads(db, u), (i) => EXPORT_UNBOUNDED.has(i));
 
 const date = (d: string | null) => d;
 const km = (m: number | null) => (m ? m / 1000 : null);

@@ -81,12 +81,11 @@
       "preview_urls": true,
       "routes": [],
       "observability": { "enabled": true, "head_sampling_rate": 1 },
-      "limits": { "cpu_ms": 30000 },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "pacestreak-staging",
-          "database_id": "00000000-0000-0000-0000-000000000001",
+          "database_id": "9bbe3492-9cfe-41a7-ade1-c9cdcca67946",
           "migrations_dir": "migrations"
         }
       ],
@@ -108,7 +107,6 @@
           }
         ]
       },
-      "send_email": [{ "name": "EMAIL" }],
       "ratelimits": [
         { "name": "RL_SIGNUP", "namespace_id": "2001", "simple": { "limit": 5, "period": 60 } },
         { "name": "RL_LOGIN", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } },
@@ -117,10 +115,11 @@
         { "name": "RL_30", "namespace_id": "2005", "simple": { "limit": 30, "period": 60 } },
         { "name": "RL_SEARCH", "namespace_id": "2006", "simple": { "limit": 60, "period": 60 } }
       ],
-      "triggers": { "crons": ["*/5 * * * *", "2,17,32,47 * * * *", "23 3 * * *"] },
+      // No crons: the Free plan allows 5 per account and production uses 3. Run jobs by hand with `wrangler dev --test-scheduled`.
+      "triggers": { "crons": [] },
       "vars": {
         "ENVIRONMENT": "staging",
-        "MAILER": "cloudflare",
+        "MAILER": "console",
         // Staging keeps email off: it never mails real people. "1" plus MAILER=brevo and its own key turns it on.
         "EMAIL_ENABLED": "0",
         "COOKIE_DOMAIN": "",

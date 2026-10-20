@@ -102,13 +102,13 @@ export interface SignedIn {
   client: Client;
 }
 
-/** conftest `register`: sign up and confirm the address. */
+/**
+ * conftest `register`: sign up. Signup mails nothing; the first sign-in's emailed code confirms the address
+ * (`loginResponse`), which is how `signup()` below ends up verified.
+ */
 export async function register(client: Client, email = uniqueEmail(), password = PASSWORD): Promise<string> {
   const res = await client.call("/v1/auth/signup", { json: { email, password } });
   expect(res.status, await res.clone().text()).toBe(201);
-  const code = otpCode("verify-email", email);
-  const v = await client.call("/v1/auth/verify-email", { json: { email, code } });
-  expect(v.status).toBe(200);
   return email;
 }
 
@@ -172,4 +172,13 @@ export async function signup(email = uniqueEmail(), password = PASSWORD): Promis
 /** Sign in an existing account over HTTP with a fresh client. */
 export async function login(email: string, password = PASSWORD): Promise<SignedIn> {
   return signedIn(new Client(), email, password);
+}
+
+/** Ask for a confirmation code (signup mails none now) and return it from the mailbox. */
+export async function verificationCode(client: Client, email: string): Promise<string> {
+  const res = await client.call("/v1/auth/resend-verification", { json: { email } });
+  expect(res.status, await res.clone().text()).toBeLessThan(300);
+  const code = otpCode("verify-email", email);
+  expect(code, "no confirmation code was mailed").toBeTruthy();
+  return code ?? "";
 }

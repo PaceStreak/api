@@ -2,7 +2,16 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { totpAt } from "../../src/lib/crypto/totp.ts";
-import { Client, loginToken, otpCode, PASSWORD, register, sent, signup } from "../fixtures/auth.ts";
+import {
+  Client,
+  loginToken,
+  otpCode,
+  PASSWORD,
+  register,
+  sent,
+  signup,
+  verificationCode,
+} from "../fixtures/auth.ts";
 import { useFixedClock } from "../fixtures/clock.ts";
 import { uniqueEmail } from "../fixtures/db.ts";
 import { expectRoundTrips, jsonOf } from "../fixtures/http.ts";
@@ -53,7 +62,7 @@ describe("test_auth", () => {
     const client = new Client();
     const email = uniqueEmail();
     await client.call("/v1/auth/signup", { json: { email, password: PASSWORD } });
-    const code = otpCode("verify-email", email);
+    const code = await verificationCode(client, email);
     expect((await client.call("/v1/auth/verify-email", { json: { email, code } })).status).toBe(200);
     const token = await loginToken(client, email);
     const me = await jsonOf<{ is_verified: boolean }>(await client.call("/v1/auth/me", bearer(token)));
@@ -63,7 +72,9 @@ describe("test_auth", () => {
   it("verify_email_code_is_single_use", async () => {
     const client = new Client();
     const email = await register(client);
-    const code = otpCode("verify-email", email);
+    const code = await verificationCode(client, email);
+    const first = await client.call("/v1/auth/verify-email", { json: { email, code } });
+    expect(first.status).toBe(200);
     const again = await client.call("/v1/auth/verify-email", { json: { email, code } });
     expect(again.status).toBe(400);
   });
@@ -291,7 +302,7 @@ describe("auth (rewrite)", () => {
     const client = new Client();
     const email = uniqueEmail();
     await client.call("/v1/auth/signup", { json: { email, password: PASSWORD } });
-    const code = otpCode("verify-email", email) ?? "";
+    const code = await verificationCode(client, email);
     const wrong = code === "000000" ? "111111" : "000000";
     for (let i = 0; i < 5; i++) {
       expect((await client.call("/v1/auth/verify-email", { json: { email, code: wrong } })).status).toBe(400);

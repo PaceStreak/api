@@ -326,27 +326,13 @@ export async function signup(
   const email = lower(body.email);
   const userId = uuid7(now);
   const hashed = await hashPassword(body.password, ctx.cfg.pepper);
-  // Email on: a verification code goes out. Email off: there is no inbox to recover through, so the account starts
-  // with recovery codes instead, shown once in this response (the only time they exist in clear).
-  let code: string | null = null;
+  // Email on: no email here. Every new account starts with email codes at sign-in, and the app signs in straight
+  // after signup, so that first sign-in code confirms the address: one email, not two (a separate verification
+  // code here only spent Brevo's daily quota). Email off: there is no inbox to recover through, so the account
+  // starts with recovery codes instead, shown once in this response (the only time they exist in clear).
   let recovery: { codes: string[]; hmacs: string[] } | null = null;
   const follow: Stmt[] = [];
-  if (ctx.cfg.emailEnabled) {
-    code = sixDigitCode();
-    follow.push(
-      ...repo.issueCode(
-        ctx.db,
-        {
-          id: uuid7(now),
-          userId,
-          purpose: "email_verify",
-          codeHmac: await emailCodeHmac(ctx, "email_verify", userId, code),
-          expiresAt: now + SETTINGS.emailVerifyTokenHours * HOUR,
-        },
-        now,
-      ),
-    );
-  } else {
+  if (!ctx.cfg.emailEnabled) {
     recovery = await newRecoveryCodes(ctx, userId);
     follow.push(...repo.replaceRecoveryCodes(ctx.db, userId, recovery.hmacs, now));
   }
@@ -363,8 +349,6 @@ export async function signup(
     throw err;
   }
   const out = userOut({ id: userId, email, isActive: true, isVerified: false });
-  // After the commit: a failed send leaves the account, and the user can ask for another code.
-  if (code !== null) await sendVerificationEmail(mailer(ctx), email, code);
   return recovery === null ? out : { ...out, recovery_codes: recovery.codes };
 }
 

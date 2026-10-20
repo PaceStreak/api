@@ -283,13 +283,14 @@ describe("EMAIL_ENABLED=0", () => {
 });
 
 describe("EMAIL_ENABLED=1 is unchanged", () => {
-  it("signup mails a code and returns no recovery codes; /v1/config and /v1/me say so", async () => {
+  it("signup mails nothing and returns no recovery codes; /v1/config and /v1/me say so", async () => {
     const email = uniqueEmail();
     const res = await api("/v1/auth/signup", { json: { email, password: PASSWORD } });
     expect(res.status).toBe(201);
     const body = await jsonOf<Record<string, unknown>>(res);
     expect(body).not.toHaveProperty("recovery_codes");
-    expect(mailTo(email).some((m) => m.includes("Confirm your PaceStreak email"))).toBe(true);
+    // The first sign-in's emailed code confirms the address, so signup itself mails nothing.
+    expect(mailTo(email)).toEqual([]);
     expect(await (await api("/v1/config")).json()).toEqual({ email_enabled: true, push_available: true });
     const me = await signupOn();
     const prefs = await jsonOf<{ email_available: boolean }>(
@@ -302,8 +303,10 @@ describe("EMAIL_ENABLED=1 is unchanged", () => {
     const hb = uniqueHandle("ob");
     const email = uniqueEmail();
     await api("/v1/auth/signup", { json: { email, password: PASSWORD } });
-    // Email on: the sign-in asks for a mailed code, even before the address is confirmed.
     const token = await loginToken(new Client(), email);
+    // The sign-in's emailed code confirms the address, so the only signed-in unconfirmed account is one whose
+    // confirmation lapsed (say, an address that changed while email was off): set that state directly.
+    await env.DB.prepare("UPDATE users SET is_verified = 0 WHERE email = ?").bind(email).run();
     await api("/v1/me/onboarding", {
       token,
       json: { handle: uniqueHandle("oa"), birth_year: 1990, accept_terms: true, visibility: "public" },

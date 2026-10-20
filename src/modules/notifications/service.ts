@@ -339,7 +339,8 @@ export async function subscribe(
 ) {
   if (ctx.cfg.vapid === null) throw notFound(PUSH_OFF);
   const { p256dh, auth } = body.keys;
-  if (!p256dh || !auth || p256dh.length > 200 || auth.length > 100) { // gitleaks:allow (length check, not a key)
+  const malformed = !p256dh || !auth || p256dh.length > 200 || auth.length > 100; // gitleaks:allow
+  if (malformed) {
     throw new HttpError(422, "Malformed subscription");
   }
   // The consumer POSTs to this endpoint later; keep it off our own network (re-checked at send time).

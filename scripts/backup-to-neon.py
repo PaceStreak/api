@@ -123,9 +123,11 @@ def main(dump_path: str, url: str) -> None:
         if not rows:
             continue
         script.write(
-            f"COPY {NEW}.{q(t)} ({', '.join(q(n) for n in names)}) FROM STDIN WITH (FORMAT csv, NULL '\\N');\n"
+            f"COPY {NEW}.{q(t)} ({', '.join(q(n) for n in names)}) FROM STDIN "
+            f"WITH (FORMAT csv, NULL '\\N', FORCE_NULL ({', '.join(q(n) for n in names)}));\n"
         )
-        w = csv.writer(script, lineterminator="\n")
+        # Every field quoted: a bare carriage return or "\." inside a value can't end a row or the stream.
+        w = csv.writer(script, lineterminator="\n", quoting=csv.QUOTE_ALL)
         for r in rows:
             w.writerow([cell(v) for v in r])
         script.write("\\.\n")

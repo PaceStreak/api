@@ -1,6 +1,6 @@
 /** Training fixtures: test_training.py `workout()` and test_social.py `log_session()` over HTTP. */
 import { expect } from "vitest";
-import { api, jsonOf } from "./http.ts";
+import { api, jsonOf, recordStatements } from "./http.ts";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 export const HOUR = 3_600_000;
@@ -64,6 +64,9 @@ export function upload(
       method: "POST",
       body: form,
       headers: { Authorization: `Bearer ${token}`, "CF-Connecting-IP": "10.9.9.9" },
+    }).then((res) => {
+      recordStatements(`POST ${path}`, res);
+      return res;
     }),
   );
 }

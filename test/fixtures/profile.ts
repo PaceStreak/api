@@ -6,7 +6,7 @@ import { SELF } from "cloudflare:test";
 import { expect } from "vitest";
 import { type SignedIn, signup } from "./auth.ts";
 import { uniqueEmail } from "./db.ts";
-import { api, BASE, jsonOf, randomIp } from "./http.ts";
+import { api, BASE, jsonOf, randomIp, recordStatements } from "./http.ts";
 
 let n = 0;
 export const uniqueHandle = (prefix = "p") => `${prefix}${Date.now().toString(36)}${n++}`.slice(0, 30);
@@ -43,5 +43,8 @@ export function upload(path: string, token: string, content: string | Uint8Array
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "CF-Connecting-IP": randomIp() },
     body: form,
+  }).then((res) => {
+    recordStatements(`POST ${path}`, res);
+    return res;
   });
 }

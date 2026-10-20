@@ -3,8 +3,12 @@
  * heavy account can answer, plus the writes the app makes most. The `X-D1-Round-Trips` header is the counting D1
  * wrapper's total for the request, so an N+1 on a large account fails here by construction.
  */
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
-import { api } from "../fixtures/http.ts";
+import { workouts } from "../../src/db/schema/index.ts";
+import { testDb } from "../fixtures/db.ts";
+import { api, jsonOf } from "../fixtures/http.ts";
+import { upload } from "../fixtures/profile.ts";
 import { type HeavyUser, heavyUser } from "./heavy.ts";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -110,5 +114,71 @@ describe("round-trip budgets on the heavy user", () => {
         kcal: 300,
       }),
     ).toBeLessThanOrEqual(2);
+  }, 60_000);
+
+  // `api()` and `upload()` fail any request over the plan's D1 statement budget (test/fixtures/http.ts): the Workers
+  // Free plan allows 50 queries per invocation, every statement of a batch counted (src/lib/plan.ts).
+  it("export, trash restore and import stay within the D1 statement budget on the heavy account", async () => {
+    for (const format of ["json", "csv", "ics"]) {
+      const res = await api(`/v1/me/export?format=${format}`, { token: h.token });
+      expect(res.status, format).toBe(200);
+    }
+    // A workout to the trash and back: the restore recomputes the projection in the same request.
+    const [w] = await testDb()
+      .db.select({ id: workouts.id })
+      .from(workouts)
+      .where(and(eq(workouts.userId, h.userId), isNull(workouts.deletedAt)))
+      .orderBy(desc(workouts.startedAt))
+      .limit(1);
+    expect(w).toBeDefined();
+    expect((await api(`/v1/workouts/${w?.id}`, { method: "DELETE", token: h.token })).status).toBe(200);
+    // A habit with its logs to the trash and back.
+    expect((await api(`/v1/habits/${h.habitId}`, { method: "DELETE", token: h.token })).status).toBeLessThan(
+      300,
+    );
+    const trash = await jsonOf<{ id: string; kind: string }[]>(await api("/v1/trash", { token: h.token }));
+    for (const kind of ["workout", "habit"]) {
+      const item = trash.find((t) => t.kind === kind);
+      expect(item, kind).toBeDefined();
+      const res = await api(`/v1/trash/${item?.id}/restore`, { method: "POST", token: h.token });
+      expect(res.status, `${kind}: ${await res.clone().text()}`).toBe(200);
+    }
+    // An inline import into the heavy account: its context reads, the bulk insert and the rebuild.
+    const doc = {
+      format: "pacestreak-export",
+      version: 3,
+      workouts: [
+        {
+          id: crypto.randomUUID(),
+          discipline: "run",
+          started_at: iso(Date.now() - 86_400_000),
+          duration_sec: 1200,
+          distance_m: 3000,
+        },
+      ],
+    };
+    const imported = await upload("/v1/me/import", h.token, JSON.stringify(doc));
+    expect(imported.status, await imported.clone().text()).toBe(200);
+    // The largest sync batch the API accepts: 200 sessions with ten sets each, one recompute.
+    const ops = Array.from({ length: 200 }, (_, i) => ({
+      op: "put",
+      id: crypto.randomUUID(),
+      client_updated_at: iso(Date.now()),
+      workout: {
+        discipline: "strength",
+        started_at: iso(Date.now() - (i + 2) * 86_400_000),
+        client_updated_at: iso(Date.now()),
+        duration_sec: 3600,
+        sets: Array.from({ length: 10 }, (_, k) => ({
+          exercise_id: k % 2 === 0 ? "back-squat" : "bench-press",
+          position: k,
+          set_index: k,
+          weight_kg: 60 + k,
+          reps: 5,
+        })),
+      },
+    }));
+    const res = await api("/v1/workouts/batch", { json: { ops }, token: h.token });
+    expect(res.status, await res.clone().text()).toBe(200);
   }, 60_000);
 });

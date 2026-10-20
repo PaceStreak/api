@@ -1,6 +1,6 @@
 /**
- * The coach view on a large group. D1 counts every statement of a batch against its 1,000 queries per Worker
- * invocation (https://developers.cloudflare.com/d1/platform/limits/, "Batch limits"), so the per-member snapshot
+ * The coach view on a large group. D1 counts every statement of a batch against its queries per Worker
+ * invocation (50 on Free, 1,000 on Paid) (https://developers.cloudflare.com/d1/platform/limits/, "Batch limits"), so the per-member snapshot
  * reads (~18 statements each) would break a 200-member group. `mainChainsFor` reads every member with a fixed
  * handful of set-based statements; these tests pin the statement count and the rows against the full snapshot.
  */

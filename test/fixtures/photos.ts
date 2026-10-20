@@ -1,6 +1,6 @@
 /** Photo uploads for route tests, shaped like the app's (src/lib/photos.ts). */
 import { SELF } from "cloudflare:test";
-import { BASE, randomIp } from "./http.ts";
+import { BASE, randomIp, recordStatements } from "./http.ts";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const ascii = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
@@ -27,5 +27,8 @@ export function putPhoto(
       ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
     },
     body: bytes,
+  }).then((res) => {
+    recordStatements(`PUT /v1/body-photos/${id}`, res);
+    return res;
   });
 }

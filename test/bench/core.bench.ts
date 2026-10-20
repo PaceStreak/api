@@ -4,6 +4,7 @@
  */
 import { beforeAll, describe } from "vitest";
 import type { AuthedBatch } from "../../src/db/batch.ts";
+import { hashPassword, verifyPassword } from "../../src/lib/crypto/pbkdf2.ts";
 import { fold } from "../../src/lib/fold.ts";
 import { formatG, pyRound } from "../../src/lib/format.ts";
 import { localParts } from "../../src/lib/time.ts";
@@ -25,6 +26,29 @@ describe("lib", () => {
   benchCase("localParts (memoised zone)", () => localParts(1_760_000_000_000, "Asia/Kolkata"), {
     budgetMs: 0.05,
   });
+});
+
+/**
+ * PBKDF2-SHA256 at 100,000 iterations (OWNER-DECISIONS; never lowered). WebCrypto runs it natively, but it is CPU the
+ * isolate spends synchronously on the request's thread, so it counts toward the Workers CPU limit (10 ms on Free):
+ * this wall time on the local workerd is its CPU cost. Staging `wrangler tail` cpuTime on /v1/auth/login is the
+ * real gate (CUTOVER.md G-1).
+ */
+describe("crypto", () => {
+  const pepper = new Uint8Array(32).fill(7);
+  let stored = "";
+  beforeAll(async () => {
+    stored = await hashPassword("correct horse battery staple", pepper);
+  });
+  benchCase(
+    "PBKDF2-SHA256 100k verify",
+    () => verifyPassword(stored, "correct horse battery staple", pepper),
+    {
+      budgetMs: 100,
+      ops: 3,
+      samples: 7,
+    },
+  );
 });
 
 describe("db", () => {

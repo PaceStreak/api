@@ -4,6 +4,9 @@
  */
 import { SELF } from "cloudflare:test";
 import { expect } from "vitest";
+import { d1Budget } from "../../src/lib/plan.ts";
+
+const D1_BUDGET = d1Budget("free");
 
 export const BASE = "https://api.pacestreak.test";
 export const APP_ORIGIN = "https://app.pacestreak.com";
@@ -26,11 +29,23 @@ export function api(path: string, opts: CallOptions = {}): Promise<Response> {
   if (opts.token !== undefined) headers.Authorization = `Bearer ${opts.token}`;
   // Per-IP limits are real in tests: a fresh address per call keeps unrelated tests from sharing a bucket.
   headers["CF-Connecting-IP"] ??= randomIp();
-  return SELF.fetch(`${BASE}${path}`, {
-    method: opts.method ?? (body === undefined ? "GET" : "POST"),
-    headers,
-    ...(body === undefined ? {} : { body }),
-  });
+  const method = opts.method ?? (body === undefined ? "GET" : "POST");
+  return SELF.fetch(`${BASE}${path}`, { method, headers, ...(body === undefined ? {} : { body }) }).then(
+    (res) => {
+      recordStatements(`${method} ${path}`, res);
+      return res;
+    },
+  );
+}
+
+/**
+ * Every request through `api()` must stay within the D1 query budget of one Worker invocation (src/lib/plan.ts):
+ * the Free plan allows 50 queries, each statement of a batch counted. A route over it fails its own test here.
+ */
+export function recordStatements(label: string, res: Response): void {
+  const n = Number(res.headers.get("X-D1-Statements"));
+  if (Number.isNaN(n)) return;
+  expect(n, `D1 statements for ${label}`).toBeLessThanOrEqual(D1_BUDGET);
 }
 
 export function randomIp(): string {

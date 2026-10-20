@@ -14,7 +14,7 @@ const RFC = {
   asPublic: "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
   uaPrivate: "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94",
   uaPublic: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
-  auth: "BTBZMqHH6r4Tts7J_aSIgg",
+  auth: "BTBZMqHH6r4Tts7J_aSIgg", // gitleaks:allow (RFC 8291 published test vector)
   salt: "DGv6ra1nlYgDCS1FRnbzlw",
   body:
     "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6" +

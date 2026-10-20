@@ -5,10 +5,10 @@ tracker: about 265 routes under `/v1`, a scheduler and a job queue, in one
 Cloudflare Worker. TypeScript, [Hono](https://hono.dev), D1 through
 [Drizzle](https://orm.drizzle.team), [Zod](https://zod.dev).
 
-> **Branch `next` is this TypeScript service.** `main` still holds the Python
-> (FastAPI) service that serves `api.pacestreak.com` until the cutover in
-> [`docs/rewrite/CUTOVER.md`](./docs/rewrite/CUTOVER.md) merges `next` into
-> `main`. Read the old code with `git show main:app/<path>`.
+> **`main` is this service, live at `api.pacestreak.com` since 2026-10-19.**
+> The earlier Python (FastAPI) service is kept on branch `old`; read it with
+> `git show old:app/<path>`. How the move was done:
+> [`docs/rewrite/CUTOVER.md`](./docs/rewrite/CUTOVER.md).
 
 Copyright (c) 2026 PaceStreak. Licensed under [AGPL-3.0](./LICENSE): anyone
 running a modified version over a network must offer its source to its users.

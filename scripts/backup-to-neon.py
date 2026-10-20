@@ -16,7 +16,6 @@ indexes are not copied, since this is a restorable copy, not a live database.
 Needs only the standard library and `psql` on PATH. Prints counts, never data.
 """
 
-import csv
 import io
 import json
 import os
@@ -43,12 +42,18 @@ def q(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def cell(v):
+def lit(v) -> str:
+    """A SQL literal. Plain INSERTs, not COPY: COPY's end marker is read differently by older psql clients
+    against a newer server, which broke the load in CI."""
     if v is None:
-        return r"\N"
+        return "NULL"
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, (int, float)):
+        return repr(v)
     if isinstance(v, bytes):
-        return "\\x" + v.hex()
-    return v
+        return f"'\\x{v.hex()}'::bytea"
+    return "'" + str(v).replace("'", "''") + "'"
 
 
 PAGE = 2000
@@ -122,15 +127,10 @@ def main(dump_path: str, url: str) -> None:
         counts.append((t, len(rows)))
         if not rows:
             continue
-        script.write(
-            f"COPY {NEW}.{q(t)} ({', '.join(q(n) for n in names)}) FROM STDIN "
-            f"WITH (FORMAT csv, NULL '\\N', FORCE_NULL ({', '.join(q(n) for n in names)}));\n"
-        )
-        # Every field quoted: a bare carriage return or "\." inside a value can't end a row or the stream.
-        w = csv.writer(script, lineterminator="\n", quoting=csv.QUOTE_ALL)
-        for r in rows:
-            w.writerow([cell(v) for v in r])
-        script.write("\\.\n")
+        cols_sql = ", ".join(q(n) for n in names)
+        for i in range(0, len(rows), 500):
+            values = ",\n".join("(" + ", ".join(lit(v) for v in r) + ")" for r in rows[i : i + 500])
+            script.write(f"INSERT INTO {NEW}.{q(t)} ({cols_sql}) VALUES\n{values};\n")
     script.write(
         f"DROP SCHEMA IF EXISTS {LIVE} CASCADE;\nALTER SCHEMA {NEW} RENAME TO {LIVE};\n"
         f"COMMENT ON SCHEMA {LIVE} IS 'Nightly copy of the production D1 database';\nCOMMIT;\n"

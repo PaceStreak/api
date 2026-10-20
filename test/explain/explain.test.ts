@@ -36,11 +36,20 @@ async function plan(c: ExplainCase): Promise<string[]> {
   return res.results.map((r) => r.detail);
 }
 
-/** Full scans of tables outside SMALL_TABLES. */
+/**
+ * Full scans of tables outside SMALL_TABLES. A `VIRTUAL TABLE` scan is a `json_each` over a bound parameter (a
+ * list of keys, ids or record families), not user data.
+ */
 function fullScans(details: readonly string[]): string[] {
   return details.filter((d) => {
     const m = /^SCAN (\w+)/.exec(d);
-    return m !== null && m[1] !== undefined && !SMALL_TABLES.has(m[1]) && !/^SCAN CONSTANT ROW/.test(d);
+    return (
+      m !== null &&
+      m[1] !== undefined &&
+      !SMALL_TABLES.has(m[1]) &&
+      !/^SCAN CONSTANT ROW/.test(d) &&
+      !/^SCAN \w+ VIRTUAL TABLE/.test(d)
+    );
   });
 }
 

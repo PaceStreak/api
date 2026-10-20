@@ -1,10 +1,11 @@
 import { env } from "cloudflare:test";
-import { and, eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   FOLD_COLUMNS,
   foldLike,
+  fuse,
   rateLimitGuard,
   runBatch,
   SESSION_LOGGED_OUT,
@@ -248,6 +249,55 @@ describe("D1 batch semantics the design relies on (gate G-3, local D1)", () => {
         .returning({ id: notifications.id });
     expect(await insert()).toHaveLength(1);
     expect(await insert()).toEqual([]);
+  });
+});
+
+describe("fuse", () => {
+  it("returns what each select returns on its own, in one statement", async () => {
+    const u = await seedUser(t.db);
+    const now = Date.now();
+    await t.db.insert(notifications).values(
+      [1, 2, 3].map((i) => ({
+        id: uuid7(now + i),
+        userId: u.userId,
+        kind: "k",
+        category: "system",
+        title: `n${i}`,
+        body: i === 2 ? null : "b",
+        data: i === 1 ? { nested: { ok: true }, list: [1, 2.5] } : null,
+        dedupeKey: `d${i}`,
+        createdAt: now + i,
+        updatedAt: now + i,
+      })),
+    );
+    const parts = () =>
+      [
+        t.db.select().from(users).where(eq(users.id, u.userId)),
+        t.db
+          .select({ title: notifications.title, data: notifications.data, body: notifications.body })
+          .from(notifications)
+          .where(eq(notifications.userId, u.userId))
+          .orderBy(desc(notifications.createdAt))
+          .limit(2),
+        t.db
+          .select()
+          .from(notifications)
+          .where(eq(notifications.userId, u.userId))
+          .orderBy(asc(notifications.id)),
+        t.db.select({ id: habits.id }).from(habits).where(eq(habits.userId, u.userId)),
+      ] as const;
+    const plain = await runBatch(t.db, parts());
+    t.reset();
+    const [fused] = (await runBatch(t.db, [fuse(parts())])) as unknown as [unknown[]];
+    expect(t.stats.statements).toBe(1);
+    expect(fused).toEqual(plain);
+    expect((fused[1] as { title: string }[]).map((r) => r.title)).toEqual(["n3", "n2"]);
+    expect(fused[3]).toEqual([]);
+  });
+
+  it("refuses a statement that is not a select", async () => {
+    const part = t.db.run(sql`DELETE FROM habits WHERE id = ${"x"}`);
+    await expect(runBatch(t.db, [fuse([part])])).rejects.toThrow(/not a select/);
   });
 });
 

@@ -9,9 +9,9 @@
  * - `withFold` / `withFoldPatch`: the only way to write `*_fold` columns.
  * - `toWire(ms)`: the only timestamp format on the wire.
  */
-import { and, eq, getTableName, type SQL, sql } from "drizzle-orm";
+import { and, eq, getTableName, is, type SQL, sql } from "drizzle-orm";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
-import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
+import { type SQLiteColumn, SQLiteSelectBase, type SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Ctx } from "../ctx.ts";
 import { constraintMessage, HttpError, SLOW_DOWN } from "../lib/errors.ts";
 import { foldOrNull, likePattern } from "../lib/fold.ts";
@@ -66,6 +66,86 @@ export async function runBatch<T extends readonly Stmt[]>(db: Db, stmts: T): Pro
   });
   const results = await db.$client.batch(bound);
   return results.map((r, i) => prepared[i]?.mapResult(r, true)) as unknown as BatchResponse<T>;
+}
+
+/** A prepared drizzle select: its selected fields, in SELECT-list order. */
+interface PreparedSelect extends DrizzlePrepared {
+  fields?: readonly unknown[];
+}
+
+/**
+ * Several drizzle selects as ONE D1 statement. The Workers Free plan allows 50 D1 queries per invocation and counts
+ * every statement of a batch (src/lib/plan.ts), so a request that reads fifteen small tables spends fifteen of them;
+ * fused, it spends one. Each select becomes a CTE whose columns are renamed positionally, and the outer row carries
+ * each one's rows as a JSON array of arrays, which the select's own mapper then decodes exactly as it would a batch
+ * result (values come back in SELECT-list order, so booleans, JSON and timestamp columns map the same).
+ *
+ * The result of the fused statement is the list of the parts' results, in order. Limits: each part's JSON must stay
+ * under D1's 2 MB value size, so fuse bounded reads only (one user's settings, chains, badges), never an unbounded
+ * history; parts use drizzle's anonymous `?` parameters (D1's 100-parameter cap applies to the sum); no BLOB columns.
+ */
+export function fuse(stmts: readonly Stmt[]): Stmt {
+  const fused = {
+    _prepare(): DrizzlePrepared {
+      const prepared = stmts.map((q) => (q as unknown as { _prepare(): PreparedSelect })._prepare());
+      const parts = prepared.map((p, i) => {
+        const { sql: text, params } = p.getQuery();
+        const n = p.fields?.length ?? 0;
+        if (n === 0) throw new Error(`fuse: part ${i} is not a select with fields`);
+        if (/\?\d/.test(text)) throw new Error(`fuse: part ${i} uses numbered parameters`);
+        const cols = Array.from({ length: n }, (_, c) => `c${c}`).join(", ");
+        return { text, params, cols };
+      });
+      const ctes = parts.map((p, i) => `t${i}(${p.cols}) AS (${p.text})`).join(", ");
+      const outs = parts
+        .map((p, i) => `(SELECT coalesce(json_group_array(json_array(${p.cols})), '[]') FROM t${i}) AS r${i}`)
+        .join(", ");
+      const text = `WITH ${ctes} SELECT ${outs}`;
+      const params = parts.flatMap((p) => p.params);
+      return {
+        getQuery: () => ({ sql: text, params }),
+        mapResult(result: unknown) {
+          const row = (result as { results: Record<string, string>[] }).results[0] ?? {};
+          return prepared.map((p, i) =>
+            p.mapResult({ results: JSON.parse(row[`r${i}`] ?? "[]") as unknown[][] }, true),
+          );
+        },
+      };
+    },
+  };
+  return fused as unknown as Stmt;
+}
+
+/**
+ * A read list packed for the statement cap: every drizzle select whose index `separate` does not name is fused into
+ * ONE statement (`fuse`), placed first; raw statements and the named (unbounded) reads stay statements of their own.
+ * `unpack` turns the packed results back into one result per original read, in the original order.
+ */
+export function packReads(
+  stmts: readonly Stmt[],
+  separate: (i: number) => boolean = () => false,
+): { stmts: Stmt[]; unpack(results: readonly unknown[]): unknown[] } {
+  const fusedAt: number[] = [];
+  const aloneAt: number[] = [];
+  stmts.forEach((q, i) => {
+    (is(q, SQLiteSelectBase) && !separate(i) ? fusedAt : aloneAt).push(i);
+  });
+  if (fusedAt.length < 2) return { stmts: [...stmts], unpack: (r) => [...r] };
+  const pick = (at: number[]) => at.map((i) => stmts[i] as Stmt);
+  return {
+    stmts: [fuse(pick(fusedAt)), ...pick(aloneAt)],
+    unpack(results) {
+      const out: unknown[] = new Array(stmts.length);
+      const fused = (results[0] ?? []) as unknown[];
+      fusedAt.forEach((i, k) => {
+        out[i] = fused[k];
+      });
+      aloneAt.forEach((i, k) => {
+        out[i] = results[k + 1];
+      });
+      return out;
+    },
+  };
 }
 
 /** Runs `stmts` as one atomic D1 batch through the counting client: the commit path for unauthenticated writes. */

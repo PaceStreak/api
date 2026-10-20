@@ -1,7 +1,7 @@
 /** Request schemas (Python app/social/router.py, app/social/buddies.py). Objects are non-strict, like pydantic. */
 import * as z from "zod";
 import { REACTIONS } from "../../db/schema/social.ts";
-import { cleanText } from "./people.ts";
+import { cleanText, decodeCursor, type FeedCursor } from "./people.ts";
 
 export const uuid = z.guid().transform((s) => s.toLowerCase());
 
@@ -17,7 +17,20 @@ export const PairId = z.object({ pair_id: uuid });
 /** `decision` is checked in the handler: anything but accept/decline is a 404, as in Python. */
 export const RequestParams = z.object({ request_id: uuid, decision: z.string() });
 
-export const BeforeQuery = z.object({ before: instant.optional() });
+/**
+ * A feed cursor: the opaque `next` a page returned (base64url `(created_at, id)`), or the old ISO instant, which
+ * still pages by time alone. Anything else is a 422.
+ */
+export const feedCursor = z.string().transform((s, c): FeedCursor => {
+  const composite = decodeCursor(s);
+  if (composite !== null) return composite;
+  const old = instant.safeParse(s);
+  if (old.success && Number.isFinite(old.data)) return { at: old.data, id: null };
+  c.issues.push({ code: "custom", message: "Invalid cursor", input: s });
+  return z.NEVER;
+});
+
+export const BeforeQuery = z.object({ before: feedCursor.optional() });
 export const SearchQuery = z.object({ q: z.string().min(1).max(40) });
 
 /** Pydantic checks the length first, then the cleaned text must not be empty. */

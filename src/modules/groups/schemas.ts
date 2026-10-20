@@ -1,14 +1,10 @@
 /** Request schemas (Python app/groups/router.py). Objects are non-strict, like pydantic. */
 import * as z from "zod";
 import { DISCIPLINE_IDS } from "../../catalog/exercises.ts";
+import { feedCursor } from "../social/schemas.ts";
 import { cleanOrNull } from "../social/service.ts";
 
 const uuid = z.guid().transform((s) => s.toLowerCase());
-
-/** A naive cursor is read as UTC; a malformed one is a 422 (Python's group feed raised a 500). */
-const instant = z.iso
-  .datetime({ offset: true, local: true })
-  .transform((s) => Date.parse(/(Z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : `${s}Z`));
 
 /** `clean_text(v) or None if v else v`, after pydantic's length checks. */
 const cleaned = (min: number, max: number) => z.string().min(min).max(max).transform(cleanOrNull);
@@ -26,7 +22,8 @@ export const MemberParams = z.object({ group_id: uuid, member_id: uuid });
 export const AnnouncementParams = z.object({ group_id: uuid, announcement_id: uuid });
 export const ChallengeId = z.object({ challenge_id: uuid });
 export const CodeParam = z.object({ code: z.string() });
-export const FeedQuery = z.object({ before: instant.optional() });
+/** The same cursor as every feed; a malformed one is a 422 (Python's group feed raised a 500). */
+export const FeedQuery = z.object({ before: feedCursor.optional() });
 
 export const GroupIn = z.object({
   name: name(2, 60, "Give the group a name"),

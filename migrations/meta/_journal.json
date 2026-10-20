@@ -50,6 +50,13 @@
       "when": 1792427816399,
       "tag": "0006_email_2fa",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1792509568868,
+      "tag": "0007_feed_cursor_index",
+      "breakpoints": true
     }
   ]
 }

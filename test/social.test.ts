@@ -360,3 +360,59 @@ describe("heavy user", () => {
     expectRoundTrips(coach, 2);
   });
 });
+
+describe("feed paging", () => {
+  /** 24 events a millisecond apart, then two in one millisecond: the page boundary (25) falls between that pair. */
+  async function seedTie(userId: string) {
+    const base = Date.now() - 3_600_000;
+    const rows = [
+      ...Array.from({ length: 24 }, (_, i) => base + 100 + i),
+      base, // the tied pair: both at `base`
+      base,
+    ].map((at, i) => {
+      const id = uuid7(at + i);
+      return {
+        id,
+        createdAt: at,
+        updatedAt: at,
+        userId,
+        kind: "workout",
+        refKey: `tie-${id}`,
+        occurredOn: today(),
+      };
+    });
+    // D1 binds at most 100 variables per statement: 10 rows of 8 at a time.
+    for (let i = 0; i < rows.length; i += 10) await db.insert(activityEvents).values(rows.slice(i, i + 10));
+    return rows.map((r) => r.id);
+  }
+
+  it("changed: a composite (created_at, id) cursor never skips an event created in the same millisecond", async () => {
+    const a = await person("tie");
+    const ids = await seedTie(a.userId);
+    const g = await jsonOf<Json>(await post(a.token, "/v1/groups", { name: "Ties" }));
+    for (const path of ["/v1/feed", `/v1/people/${a.handle}/events`, `/v1/groups/${g.id}/feed`]) {
+      const first = await get(a.token, path);
+      expect(first.events).toHaveLength(25);
+      expect(typeof first.next).toBe("string");
+      expect(first.next).toMatch(/^[A-Za-z0-9_-]+$/);
+      const second = await get(a.token, `${path}?before=${first.next}`);
+      const seen = [...first.events, ...second.events].map((e: Json) => e.id);
+      expect(new Set(seen).size, path).toBe(seen.length);
+      expect([...seen].sort(), path).toEqual([...ids].sort());
+      expect(second.next).toBeNull();
+    }
+  });
+
+  it("still accepts the old timestamp-only cursor, paging by time alone", async () => {
+    const a = await person("oldcur");
+    await seedTie(a.userId);
+    const first = await get(a.token, "/v1/feed");
+    const last = first.events[24];
+    const old = await get(a.token, `/v1/feed?before=${encodeURIComponent(last.created_at)}`);
+    // Strictly older than the tied millisecond: the other half of the pair is skipped, as before.
+    expect(old.events).toEqual([]);
+    const naive = await get(a.token, `/v1/feed?before=${encodeURIComponent("2100-01-01T00:00:00")}`);
+    expect(naive.events).toHaveLength(25);
+    expect((await api("/v1/feed?before=bm90LWEtY3Vyc29y", { token: a.token })).status).toBe(422);
+  });
+});

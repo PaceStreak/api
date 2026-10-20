@@ -22,6 +22,7 @@ import {
   codePoints,
   displayName,
   emitStatement,
+  type FeedCursor,
   feedPage,
   groupFeed as groupFeedSql,
   inviteCode,
@@ -487,7 +488,7 @@ export async function coaching(ctx: Ctx, authed: AuthedBatch) {
   return { groups: groups.map((g) => ({ id: g.id, name: g.name })), people: out };
 }
 
-export async function groupFeed(ctx: Ctx, authed: AuthedBatch, groupId: string, before: number | null) {
+export async function groupFeed(ctx: Ctx, authed: AuthedBatch, groupId: string, before: FeedCursor | null) {
   const { rest } = await forMember(
     ctx,
     authed,

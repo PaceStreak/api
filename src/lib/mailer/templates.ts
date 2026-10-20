@@ -230,6 +230,36 @@ export function emailChangeEmail(to: string, code: string): MailMessage {
   };
 }
 
+/**
+ * The second step of a password sign-in. The code is in the body only: subjects show on lock screens and in
+ * notification previews, so a code there would be readable without unlocking anything.
+ */
+export function loginCodeEmail(to: string, code: string, device: string): MailMessage {
+  const minutes = SETTINGS.loginCodeMinutes;
+  return {
+    to,
+    subject: `Your ${APP} sign-in code`,
+    text:
+      `Your sign-in code is: ${code}\n\n` +
+      `Someone signed in to your ${APP} account with your password from ${device}. ` +
+      `Enter the code to finish. It expires in ${minutes} minutes and can be used once.\n` +
+      "If this was not you, change your password now: someone knows it.",
+    html: htmlTemplate({
+      preheader: "Enter this code to finish signing in.",
+      heading: "Finish signing in",
+      bodyHtml:
+        p(
+          `Someone signed in to your ${APP} account with your password from ${device}. Enter this code to finish.`,
+        ) +
+        codeHtml(code) +
+        p(
+          `This code expires in ${minutes} minutes and can be used once. If this was not you, change your password ` +
+            "now: someone knows it.",
+        ),
+    }),
+  };
+}
+
 /** To the old address: the only warning someone gets if their account was moved away from them. */
 export function emailChangedNotice(oldAddress: string, newAddress: string): MailMessage {
   return {
@@ -256,3 +286,5 @@ export const sendEmailChangeEmail = (m: Mailer, to: string, code: string) =>
   m.send(emailChangeEmail(to, code));
 export const sendEmailChangedNotice = (m: Mailer, oldAddress: string, newAddress: string) =>
   m.send(emailChangedNotice(oldAddress, newAddress));
+export const sendLoginCodeEmail = (m: Mailer, to: string, code: string, device: string) =>
+  m.send(loginCodeEmail(to, code, device));

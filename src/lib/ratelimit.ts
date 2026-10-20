@@ -106,6 +106,8 @@ export const BUCKETS = {
   export: { bucket: "export", limit: 20, windowSec: 3600 },
   import: { bucket: "import", limit: 5, windowSec: 3600 },
   importHabits: { bucket: "import_habits", limit: 20, windowSec: 3600 },
+  // Email codes at sign-in, per account: on top of the one-minute cooldown on each pending sign-in.
+  loginCodeResend: { bucket: "login-code-resend", limit: 5, windowSec: 3600 },
 } as const satisfies Record<string, Bucket>;
 
 export interface CounterPlan<S> {

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { gear, userAchievements, userStats, weighIns, workouts } from "../../src/db/schema/index.ts";
 import { uuid7 } from "../../src/lib/uuid7.ts";
 import { recompute } from "../../src/modules/game/service.ts";
-import { Client, login, loginToken, register, signup } from "../fixtures/auth.ts";
+import { Client, login, loginResponse, loginToken, register, signup } from "../fixtures/auth.ts";
 import { testDb, uniqueEmail } from "../fixtures/db.ts";
 import { person, putWorkout } from "../fixtures/game.ts";
 import { api, expectRoundTrips, jsonOf } from "../fixtures/http.ts";
@@ -21,9 +21,7 @@ describe("test_training", () => {
   it("login_returns_csrf_token_in_body_and_refresh_accepts_it", async () => {
     const client = new Client();
     const email = await register(client, uniqueEmail("csrf"));
-    const res = await client.call("/v1/auth/login", {
-      json: { email, password: "correct-horse-battery-staple" },
-    });
+    const res = await loginResponse(client, email, "correct-horse-battery-staple");
     const body = await jsonOf<{ csrf_token: string }>(res);
     expect(body.csrf_token).toBe(client.cookies.get("csrf_token"));
     const refreshed = await client.call("/v1/auth/refresh", {

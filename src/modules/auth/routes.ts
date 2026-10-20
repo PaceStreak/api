@@ -1,5 +1,5 @@
 /**
- * /v1/auth (23 routes) and /v1/auth/passkeys (7 routes), spec/auth.md §3. Order inside each route: validation,
+ * /v1/auth (29 routes) and /v1/auth/passkeys (7 routes), spec/auth.md §3. Order inside each route: validation,
  * then the per-IP limit (slowapi counted after validation), then the handler (Turnstile first in the service).
  */
 import { type Context, Hono, type MiddlewareHandler } from "hono";
@@ -12,7 +12,15 @@ import { auth, optionalAuth } from "./middleware.ts";
 import * as passkeys from "./passkeys.ts";
 import * as s from "./schemas.ts";
 import * as service from "./service.ts";
-import { clearAuthCookies, refreshCookie, requireCsrf, setAuthCookies } from "./tokens.ts";
+import {
+  clearAuthCookies,
+  clearTrustedCookie,
+  refreshCookie,
+  requireCsrf,
+  setAuthCookies,
+  setTrustedCookie,
+  trustedCookie,
+} from "./tokens.ts";
 
 const meta = (c: Context): service.Meta => ({
   ip: clientIp(c.req),
@@ -44,7 +52,7 @@ export const authRoutes = new Hono<AppEnv>()
     c.json(await service.signup(c.var.ctx, c.req.valid("json"), meta(c)), 201),
   )
   .post("/login", json(s.Credentials), ipRateLimit("RL_LOGIN", "login"), async (c) => {
-    const out = await service.login(c.var.ctx, c.req.valid("json"), meta(c));
+    const out = await service.login(c.var.ctx, c.req.valid("json"), meta(c), trustedCookie(c, c.var.ctx));
     return "mfa_required" in out ? c.json(out) : tokens(c, out);
   })
   .post("/refresh", async (c) => {
@@ -132,9 +140,37 @@ export const authRoutes = new Hono<AppEnv>()
     async (c) =>
       c.json(await service.newAccountRecoveryCodes(c.var.ctx, c.var.authed, c.req.valid("json"), meta(c))),
   )
-  .post("/2fa/verify", json(s.MfaVerify), ipRateLimit("RL_MFA", "2fa-verify"), async (c) =>
-    tokens(c, await service.mfaVerify(c.var.ctx, c.req.valid("json"), meta(c))),
+  .post("/2fa/verify", json(s.MfaVerify), ipRateLimit("RL_MFA", "2fa-verify"), async (c) => {
+    const out = await service.mfaVerify(c.var.ctx, c.req.valid("json"), meta(c));
+    if (out.trusted !== undefined) setTrustedCookie(c, c.var.ctx, out.trusted);
+    return tokens(c, out);
+  })
+  .post("/2fa/resend", emailOn, json(s.MfaToken), ipRateLimit("RL_MFA", "2fa-resend"), async (c) =>
+    c.json(await service.resendLoginCode(c.var.ctx, c.req.valid("json"), meta(c))),
   )
+  .post("/2fa/email", emailOn, auth(), json(s.EmailTwoFactor), async (c) => {
+    const out = await service.setEmailTwoFactor(c.var.ctx, c.var.authed, c.req.valid("json"), meta(c));
+    clearTrustedCookie(c, c.var.ctx);
+    return c.json(out);
+  })
+  .get("/trusted-devices", auth(), async (c) =>
+    c.json(await service.listTrustedDevices(c.var.ctx, c.var.authed, trustedCookie(c, c.var.ctx))),
+  )
+  .delete("/trusted-devices", auth(), async (c) => {
+    await service.revokeTrustedDevices(c.var.ctx, c.var.authed);
+    clearTrustedCookie(c, c.var.ctx);
+    return c.body(null, 204);
+  })
+  .delete("/trusted-devices/:device_id", auth(), param(s.DeviceParam), async (c) => {
+    const own = await service.revokeTrustedDevice(
+      c.var.ctx,
+      c.var.authed,
+      c.req.valid("param").device_id,
+      trustedCookie(c, c.var.ctx),
+    );
+    if (own) clearTrustedCookie(c, c.var.ctx);
+    return c.body(null, 204);
+  })
   .post("/recover", json(s.Recover), ipRateLimit("RL_MFA", "recover"), async (c) => {
     const out = await service.recover(c.var.ctx, c.req.valid("json"), meta(c));
     clearAuthCookies(c, c.var.ctx);

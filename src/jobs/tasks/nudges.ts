@@ -46,11 +46,15 @@ export const nudges: SlicedJob = {
         if (!r.atRisk || (r.current === 0 && r.thisWeekDays === 0)) continue;
         const sessions = r.needed === 1 ? "session" : "sessions";
         const name = view.chain.name;
-        const body = r.willFreeze
-          ? `${r.needed} more ${sessions} by ${end} keeps '${name}' going. If not, a freeze covers this week - rest if you need to.`
-          : r.needed > r.daysLeft
-            ? `This week is out of reach for '${name}'. A repair can save it later this month - no need to train sore to fix it.`
-            : `${r.needed} more ${sessions} by ${end} keeps your ${r.current}-week streak. Skip it if you're hurt or wiped - a missed week can be repaired once a month.`;
+        // A chain's name is the owner's own words: it stays out of the title and the push body (lock screens).
+        const say = (what: string) =>
+          r.willFreeze
+            ? `${r.needed} more ${sessions} by ${end} keeps ${what} going. If not, a freeze covers this week - rest if you need to.`
+            : r.needed > r.daysLeft
+              ? `This week is out of reach for ${what}. A repair can save it later this month - no need to train sore to fix it.`
+              : `${r.needed} more ${sessions} by ${end} keeps your ${r.current}-week streak. Skip it if you're hurt or wiped - a missed week can be repaired once a month.`;
+        const body = say("this streak");
+        const detail = say(`'${name}'`);
         risk.push(
           notify(ctx, {
             userId,
@@ -58,8 +62,9 @@ export const nudges: SlicedJob = {
             category: "streak_risk",
             title: r.current
               ? `Your ${r.current}-week streak needs ${r.needed} more`
-              : `'${name}' needs ${r.needed} more this week`,
+              : `A streak needs ${r.needed} more this week`,
             body,
+            detail: detail === body ? null : detail,
             url: "/",
             dedupeKey: `risk:${view.chain.id}:${today}`,
           }),

@@ -21,6 +21,12 @@ export const SETTINGS = {
   passwordResetTokenMinutes: 30,
   emailChangeTokenHours: 24,
   emailCodeMaxAttempts: 5,
+  /** Email codes at sign-in: each code lives 10 minutes; the MFA token they complete lives 30, so resends fit. */
+  loginCodeMinutes: 10,
+  emailMfaChallengeMinutes: 30,
+  loginCodeResendSeconds: 60,
+  loginCodeResendsPerHour: 5,
+  trustedDeviceDays: 30,
   totpValidWindow: 1,
   recoveryCodeCount: 10,
   webauthnRpName: "PaceStreak",

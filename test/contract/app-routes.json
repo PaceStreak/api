@@ -3,7 +3,13 @@
     "src/routes/Admin.tsx:362"
   ],
   "DELETE /v1/auth/sessions/:param": [
-    "src/routes/settings/Security.tsx:152"
+    "src/routes/settings/Security.tsx:202"
+  ],
+  "DELETE /v1/auth/trusted-devices": [
+    "src/routes/settings/Security.tsx:193"
+  ],
+  "DELETE /v1/auth/trusted-devices/:param": [
+    "src/routes/settings/Security.tsx:192"
   ],
   "DELETE /v1/body-metrics/:param": [
     "src/routes/progress/Body.tsx:116"
@@ -117,14 +123,17 @@
     "src/routes/Admin.tsx:130"
   ],
   "GET /v1/auth/2fa": [
-    "src/routes/settings/Security.tsx:55"
+    "src/routes/settings/Security.tsx:73"
   ],
   "GET /v1/auth/passkeys": [
     "src/components/GettingStarted.tsx:26",
     "src/routes/settings/PasskeySection.tsx:14"
   ],
   "GET /v1/auth/sessions": [
-    "src/routes/settings/Security.tsx:53"
+    "src/routes/settings/Security.tsx:71"
+  ],
+  "GET /v1/auth/trusted-devices": [
+    "src/routes/settings/Security.tsx:77"
   ],
   "GET /v1/blocks/active": [
     "src/components/RaceAndBlocks.tsx:97",
@@ -292,7 +301,7 @@
     "src/routes/Review.tsx:44"
   ],
   "GET /v1/me/security-events": [
-    "src/routes/settings/Security.tsx:54"
+    "src/routes/settings/Security.tsx:72"
   ],
   "GET /v1/me/stats": [
     "src/lib/queries.ts:97"
@@ -434,25 +443,31 @@
     "src/routes/Admin.tsx:299"
   ],
   "POST /v1/auth/2fa/disable": [
-    "src/routes/settings/Security.tsx:116"
+    "src/routes/settings/Security.tsx:141"
+  ],
+  "POST /v1/auth/2fa/email": [
+    "src/routes/settings/Security.tsx:178"
   ],
   "POST /v1/auth/2fa/enable": [
-    "src/routes/settings/Security.tsx:105"
+    "src/routes/settings/Security.tsx:130"
   ],
   "POST /v1/auth/2fa/recovery-codes": [
-    "src/routes/settings/Security.tsx:128"
+    "src/routes/settings/Security.tsx:153"
+  ],
+  "POST /v1/auth/2fa/resend": [
+    "src/routes/auth/Login.tsx:102"
   ],
   "POST /v1/auth/2fa/setup": [
-    "src/routes/settings/Security.tsx:96"
+    "src/routes/settings/Security.tsx:121"
   ],
   "POST /v1/auth/2fa/verify": [
-    "src/routes/auth/Login.tsx:78"
+    "src/routes/auth/Login.tsx:123"
   ],
   "POST /v1/auth/change-email": [
-    "src/routes/settings/Security.tsx:68"
+    "src/routes/settings/Security.tsx:93"
   ],
   "POST /v1/auth/change-password": [
-    "src/routes/settings/Security.tsx:84"
+    "src/routes/settings/Security.tsx:109"
   ],
   "POST /v1/auth/confirm-email-change": [
     "src/routes/auth/ConfirmEmail.tsx:25"
@@ -461,9 +476,9 @@
     "src/routes/auth/ForgotPassword.tsx:21"
   ],
   "POST /v1/auth/login": [
-    "src/routes/auth/Login.tsx:80",
-    "src/routes/auth/Signup.tsx:53",
-    "src/routes/auth/VerifyEmail.tsx:45"
+    "src/routes/auth/Login.tsx:125",
+    "src/routes/auth/Signup.tsx:54",
+    "src/routes/auth/VerifyEmail.tsx:46"
   ],
   "POST /v1/auth/logout": [
     "src/lib/session.tsx:126"
@@ -490,24 +505,24 @@
     "src/routes/auth/Recover.tsx:30"
   ],
   "POST /v1/auth/recovery-codes": [
-    "src/routes/settings/Security.tsx:140"
+    "src/routes/settings/Security.tsx:165"
   ],
   "POST /v1/auth/refresh": [
     "src/lib/api.ts:85"
   ],
   "POST /v1/auth/resend-verification": [
     "src/routes/Today.tsx:190",
-    "src/routes/auth/VerifyEmail.tsx:69",
-    "src/routes/settings/Security.tsx:171"
+    "src/routes/auth/VerifyEmail.tsx:74",
+    "src/routes/settings/Security.tsx:221"
   ],
   "POST /v1/auth/reset-password": [
     "src/routes/auth/ResetPassword.tsx:21"
   ],
   "POST /v1/auth/signup": [
-    "src/routes/auth/Signup.tsx:45"
+    "src/routes/auth/Signup.tsx:46"
   ],
   "POST /v1/auth/verify-email": [
-    "src/routes/auth/VerifyEmail.tsx:34"
+    "src/routes/auth/VerifyEmail.tsx:35"
   ],
   "POST /v1/blocks": [
     "src/components/RaceAndBlocks.tsx:105"

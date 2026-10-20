@@ -42,6 +42,8 @@ export const CATEGORIES = {
   habits: { label: "Habit reminders", push: true, email: false },
   digest: { label: "Weekly summary", push: false, email: true },
   achievements: { label: "Achievements and records", push: false, email: false },
+  // A few big moments only (game service MILESTONE_*): the email is the point, so it is on by default.
+  milestones: { label: "Milestones", push: false, email: true },
   social: { label: "Follows, kudos and comments", push: true, email: false },
   groups: { label: "Groups and challenges", push: true, email: false },
   // Opt-in everywhere; the export is attached only with the separate backup_attachment opt-in.
@@ -157,8 +159,15 @@ export interface NotifyInput {
   userId: string;
   kind: string;
   category: Category;
+  /** The email subject and the push title: never a habit's name, note or amount (they show on lock screens). */
   title: string;
+  /** The push body, also shown on lock screens: the same rule as `title`. */
   body?: string | null;
+  /**
+   * Private text for the places only the owner reads: the email body and the in-app inbox, never push. Habit
+   * details go here.
+   */
+  detail?: string | null;
   url?: string | null;
   actorId?: string | null;
   /** `group_id` (mute check), `actions` (push buttons, first two), `export_attachment` (backup email). */
@@ -187,7 +196,7 @@ export function notify(ctx: Ctx, n: NotifyInput) {
       body: n.body ? codePoints(n.body, 400) : null,
       url: n.url ?? null,
       actorId: n.actorId ?? null,
-      data: n.data ?? null,
+      data: n.detail ? { ...n.data, detail: codePoints(n.detail, 400) } : (n.data ?? null),
       dedupeKey: n.dedupeKey ?? null,
     },
     now,
@@ -208,6 +217,12 @@ export function dispatchNotified(ctx: Ctx, ...results: NotifyResult[]): string[]
 
 // ---- inbox ------------------------------------------------------------------------------------------------
 
+/** The private text a note carries for its owner (`NotifyInput.detail`), if any. */
+function detailOf(data: Record<string, unknown> | null | undefined): string | null {
+  const d = data?.detail;
+  return typeof d === "string" && d !== "" ? d : null;
+}
+
 export async function list(ctx: Ctx, authed: AuthedBatch, q: { before?: number | undefined; limit: number }) {
   const [, rows] = await authed.read(repo.inbox(ctx.db, authed.userId, q.before ?? null, q.limit));
   const more = rows.length > q.limit;
@@ -218,7 +233,7 @@ export async function list(ctx: Ctx, authed: AuthedBatch, q: { before?: number |
       kind: n.kind,
       category: n.category,
       title: n.title,
-      body: n.body,
+      body: detailOf(n.data) ?? n.body,
       url: n.url,
       read: n.readAt !== null,
       created_at: toWire(n.createdAt),
@@ -407,7 +422,7 @@ type Note = Awaited<ReturnType<typeof repo.pendingNotes>>[number];
 type Sub = Awaited<ReturnType<typeof repo.subscriptionsFor>>[number];
 
 async function emailBody(ctx: Ctx, note: Note): Promise<string> {
-  const lines = [note.body || note.title, ""];
+  const lines = [detailOf(note.data) ?? (note.body || note.title), ""];
   if (note.url) lines.push(`Open PaceStreak: ${ctx.cfg.frontendUrl}${note.url}`, "");
   if (note.category !== "security") {
     const label = categoryMeta(note.category)?.label ?? note.category;
@@ -494,7 +509,14 @@ async function deliverPart(ctx: Ctx, ids: string[]): Promise<void> {
         );
       }
       // Quiet hours never hold email back; quiet days do (nudges only).
-      if (channels.email && !quietDay && note.isActive && (note.isVerified || note.category === "security")) {
+      // `no_email`: a notice whose news already reached this inbox (a sign-in that was just finished with a mailed code).
+      if (
+        channels.email &&
+        !quietDay &&
+        note.isActive &&
+        (note.isVerified || note.category === "security") &&
+        note.data?.no_email !== true
+      ) {
         let text = await emailBody(ctx, note);
         let attachments: Attachment[] | undefined;
         if (note.data?.export_attachment && exportAttachment !== null) {

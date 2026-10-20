@@ -119,12 +119,19 @@ export async function remindStatement(
     actionUrl(ctx, h.userId, h.id, "done", today),
     actionUrl(ctx, h.userId, h.id, "snooze", today),
   ]);
+  // Title and body show on a lock screen: no name, cue or amount there (root AGENTS.md, habits are never shown to
+  // anyone else). The owner reads the specifics in the app, through `detail`.
   const stmt = notify(ctx, {
     userId: h.userId,
     kind: "habit_reminder",
     category: "habits",
-    title: `${h.emoji} ${h.name}`.trim(),
-    body: (h.cue ? `${h.cue}. ` : "") + (goal ? `Today's goal:${goal}.` : "One tap when it's done."),
+    title: "Habit reminder",
+    body: "One of your habits is due today. One tap when it's done.",
+    detail:
+      `${h.emoji} ${h.name}`.trim() +
+      ". " +
+      (h.cue ? `${h.cue}. ` : "") +
+      (goal ? `Today's goal:${goal}.` : "One tap when it's done."),
     url: `/habits/${h.id}`,
     data: {
       actions: [

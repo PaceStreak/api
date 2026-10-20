@@ -505,6 +505,15 @@ export function socialAllowed(p: ProfileIn, year: number): boolean {
   );
 }
 
+/** Streak lengths worth an email (the `milestones` category); the rest stay in-app achievements. */
+export const MILESTONE_STREAK_WEEKS: ReadonlySet<number> = new Set([4, 26, 52, 104, 156]);
+/** Every fifth level is a milestone. */
+export const MILESTONE_LEVEL_EVERY = 5;
+
+/** True when a level-up from `from` to `to` reaches or passes a multiple of five. */
+export const crossesMilestoneLevel = (from: number, to: number) =>
+  Math.floor(to / MILESTONE_LEVEL_EVERY) > Math.floor(from / MILESTONE_LEVEL_EVERY);
+
 interface Plan {
   outcome: Outcome;
   snap: Snapshot;
@@ -698,6 +707,19 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
         dedupeKey: `achievement:${b.id}:${b.tier ?? "None"}`,
       });
     }
+    if (newRecords.length > 0) {
+      const [first] = newRecords;
+      note({
+        userId,
+        kind: "personal_record",
+        category: "milestones",
+        title: newRecords.length === 1 ? "New personal record" : `${newRecords.length} new personal records`,
+        body: `${first?.label ?? "A personal best"}${newRecords.length > 1 ? ` and ${newRecords.length - 1} more` : ""}.`,
+        url: "/records",
+        // At most one record email a day, however many records a day's sessions set.
+        dedupeKey: `records:${snap.today}`,
+      });
+    }
     for (const r of newRecords)
       event(
         "pr",
@@ -710,7 +732,7 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
       note({
         userId,
         kind: "level_up",
-        category: "achievements",
+        category: crossesMilestoneLevel(prev?.level ?? 1, leveled) ? "milestones" : "achievements",
         title: `Level ${leveled} - ${snap.level.title}`,
         body: "Consistency, compounding.",
         url: "/profile",
@@ -724,9 +746,11 @@ function plan(ctx: Ctx, l: Loaded, opts: RecomputeOptions, prefix: readonly Stmt
       note({
         userId,
         kind: "streak_milestone",
-        category: "achievements",
+        category: MILESTONE_STREAK_WEEKS.has(milestone) ? "milestones" : "achievements",
         title: `${milestone}-week streak`,
-        body: `${milestone} weeks of showing up on '${chain.name}'.`,
+        // The chain's name is the owner's own words: email body and inbox only, never a lock screen.
+        body: `${milestone} weeks of showing up.`,
+        detail: `${milestone} weeks of showing up on '${chain.name}'.`,
         url: "/",
         dedupeKey: `milestone:${ref}`,
       });

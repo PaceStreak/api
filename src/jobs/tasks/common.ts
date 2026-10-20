@@ -7,11 +7,11 @@
  * every notification carries the Python dedupe key, so a slice that runs twice inserts nothing new.
  */
 import type { Ctx } from "../../ctx.ts";
-import { runBatch, type Stmt } from "../../db/batch.ts";
+import { packReads, runBatch, type Stmt } from "../../db/batch.ts";
 import { formatG } from "../../lib/format.ts";
 import { effectiveEnd } from "../../modules/game/service.ts";
 import { actionUrl, isDone, scheduled } from "../../modules/habits/service.ts";
-import { notify } from "../../modules/notifications/service.ts";
+import { type NotifyInput, notifyMany } from "../../modules/notifications/service.ts";
 import { chunk } from "../dispatch.ts";
 import type { Tick } from "../scheduled.ts";
 import { hoursByZone } from "../zones.ts";
@@ -68,15 +68,18 @@ export async function readChunked<R>(
   build: (part: string[]) => Stmt,
 ): Promise<R[]> {
   if (ids.length === 0) return [];
-  const parts = chunk([...new Set(ids)], IN_CHUNK);
-  const results = (await runBatch(ctx.db, parts.map(build))) as unknown as R[][];
-  return results.flat();
+  return readAll<R>(ctx, chunk([...new Set(ids)], IN_CHUNK).map(build));
 }
 
-/** Runs `stmts` (one batch) and concatenates their rows; nothing for an empty list. */
+/**
+ * Runs `stmts` (one batch) and concatenates their rows; nothing for an empty list. The selects are fused into one
+ * statement (`packReads`): a candidate query per local-hour group would otherwise spend one of the Free plan's 50
+ * D1 queries per invocation each (src/lib/plan.ts).
+ */
 export async function readAll<R>(ctx: Ctx, stmts: readonly Stmt[]): Promise<R[]> {
   if (stmts.length === 0) return [];
-  return ((await runBatch(ctx.db, stmts)) as unknown as R[][]).flat();
+  const packed = packReads(stmts);
+  return (packed.unpack(await runBatch(ctx.db, packed.stmts)) as R[][]).flat();
 }
 
 /** Unique ids, order kept. */
@@ -101,16 +104,13 @@ export function doneToday(h: HabitRow, amount: number | undefined): boolean {
   return amount !== undefined && isDone(h.kind, amount, h.dailyGoal);
 }
 
-/**
- * Python `_remind`: the per-habit reminder, with signed Done / In 1 hour buttons for the push. Wrapped in an
- * object because a query builder is thenable: returning it from an async function would run it.
- */
-export async function remindStatement(
+/** Python `_remind`: the per-habit reminder, with signed Done / In 1 hour buttons for the push. */
+export async function remindInput(
   ctx: Ctx,
   h: HabitRow,
   today: string,
   dedupeKey: string,
-): Promise<{ stmt: Stmt }> {
+): Promise<NotifyInput> {
   const goal =
     (h.kind === "duration" || h.kind === "count") && h.dailyGoal
       ? ` ${formatG(h.dailyGoal)} ${h.unit ?? ""}`.trimEnd()
@@ -121,7 +121,7 @@ export async function remindStatement(
   ]);
   // Title and body show on a lock screen: no name, cue or amount there (root AGENTS.md, habits are never shown to
   // anyone else). The owner reads the specifics in the app, through `detail`.
-  const stmt = notify(ctx, {
+  return {
     userId: h.userId,
     kind: "habit_reminder",
     category: "habits",
@@ -140,16 +140,21 @@ export async function remindStatement(
       ],
     },
     dedupeKey,
-  });
-  return { stmt };
+  };
 }
 
 /**
- * Runs one write batch; per statement, the ids a `notify()` insert actually inserted (empty for a deduplicated
- * insert and for statements that return no rows).
+ * One write batch: `before` (e.g. clearing the snoozes that fired), then every note of the slice as ONE multi-row
+ * insert (`notifyMany`), so a slice costs the same few statements however many people it covers. Returns the ids
+ * actually inserted (a deduplicated note is skipped). Nothing runs when both lists are empty.
  */
-export async function insertEach(ctx: Ctx, stmts: readonly Stmt[]): Promise<string[][]> {
+export async function insertNotes(
+  ctx: Ctx,
+  notes: readonly NotifyInput[],
+  before: readonly Stmt[] = [],
+): Promise<string[]> {
+  const stmts = [...before, ...(notes.length > 0 ? [notifyMany(ctx, notes)] : [])];
   if (stmts.length === 0) return [];
   const res = (await runBatch(ctx.db, stmts)) as unknown[];
-  return res.map((rows) => (Array.isArray(rows) ? (rows as { id: string }[]).map((r) => r.id) : []));
+  return notes.length === 0 ? [] : ((res.at(-1) ?? []) as { id: string }[]).map((r) => r.id);
 }

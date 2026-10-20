@@ -3,12 +3,11 @@
  * days left and it is still reachable, suggest some encouragement. Never about a paused buddy, never twice in one
  * of the buddy's weeks, and it says nothing about why they're short. A pair id is the unit of work.
  */
-import type { Stmt } from "../../db/batch.ts";
 import { addDays, daysBetween, localDate, localHour, weekStart } from "../../lib/time.ts";
-import { notify } from "../../modules/notifications/service.ts";
+import type { NotifyInput } from "../../modules/notifications/service.ts";
 import { chunk } from "../dispatch.ts";
 import { zonesAtHour } from "../zones.ts";
-import { insertEach, readAll, readChunked, type SlicedJob, unique, zonesOf } from "./common.ts";
+import { insertNotes, readAll, readChunked, type SlicedJob, unique, zonesOf } from "./common.ts";
 import { activePairs, buddyCandidates, buddyProfiles, buddyStats, IN_CHUNK } from "./repo.ts";
 
 export const BUDDY_NUDGE_HOUR = 17;
@@ -56,7 +55,7 @@ export const buddyNudges: SlicedJob = {
       if ("handle" in row) profiles.set(row.userId, row);
       else stats.set(row.userId, row);
     }
-    const stmts: Stmt[] = [];
+    const notes: NotifyInput[] = [];
     for (const pair of pairs) {
       for (const [helper, buddy] of [
         [pair.userA, pair.userB],
@@ -75,20 +74,18 @@ export const buddyNudges: SlicedJob = {
         const daysLeft = daysBetween(today, addDays(week, 6)) + 1;
         const needed = bs.thisWeekTarget - bs.thisWeekDays;
         if (!(needed > 0 && needed <= daysLeft && daysLeft <= 2)) continue;
-        stmts.push(
-          notify(ctx, {
-            userId: helper,
-            kind: "buddy_at_risk",
-            category: "social",
-            title: `@${bp.handle} needs ${needed} more this week`,
-            body: "Your buddy streak rides on it. A quick word of encouragement goes a long way.",
-            url: "/buddies",
-            actorId: buddy,
-            dedupeKey: `buddy-risk:${pair.id}:${buddy}:${week}`,
-          }),
-        );
+        notes.push({
+          userId: helper,
+          kind: "buddy_at_risk",
+          category: "social",
+          title: `@${bp.handle} needs ${needed} more this week`,
+          body: "Your buddy streak rides on it. A quick word of encouragement goes a long way.",
+          url: "/buddies",
+          actorId: buddy,
+          dedupeKey: `buddy-risk:${pair.id}:${buddy}:${week}`,
+        });
       }
     }
-    return (await insertEach(ctx, stmts)).flat();
+    return insertNotes(ctx, notes);
   },
 };

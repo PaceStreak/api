@@ -28,6 +28,15 @@ export const JobMessageSchema: z.ZodType<JobMessage> = z.discriminatedUnion("typ
   z.object({ type: z.literal("import-slice"), jobId: z.string().min(1) }),
   z.object({ type: z.literal("export-slice"), jobId: z.string().min(1), part: z.int().min(0) }),
   z.object({ type: z.literal("purge"), userIds: ids }),
+  z.object({
+    type: z.literal("merge-slice"),
+    source: z.string().min(1),
+    into: z.string().min(1),
+    keepSourceProfile: z.boolean(),
+    auditId: z.string().min(1),
+    from: z.int().min(0),
+    moved: z.record(z.string(), z.int().min(0)),
+  }),
 ]);
 
 export interface MessageMeta {
@@ -83,6 +92,8 @@ function handlerFor(
       return bind(r.get("export-slice"), m);
     case "purge":
       return bind(r.get("purge"), m);
+    case "merge-slice":
+      return bind(r.get("merge-slice"), m);
   }
 }
 
@@ -121,6 +132,8 @@ export function deadLetterSummary(body: unknown): string {
       return `export-slice jobId=${m.jobId} part=${m.part}`;
     case "purge":
       return `purge userIds=${idList(m.userIds)}`;
+    case "merge-slice":
+      return `merge-slice source=${m.source} into=${m.into} from=${m.from}`;
   }
 }
 

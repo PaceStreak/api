@@ -32,7 +32,7 @@ export function registerJobs(registry: JobRegistry): void {
     // The report counts the ids dispatched; the slices' notifications are delivered by the consumer.
     registry.register(name, async (ctx, tick) => {
       const ids = await job.select(ctx, tick);
-      await dispatchJobSlices(tick.queue, name, ids);
+      await dispatchJobSlices(tick.queue, name, ids, ctx.cfg.d1Budget);
       return ids.length;
     });
   }
@@ -63,9 +63,15 @@ export function registerConsumers(registry: ConsumerRegistry): void {
 
 /**
  * Runs one sliced job start to finish in-process (select, then every slice) and returns the notification ids it
- * inserted, undelivered: what Python's job functions returned. For tests and local runs.
+ * inserted, undelivered: what Python's job functions returned. For tests and local runs. `onSlice` hears the D1
+ * statements each slice spent (each is one queue invocation in production).
  */
-export async function runSliced(ctx: Ctx, name: JobName, tick?: Partial<Tick>): Promise<string[]> {
+export async function runSliced(
+  ctx: Ctx,
+  name: JobName,
+  tick?: Partial<Tick>,
+  onSlice?: (statements: number, ids: number) => void,
+): Promise<string[]> {
   const job = SLICED[name];
   if (job === undefined) throw new Error(`${name} is not a sliced job`);
   const now = ctx.clock.now();
@@ -79,6 +85,10 @@ export async function runSliced(ctx: Ctx, name: JobName, tick?: Partial<Tick>): 
   };
   const ids = await job.select(ctx, full);
   const out: string[] = [];
-  for (const part of chunk(ids, idsPerSlice(name))) out.push(...(await job.slice(ctx, part)));
+  for (const part of chunk(ids, idsPerSlice(name, ctx.cfg.d1Budget))) {
+    const before = ctx.stats.statements;
+    out.push(...(await job.slice(ctx, part)));
+    onSlice?.(ctx.stats.statements - before, part.length);
+  }
   return out;
 }

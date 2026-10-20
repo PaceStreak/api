@@ -235,6 +235,15 @@ export const setOfficial = (
 export const auditDetail = (db: Db, id: string, detail: Record<string, unknown>) =>
   db.update(auditLog).set({ detail }).where(eq(auditLog.id, id));
 
+/** Completes a merge's audit row: its moved counts, and the `running` marker dropped. */
+export const auditMoved = (db: Db, id: string, moved: Record<string, number>) =>
+  db
+    .update(auditLog)
+    .set({
+      detail: sql`json_set(json_remove(${auditLog.detail}, '$.status'), '$.moved', json(${JSON.stringify(moved)}))`,
+    })
+    .where(eq(auditLog.id, id));
+
 export const setRole = (db: Db, userId: string, role: UserRole, now: number) =>
   db.update(users).set({ role, updatedAt: now }).where(eq(users.id, userId));
 

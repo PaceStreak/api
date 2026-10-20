@@ -10,9 +10,10 @@
  */
 import { sql } from "drizzle-orm";
 import type { Ctx } from "../../ctx.ts";
-import { type AuthedBatch, abortUnless, isCondAbort, type Stmt, toWire } from "../../db/batch.ts";
+import { type AuthedBatch, abortUnless, isCondAbort, runBatch, type Stmt, toWire } from "../../db/batch.ts";
 import type { UserRole } from "../../db/schema/auth.ts";
-import { dispatchDeliver, enqueue } from "../../jobs/dispatch.ts";
+import type { ConsumerRegistry } from "../../jobs/consumer.ts";
+import { dispatchDeliver, enqueue, type MessageOf } from "../../jobs/dispatch.ts";
 import { workerState } from "../../jobs/heartbeat.ts";
 import { conflict, forbidden, HttpError, notFound } from "../../lib/errors.ts";
 import { checkHandle, isReserved, mentionsBrand } from "../../lib/handles.ts";
@@ -263,6 +264,12 @@ export async function setOfficial(
   return after;
 }
 
+/**
+ * Merges `userId` into `body.into`. The merge is about a hundred and fifty statements (two per user column of every
+ * table), far past the Workers Free plan's 50 D1 queries per invocation, so it runs on the queue in slices
+ * (`mergeSlice`) and this answers 202. The request freezes the source first (sessions revoked, token version
+ * bumped, inactive), so nothing can write to it between slices, and opens the audit row the slices complete.
+ */
 export async function merge(
   ctx: Ctx,
   authed: AuthedBatch,
@@ -281,12 +288,11 @@ export async function merge(
   if (body.confirm_email.trim().toLowerCase() !== src.email.toLowerCase()) {
     throw new HttpError(422, "Type the source account's email to confirm");
   }
-  const plan = mergePlan(ctx.db, userId, body.into, body.keep_source_profile);
-  const auditId = uuid7(ctx.clock.now());
-  const detail = { source: userId, source_email: src.email };
-  // The role guard is result 0 (the session guard is already stripped), so plan indexes are offset by one.
-  const results = await write(ctx, authed, "admin", [
-    ...plan.stmts,
+  const now = ctx.clock.now();
+  const auditId = uuid7(now);
+  await write(ctx, authed, "admin", [
+    ...repo.revokeAllSessions(ctx.db, userId, now),
+    repo.setActive(ctx.db, userId, false, now),
     repo.insertAudit(
       ctx.db,
       {
@@ -295,17 +301,60 @@ export async function merge(
         action: "user.merge",
         targetType: "user",
         targetId: body.into,
-        detail,
+        detail: { source: userId, source_email: src.email, status: "running" },
       },
-      ctx.clock.now(),
+      now,
     ),
   ]);
-  const moved = movedCounts(plan, results, 1);
-  // The counts exist only once the batch has run: a second small write completes the audit row (merges are rare).
-  await authed.write(repo.auditDetail(ctx.db, auditId, { ...detail, moved }));
+  await enqueue(ctx.env.JOBS, [
+    {
+      type: "merge-slice",
+      source: userId,
+      into: body.into,
+      keepSourceProfile: body.keep_source_profile,
+      auditId,
+      from: 0,
+      moved: {},
+    },
+  ]);
+  return { merged_into: body.into, status: "queued" as const };
+}
+
+/** Merge statements one slice may run: the plan's budget less the audit update and headroom. */
+export const mergeSliceSize = (budget: number) => Math.max(1, budget - 5);
+
+/**
+ * One slice of a merge: runs the next `mergeSliceSize` statements of the (deterministic) plan in one atomic batch
+ * and returns the message for the next slice, or `null` once the source is gone, the audit row carries the moved
+ * counts and the destination's rebuild is queued. Re-running a slice is harmless: every statement is an
+ * `UPDATE OR IGNORE` / `DELETE` keyed on the source, which the first run already emptied.
+ */
+export async function mergeSlice(
+  ctx: Ctx,
+  msg: MessageOf<"merge-slice">,
+): Promise<MessageOf<"merge-slice"> | null> {
+  const plan = mergePlan(ctx.db, msg.source, msg.into, msg.keepSourceProfile);
+  const end = Math.min(plan.stmts.length, msg.from + mergeSliceSize(ctx.cfg.d1Budget));
+  const part = plan.stmts.slice(msg.from, end);
+  const results = part.length === 0 ? [] : ((await runBatch(ctx.db, part)) as unknown[]);
+  const moved = { ...msg.moved };
+  for (const [table, n] of Object.entries(movedCounts(plan, results, -msg.from, msg.from, end))) {
+    moved[table] = (moved[table] ?? 0) + n;
+  }
+  if (end < plan.stmts.length) return { ...msg, from: end, moved };
+  const sorted = Object.fromEntries(Object.entries(moved).sort(([a], [b]) => (a < b ? -1 : 1)));
+  await runBatch(ctx.db, [repo.auditMoved(ctx.db, msg.auditId, sorted)]);
   // The destination's projections are rebuilt from the merged log by the GAME consumer.
-  await enqueue(ctx.env.JOBS, [{ type: "recompute", userId: body.into, full: true }]);
-  return { merged_into: body.into, moved };
+  await enqueue(ctx.env.JOBS, [{ type: "recompute", userId: msg.into, full: true }]);
+  return null;
+}
+
+/** Registers the `merge-slice` consumer: each slice enqueues the next, so a merge runs in order. */
+export function registerConsumers(registry: ConsumerRegistry): void {
+  registry.register("merge-slice", async (ctx, msg) => {
+    const next = await mergeSlice(ctx, msg);
+    if (next !== null) await enqueue(ctx.env.JOBS, [next]);
+  });
 }
 
 // ---- audit and metrics --------------------------------------------------------------------------------------

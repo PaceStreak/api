@@ -1,6 +1,7 @@
 /** Shared helpers for the jobs tests: a real `Ctx` over the test D1 and a recording queue. */
 import { createExecutionContext, env } from "cloudflare:test";
 import { and, inArray } from "drizzle-orm";
+import { expect } from "vitest";
 import { type Ctx, createCtx } from "../../src/ctx.ts";
 import { notifications } from "../../src/db/schema/index.ts";
 import { loadConfig } from "../../src/env.ts";
@@ -42,7 +43,10 @@ export async function runFor(
   users: string | readonly string[],
   ctx: Ctx = jobCtx(),
 ): Promise<string[]> {
-  const ids = await runSliced(ctx, name);
+  // Each slice is one queue invocation in production: it must fit the plan's D1 budget (src/lib/plan.ts).
+  const ids = await runSliced(ctx, name, undefined, (statements) => {
+    expect(statements, `${name} slice statements`).toBeLessThanOrEqual(ctx.cfg.d1Budget);
+  });
   if (ids.length === 0) return [];
   const wanted = typeof users === "string" ? [users] : [...users];
   const rows = await ctx.db

@@ -10,8 +10,9 @@
  *
  * Postgres did this with a savepoint per column and a row-by-row retry. D1 has no savepoints, so each column is
  * `UPDATE OR IGNORE` (moves every row that does not collide; OR IGNORE also skips CHECK failures) followed by
- * `DELETE ... WHERE col = source` (the rows left are exactly the colliding copies). All statements go in ONE
- * atomic batch, with the moved counts read from each UPDATE's `changes`.
+ * `DELETE ... WHERE col = source` (the rows left are exactly the colliding copies). The statements run in atomic
+ * slices on the queue (admin/service.ts `mergeSlice`: the Free plan caps D1 queries per invocation), with the moved
+ * counts read from each UPDATE's `changes`.
  */
 import { type SQL, sql } from "drizzle-orm";
 import type { Stmt } from "../../db/batch.ts";
@@ -71,14 +72,20 @@ export function mergePlan(db: Db, source: string, dest: string, keepSourceProfil
   return { stmts: statements.map((s) => db.run(s)), counts };
 }
 
-/** `{table: moved}` for tables that moved rows, sorted by table name (Python's return value). */
+/**
+ * `{table: moved}` for tables that moved rows, sorted by table name (Python's return value). `results[i + offset]`
+ * is plan statement `i`'s result; only statements in `[from, to)` are counted (one slice of the plan).
+ */
 export function movedCounts(
   plan: MergePlan,
   results: readonly unknown[],
   offset: number,
+  from = 0,
+  to = Number.POSITIVE_INFINITY,
 ): Record<string, number> {
   const moved = new Map<string, number>();
   for (const [i, table] of plan.counts) {
+    if (i < from || i >= to) continue;
     const r = results[i + offset] as D1Result | undefined;
     const n = r?.meta.changes ?? 0;
     moved.set(table, (moved.get(table) ?? 0) + n);

@@ -5,12 +5,12 @@
  * Parity note (DESIGN.md §9): `sent_risk` is true only when a warning was actually inserted, so once the
  * warning has gone out, a later tick in the same hour finds it deduplicated and may send the reminder.
  */
-import type { Stmt } from "../../db/batch.ts";
 import { pyWeekday, weekStart } from "../../lib/time.ts";
+import { uuid7 } from "../../lib/uuid7.ts";
 import { snapshotsFor } from "../../modules/game/service.ts";
-import { notify } from "../../modules/notifications/service.ts";
+import type { NotifyInput } from "../../modules/notifications/service.ts";
 import { atLocalHour } from "../zones.ts";
-import { insertEach, readAll, readChunked, type SlicedJob, unique, zonesByHour, zonesOf } from "./common.ts";
+import { insertNotes, readAll, readChunked, type SlicedJob, unique, zonesByHour, zonesOf } from "./common.ts";
 import { type NudgeRow, nudgeCandidates, nudgeRows } from "./repo.ts";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -33,8 +33,8 @@ export const nudges: SlicedJob = {
     const snaps = await snapshotsFor(ctx, due);
 
     // Phase 1: the risk warnings. Phase 2: reminders for people none of whose warnings was inserted.
-    const risk: Stmt[] = [];
-    const riskOwner: string[] = [];
+    const risk: NotifyInput[] = [];
+    const riskOwner = new Map<string, string>();
     for (const userId of due) {
       const snap = snaps.get(userId)?.snapshot;
       // Nobody on a declared injury break gets told to train.
@@ -55,27 +55,27 @@ export const nudges: SlicedJob = {
               : `${r.needed} more ${sessions} by ${end} keeps your ${r.current}-week streak. Skip it if you're hurt or wiped - a missed week can be repaired once a month.`;
         const body = say("this streak");
         const detail = say(`'${name}'`);
-        risk.push(
-          notify(ctx, {
-            userId,
-            kind: "streak_risk",
-            category: "streak_risk",
-            title: r.current
-              ? `Your ${r.current}-week streak needs ${r.needed} more`
-              : `A streak needs ${r.needed} more this week`,
-            body,
-            detail: detail === body ? null : detail,
-            url: "/",
-            dedupeKey: `risk:${view.chain.id}:${today}`,
-          }),
-        );
-        riskOwner.push(userId);
+        const id = uuid7(now);
+        riskOwner.set(id, userId);
+        risk.push({
+          id,
+          userId,
+          kind: "streak_risk",
+          category: "streak_risk",
+          title: r.current
+            ? `Your ${r.current}-week streak needs ${r.needed} more`
+            : `A streak needs ${r.needed} more this week`,
+          body,
+          detail: detail === body ? null : detail,
+          url: "/",
+          dedupeKey: `risk:${view.chain.id}:${today}`,
+        });
       }
     }
-    const riskRes = await insertEach(ctx, risk);
-    const warned = new Set(riskOwner.filter((_, i) => (riskRes[i]?.length ?? 0) > 0));
+    const riskIds = await insertNotes(ctx, risk);
+    const warned = new Set(riskIds.map((id) => riskOwner.get(id)));
 
-    const reminders: Stmt[] = [];
+    const reminders: NotifyInput[] = [];
     for (const userId of due) {
       const snap = snaps.get(userId)?.snapshot;
       if (snap === undefined || snap.pausedToday || warned.has(userId)) continue;
@@ -87,18 +87,16 @@ export const nudges: SlicedJob = {
         (planned !== null && ((planned >> pyWeekday(today)) & 1) === 1);
       const trainedToday = snap.days.some((d) => d.day === today);
       if (!isPlanned || trainedToday) continue;
-      reminders.push(
-        notify(ctx, {
-          userId,
-          kind: "reminder",
-          category: "reminder",
-          title: "Training today?",
-          body: `${main.thisWeekDays} of ${main.thisWeekTarget} this week. Ten seconds to log it.`,
-          url: "/log",
-          dedupeKey: `reminder:${today}`,
-        }),
-      );
+      reminders.push({
+        userId,
+        kind: "reminder",
+        category: "reminder",
+        title: "Training today?",
+        body: `${main.thisWeekDays} of ${main.thisWeekTarget} this week. Ten seconds to log it.`,
+        url: "/log",
+        dedupeKey: `reminder:${today}`,
+      });
     }
-    return [...riskRes.flat(), ...(await insertEach(ctx, reminders)).flat()];
+    return [...riskIds, ...(await insertNotes(ctx, reminders))];
   },
 };

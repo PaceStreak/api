@@ -4,13 +4,12 @@
  * reminder to download a copy of everything, only for people who opted in.
  */
 import type { Ctx } from "../../ctx.ts";
-import type { Stmt } from "../../db/batch.ts";
 import { isoWeekKey } from "../../lib/isoweek.ts";
 import { addDays, localParts, weekStart } from "../../lib/time.ts";
 import { buildRecap, digestLines, snapshotsFor } from "../../modules/game/service.ts";
-import { channelsFor, notify } from "../../modules/notifications/service.ts";
+import { channelsFor, type NotifyInput } from "../../modules/notifications/service.ts";
 import { chunk } from "../dispatch.ts";
-import { insertEach, readAll, type SlicedJob, unique, zonesBy, zonesOf } from "./common.ts";
+import { insertNotes, readAll, type SlicedJob, unique, zonesBy, zonesOf } from "./common.ts";
 import { backupCandidates, backupRows, digestCandidates, IN_CHUNK, localRows } from "./repo.ts";
 
 export const MORNING_HOUR = 9;
@@ -47,7 +46,7 @@ export const weeklyDigest: SlicedJob = {
       ctx,
       due.map((r) => r.userId),
     );
-    const stmts: Stmt[] = [];
+    const notes: NotifyInput[] = [];
     for (const r of due) {
       const s = snaps.get(r.userId);
       if (s === undefined) continue;
@@ -55,19 +54,17 @@ export const weeklyDigest: SlicedJob = {
       const recap = buildRecap(s.snapshot, s.held, lastWeek);
       if (recap === null) continue;
       const [title, body] = digestLines(recap);
-      stmts.push(
-        notify(ctx, {
-          userId: r.userId,
-          kind: "weekly_digest",
-          category: "digest",
-          title,
-          body,
-          url: `/recap?week=${lastWeek}`,
-          dedupeKey: `digest:${lastWeek}`,
-        }),
-      );
+      notes.push({
+        userId: r.userId,
+        kind: "weekly_digest",
+        category: "digest",
+        title,
+        body,
+        url: `/recap?week=${lastWeek}`,
+        dedupeKey: `digest:${lastWeek}`,
+      });
     }
-    return (await insertEach(ctx, stmts)).flat();
+    return insertNotes(ctx, notes);
   },
 };
 
@@ -93,7 +90,7 @@ export const monthlyBackup: SlicedJob = {
       ctx,
       chunk(unique(ids), IN_CHUNK).map((part) => backupRows(ctx.db, part)),
     );
-    const stmts: Stmt[] = [];
+    const notes: NotifyInput[] = [];
     for (const r of rows) {
       const wanted = channelsFor(r.channels, "backup", ctx.cfg.emailEnabled);
       if (!(wanted.email || wanted.push)) continue;
@@ -106,21 +103,19 @@ export const monthlyBackup: SlicedJob = {
       const period = weekly ? isoWeekKey(local.date) : local.date.slice(0, 7);
       const unit = weekly ? "week" : "month";
       const attached = r.attach && wanted.email;
-      stmts.push(
-        notify(ctx, {
-          userId: r.userId,
-          kind: "monthly_backup",
-          category: "backup",
-          title: `Your ${weekly ? "weekly" : "monthly"} PaceStreak backup`,
-          body: attached
-            ? `A new ${unit}, and a copy of everything you've logged.`
-            : `A new ${unit}. Download a copy of everything you've logged - one tap, and it's yours to keep.`,
-          url: "/settings/data?backup=1",
-          data: attached ? { export_attachment: true } : null,
-          dedupeKey: `backup:${period}`,
-        }),
-      );
+      notes.push({
+        userId: r.userId,
+        kind: "monthly_backup",
+        category: "backup",
+        title: `Your ${weekly ? "weekly" : "monthly"} PaceStreak backup`,
+        body: attached
+          ? `A new ${unit}, and a copy of everything you've logged.`
+          : `A new ${unit}. Download a copy of everything you've logged - one tap, and it's yours to keep.`,
+        url: "/settings/data?backup=1",
+        data: attached ? { export_attachment: true } : null,
+        dedupeKey: `backup:${period}`,
+      });
     }
-    return (await insertEach(ctx, stmts)).flat();
+    return insertNotes(ctx, notes);
   },
 };

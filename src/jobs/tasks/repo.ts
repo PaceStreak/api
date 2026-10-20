@@ -170,12 +170,17 @@ export const snoozeRows = (db: Db, habitIds: string[], now: number) =>
     .innerJoin(users, eq(users.id, habits.userId))
     .where(and(inArray(habits.id, habitIds), isNotNull(habits.snoozedUntil), lte(habits.snoozedUntil, now)));
 
-/** Clears exactly the snooze that fired: a newer snooze set meanwhile is kept. */
-export const clearSnooze = (db: Db, habitId: string, due: number, now: number) =>
-  db
-    .update(habits)
-    .set({ snoozedUntil: null, updatedAt: now })
-    .where(and(eq(habits.id, habitId), eq(habits.snoozedUntil, due)));
+/**
+ * Clears exactly the snoozes that fired, in ONE statement: a newer snooze set meanwhile (its `snoozed_until`
+ * differs from `due`) is kept.
+ */
+export const clearSnoozesSql = (fired: readonly { id: string; due: number }[], now: number) =>
+  sql`UPDATE habits SET snoozed_until = NULL, updated_at = ${now}
+    FROM json_each(${JSON.stringify(fired)}) AS j
+    WHERE habits.id = j.value ->> 'id' AND habits.snoozed_until = j.value ->> 'due'`;
+
+export const clearSnoozes = (db: Db, fired: readonly { id: string; due: number }[], now: number) =>
+  db.run(clearSnoozesSql(fired, now));
 
 const summaryFilter = () => and(isNotNull(notificationPreferences.habitSummaryHour), eligible());
 
@@ -466,7 +471,7 @@ export const explain: ExplainCase[] = [
   { name: "jobs.reminderRows", build: (db) => reminderRows(db, IDS) },
   { name: "jobs.dueSnoozes", build: (db) => dueSnoozes(db, 0) },
   { name: "jobs.snoozeRows", build: (db) => snoozeRows(db, IDS, 0) },
-  { name: "jobs.clearSnooze", build: (db) => clearSnooze(db, "h", 0, 0) },
+  { name: "jobs.clearSnoozes", build: () => clearSnoozesSql([], 0) },
   { name: "jobs.summaryCandidates", build: (db) => summaryCandidates(db, Z, 18) },
   { name: "jobs.summaryRows", build: (db) => summaryRows(db, IDS) },
   { name: "jobs.openHabits", build: (db) => openHabits(db, IDS) },

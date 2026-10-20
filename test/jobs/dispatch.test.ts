@@ -7,7 +7,11 @@ import {
   enqueue,
   type JobMessage,
 } from "../../src/jobs/dispatch.ts";
+import { d1Budget } from "../../src/lib/plan.ts";
 import { recordingQueue } from "./helpers.ts";
+
+const FREE = d1Budget("free");
+const PAID = d1Budget("paid");
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `id-${i}`);
 
@@ -15,7 +19,7 @@ describe("dispatch", () => {
   it("an empty selection sends nothing", async () => {
     const q = recordingQueue();
     expect(await dispatchDeliver(q, [])).toBe(0);
-    expect(await dispatchJobSlices(q, "nudges", [])).toBe(0);
+    expect(await dispatchJobSlices(q, "nudges", [], FREE)).toBe(0);
     expect(await dispatchPurge(q, [])).toBe(0);
     expect(await enqueue(q, [])).toBe(0);
     expect(q.calls).toEqual([]);
@@ -31,12 +35,16 @@ describe("dispatch", () => {
     expect(q.messages.flatMap((m) => (m.type === "deliver" ? m.ids : []))).toEqual(ids(120));
   });
 
-  it("exactly 50 ids is one message for a light job; heavy jobs pack fewer", async () => {
+  it("exactly 50 ids is one message for a light job; heavy jobs pack to the plan's budget", async () => {
     const q = recordingQueue();
-    expect(await dispatchJobSlices(q, "habits", ids(50))).toBe(1);
+    expect(await dispatchJobSlices(q, "habits", ids(50), FREE)).toBe(1);
     expect(q.messages[0]).toEqual({ type: "job-slice", job: "habits", ids: ids(50) });
-    expect(await dispatchJobSlices(q, "digest", ids(50))).toBe(2);
-    expect(await dispatchJobSlices(q, "stats", ids(50))).toBe(3);
+    // Free: 45 statements a message, so nine snapshots or two recomputes.
+    expect(await dispatchJobSlices(q, "digest", ids(50), FREE)).toBe(6);
+    expect(await dispatchJobSlices(q, "stats", ids(50), FREE)).toBe(25);
+    // Paid: 900, so every job takes the full 50.
+    expect(await dispatchJobSlices(q, "digest", ids(50), PAID)).toBe(1);
+    expect(await dispatchJobSlices(q, "stats", ids(50), PAID)).toBe(1);
   });
 
   it("purge packs user ids", async () => {

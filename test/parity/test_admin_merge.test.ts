@@ -1,6 +1,6 @@
 /** Port of tests/test_admin_merge.py: merging one account into another. */
 import { and, count, eq, isNull, sql } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { auditLog, follows, profiles, sessions, users, workouts } from "../../src/db/schema/index.ts";
 import { uuid7 } from "../../src/lib/uuid7.ts";
 import { signupAs } from "../fixtures/admin.ts";
@@ -42,6 +42,30 @@ async function addProfile(userId: string): Promise<string> {
   return handle;
 }
 
+/**
+ * The merge runs on the queue in slices (the Free plan's D1 query cap): the route answers 202 and the consumer
+ * (delivered by the test runtime) completes the audit row with the moved counts once the source is gone.
+ */
+async function merged(source: string): Promise<Record<string, number>> {
+  return vi.waitFor(
+    async () => {
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.action, "user.merge"),
+            sql`json_extract(${auditLog.detail}, '$.source') = ${source}`,
+          ),
+        );
+      const moved = (rows[0]?.detail as { moved?: Record<string, number> } | null)?.moved;
+      if (moved === undefined) throw new Error("merge still running");
+      return moved;
+    },
+    { timeout: 15_000, interval: 50 },
+  );
+}
+
 const scalar = async (q: Promise<{ n: number }[]>) => (await q)[0]?.n ?? -1;
 
 describe("test_admin_merge", () => {
@@ -66,12 +90,13 @@ describe("test_admin_merge", () => {
       json: { into: neu.userId, confirm_email: old.email.toUpperCase() },
       token: admin.token,
     });
-    expect(done.status, await done.clone().text()).toBe(200);
-    const body = await jsonOf<{ merged_into: string; moved: Record<string, number> }>(done);
-    expect(body.merged_into).toBe(neu.userId);
-    expect(body.moved.workouts).toBe(2);
-    // read, the merge batch, the audit detail
-    expectRoundTrips(done, 3);
+    expect(done.status, await done.clone().text()).toBe(202);
+    const body = await jsonOf<{ merged_into: string; status: string }>(done);
+    expect(body).toEqual({ merged_into: neu.userId, status: "queued" });
+    // read, then the freeze + audit row; the merge itself runs on the queue
+    expectRoundTrips(done, 2);
+    const moved = await merged(old.userId);
+    expect(moved.workouts).toBe(2);
 
     const live = await scalar(
       db
@@ -96,7 +121,7 @@ describe("test_admin_merge", () => {
 
     const [entry] = await db.select().from(auditLog).where(eq(auditLog.action, "user.merge"));
     expect(entry?.targetId).toBe(neu.userId);
-    expect(entry?.detail).toMatchObject({ source: old.userId, source_email: old.email, moved: body.moved });
+    expect(entry?.detail).toEqual({ source: old.userId, source_email: old.email, moved });
   });
 
   it("merge_refuses_itself_and_the_acting_admin", async () => {
@@ -130,8 +155,8 @@ describe("test_admin_merge", () => {
       json: { into: neu.userId, confirm_email: old.email, keep_source_profile: true },
       token: admin.token,
     });
-    expect(res.status, await res.clone().text()).toBe(200);
-    const { moved } = await jsonOf<{ moved: Record<string, number> }>(res);
+    expect(res.status, await res.clone().text()).toBe(202);
+    const moved = await merged(old.userId);
     expect(moved.profiles).toBe(1);
     const [p] = await db.select().from(profiles).where(eq(profiles.userId, neu.userId));
     expect(p?.handle).toBe(oldHandle);
@@ -145,8 +170,8 @@ describe("test_admin_merge", () => {
       json: { into: b.userId, confirm_email: a.email },
       token: admin.token,
     });
-    expect(res2.status).toBe(200);
-    expect((await jsonOf<{ moved: Record<string, number> }>(res2)).moved.profiles).toBeUndefined();
+    expect(res2.status).toBe(202);
+    expect((await merged(a.userId)).profiles).toBeUndefined();
     const left = await db.select().from(profiles).where(eq(profiles.userId, b.userId));
     expect(left.map((r) => r.handle)).toEqual([bHandle]);
     expect(await db.select().from(profiles).where(eq(profiles.handle, aHandle))).toEqual([]);

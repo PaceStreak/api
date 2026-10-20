@@ -4,28 +4,29 @@
  * 6pm is a prompt, not a help), never during a pause, never for a habit already done today. The summary is a
  * count, never names: it shows on a lock screen.
  *
- * Each slice is two round trips: one read batch (rows, pauses, today's logs), one write batch.
+ * Each slice is two round trips: one read batch (rows, pauses, today's logs), one write batch of at most two
+ * statements (the snooze clears, then every note in one insert).
  */
 import type { Ctx } from "../../ctx.ts";
 import { runBatch, type Stmt } from "../../db/batch.ts";
 import { localDate, toWire } from "../../lib/time.ts";
-import { notify } from "../../modules/notifications/service.ts";
+import type { NotifyInput } from "../../modules/notifications/service.ts";
 import { chunk } from "../dispatch.ts";
 import { atLocalHour } from "../zones.ts";
 import {
   doneToday,
   habitOffToday,
-  insertEach,
+  insertNotes,
   pausedOn,
   readAll,
-  remindStatement,
+  remindInput,
   type SlicedJob,
   unique,
   zonesByHour,
   zonesOf,
 } from "./common.ts";
 import {
-  clearSnooze,
+  clearSnoozes,
   dueSnoozes,
   type HabitRow,
   IN_CHUNK,
@@ -111,15 +112,10 @@ export const habitReminders: SlicedJob = {
         !doneToday(h, logs.get(logKey(h.id, day)))
       );
     });
-    const built = await Promise.all(
-      due.map((h) => remindStatement(ctx, h, today(h), `habit:${h.id}:${today(h)}`)),
+    const notes = await Promise.all(
+      due.map((h) => remindInput(ctx, h, today(h), `habit:${h.id}:${today(h)}`)),
     );
-    return (
-      await insertEach(
-        ctx,
-        built.map((b) => b.stmt),
-      )
-    ).flat();
+    return insertNotes(ctx, notes);
   },
 };
 
@@ -140,7 +136,11 @@ export const habitSnoozes: SlicedJob = {
     const live = rows.filter((h) => h.remindable === 1 && h.archivedAt === null && h.kind !== "quit");
     const { pauses, logs } = await habitContext(ctx, live, today);
     // Each clear is predicated on the snooze that fired, so a newer snooze set meanwhile survives.
-    const stmts: Stmt[] = rows.map((h) => clearSnooze(ctx.db, h.id, h.snoozedUntil ?? 0, now));
+    const clear = clearSnoozes(
+      ctx.db,
+      rows.map((h) => ({ id: h.id, due: h.snoozedUntil ?? 0 })),
+      now,
+    );
     const due = live.filter((h) => {
       const day = today(h);
       return (
@@ -149,13 +149,10 @@ export const habitSnoozes: SlicedJob = {
         !doneToday(h, logs.get(logKey(h.id, day)))
       );
     });
-    const built = await Promise.all(
-      due.map((h) =>
-        remindStatement(ctx, h, today(h), `habit-snooze:${h.id}:${toWire(h.snoozedUntil ?? 0)}`),
-      ),
+    const notes = await Promise.all(
+      due.map((h) => remindInput(ctx, h, today(h), `habit-snooze:${h.id}:${toWire(h.snoozedUntil ?? 0)}`)),
     );
-    const res = await insertEach(ctx, [...stmts, ...built.map((b) => b.stmt)]);
-    return res.slice(stmts.length).flat();
+    return insertNotes(ctx, notes, [clear]);
   },
 };
 
@@ -203,7 +200,7 @@ export const habitSummary: SlicedJob = {
       if (list === undefined) byUser.set(h.userId, [h]);
       else list.push(h);
     }
-    const stmts: Stmt[] = [];
+    const notes: NotifyInput[] = [];
     for (const p of people) {
       const day = today(p);
       if (pausedOn(pauses.get(p.userId) ?? [], day)) continue;
@@ -211,18 +208,16 @@ export const habitSummary: SlicedJob = {
         (h) => h.startedOn <= day && !habitOffToday(h, day) && !doneToday(h, logs.get(logKey(h.id, day))),
       ).length;
       if (open === 0) continue;
-      stmts.push(
-        notify(ctx, {
-          userId: p.userId,
-          kind: "habit_summary",
-          category: "habits",
-          title: `${open} habit${open === 1 ? "" : "s"} still open today`,
-          body: "A few minutes now keeps the week on track.",
-          url: "/habits",
-          dedupeKey: `habit-summary:${day}`,
-        }),
-      );
+      notes.push({
+        userId: p.userId,
+        kind: "habit_summary",
+        category: "habits",
+        title: `${open} habit${open === 1 ? "" : "s"} still open today`,
+        body: "A few minutes now keeps the week on track.",
+        url: "/habits",
+        dedupeKey: `habit-summary:${day}`,
+      });
     }
-    return (await insertEach(ctx, stmts)).flat();
+    return insertNotes(ctx, notes);
   },
 };

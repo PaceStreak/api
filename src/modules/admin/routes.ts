@@ -37,7 +37,10 @@ export const adminRoutes = new Hono<AuthedEnv>()
     ),
   )
   .post("/users/:user_id/merge", admin(), param(s.UserId), json(s.MergeIn), async (c) =>
-    c.json(await service.merge(c.var.ctx, c.var.authed, c.req.valid("param").user_id, c.req.valid("json"))),
+    c.json(
+      await service.merge(c.var.ctx, c.var.authed, c.req.valid("param").user_id, c.req.valid("json")),
+      202,
+    ),
   )
   .get("/audit", moderator(), async (c) => c.json(await service.listAudit(c.var.ctx, c.var.authed)))
   .get("/metrics", moderator(), async (c) => c.json(await service.metrics(c.var.ctx, c.var.authed)));

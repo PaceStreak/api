@@ -8,21 +8,33 @@ import type { JobName } from "./scheduled.ts";
 export const IDS_PER_MESSAGE = 50;
 
 /**
- * D1 counts every statement, each one inside a `batch()` too, against 1,000 queries per Worker invocation on the
- * paid plan (https://developers.cloudflare.com/d1/platform/limits/, "Batch limits"). The consumer takes one
- * message per invocation (`max_batch_size: 1` in wrangler.jsonc), so each message's work must fit on its own.
+ * D1 counts every statement, each one inside a `batch()` too, against a per-invocation cap: 50 queries on Workers
+ * Free, 1,000 on Paid (src/lib/plan.ts; `PLAN` in wrangler.jsonc). The consumer takes one message per invocation
+ * (`max_batch_size: 1` in wrangler.jsonc), so each message's work must fit on its own: `ctx.cfg.d1Budget`, 90% of
+ * the cap.
  */
-export const D1_QUERIES_PER_INVOCATION = 1000;
 
 /**
- * Ids per `job-slice` message for jobs whose per-id cost is large: a recompute (`stats`, ~20-30 statements), a
- * snapshot (`nudges`, `digest`, ~16), a backup note whose delivery builds an export. test/jobs/d1-limits.test.ts
- * measures the costs and holds every pack under the limit.
+ * Most statements one id adds to a `job-slice` for jobs whose cost grows per id: a recompute (`stats`: the read with
+ * the profile/chain creates, then the projection write) and a snapshot (`nudges`, `digest`: one fused read plus the
+ * habit logs, three statements). The other jobs read and write their whole pack with a constant number of set-based
+ * statements. test/jobs/d1-limits.test.ts measures these costs on a real account and holds every pack to the budget.
  */
-export const SLICE_IDS: Partial<Record<JobName, number>> = { stats: 20, nudges: 40, digest: 40, backup: 20 };
-export const idsPerSlice = (job: JobName): number => SLICE_IDS[job] ?? IDS_PER_MESSAGE;
+export const SLICE_COSTS: Partial<Record<JobName, number>> = { stats: 14, nudges: 4, digest: 4 };
+/** Statements a slice spends whatever its size: the pack's own reads, the notes insert, a lost race's re-read. */
+export const SLICE_OVERHEAD = 8;
 
-/** Notes per `deliver` message: a backup note reads the whole account (~40 statements) for its attachment. */
+/** Ids per `job-slice` for `job` on a plan with `budget` statements per invocation: at least 1, at most 50. */
+export function idsPerSlice(job: JobName, budget: number): number {
+  const cost = SLICE_COSTS[job];
+  if (cost === undefined) return IDS_PER_MESSAGE;
+  return Math.max(1, Math.min(IDS_PER_MESSAGE, Math.floor((budget - SLICE_OVERHEAD) / cost)));
+}
+
+/**
+ * Notes per `deliver` message. The consumer still delivers only what fits its invocation's subrequest and D1
+ * budgets (a backup note builds the export for its attachment) and re-enqueues the rest (notifications `deliver`).
+ */
 export const DELIVER_IDS = 20;
 /** Workers Queues accepts at most 100 messages per `sendBatch` call. */
 export const MESSAGES_PER_SEND = 100;
@@ -34,7 +46,18 @@ export type JobMessage =
   | { type: "job-slice"; job: JobName; ids: string[] }
   | { type: "import-slice"; jobId: string }
   | { type: "export-slice"; jobId: string; part: number }
-  | { type: "purge"; userIds: string[] };
+  | { type: "purge"; userIds: string[] }
+  | {
+      type: "merge-slice";
+      source: string;
+      into: string;
+      keepSourceProfile: boolean;
+      auditId: string;
+      /** First plan statement this slice runs. */
+      from: number;
+      /** Rows moved by the slices before, per table. */
+      moved: Record<string, number>;
+    };
 
 export type MessageType = JobMessage["type"];
 export type MessageOf<T extends MessageType> = Extract<JobMessage, { type: T }>;
@@ -79,9 +102,9 @@ export function dispatchIds(
 export const dispatchDeliver = (queue: JobQueue, ids: readonly string[]) =>
   dispatchIds(queue, ids, (part) => ({ type: "deliver", ids: part }), DELIVER_IDS);
 
-/** Fans a job's selected ids out to `job-slice` messages. */
-export const dispatchJobSlices = (queue: JobQueue, job: JobName, ids: readonly string[]) =>
-  dispatchIds(queue, ids, (part) => ({ type: "job-slice", job, ids: part }), idsPerSlice(job));
+/** Fans a job's selected ids out to `job-slice` messages sized for `budget` statements per invocation. */
+export const dispatchJobSlices = (queue: JobQueue, job: JobName, ids: readonly string[], budget: number) =>
+  dispatchIds(queue, ids, (part) => ({ type: "job-slice", job, ids: part }), idsPerSlice(job, budget));
 
 /** Account purge in packs of 50 users (DESIGN.md §9, job 10). */
 export const dispatchPurge = (queue: JobQueue, userIds: readonly string[]) =>

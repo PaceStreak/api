@@ -4,6 +4,7 @@ import type { AppEnv } from "../../ctx.ts";
 import { slowDown } from "../../lib/errors.ts";
 import { json, param, query } from "../../lib/validation.ts";
 import { auth } from "../auth/service.ts";
+import type { FeedCursor } from "./people.ts";
 import * as s from "./schemas.ts";
 import * as service from "./service.ts";
 
@@ -27,7 +28,7 @@ const kudosBody: MiddlewareHandler<AppEnv> = async (c, next) => {
   return json<typeof s.KudosIn, AppEnv>(s.KudosIn)(c as never, next);
 };
 
-const before = (q: { before?: number | undefined }) => q.before ?? null;
+const before = (q: { before?: FeedCursor | undefined }) => q.before ?? null;
 
 export const socialRoutes = new Hono<AppEnv>()
   .get("/people/search", auth(), searchLimit, query(s.SearchQuery), async (c) =>

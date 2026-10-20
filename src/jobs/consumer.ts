@@ -6,11 +6,15 @@
  * - malformed body: logged and acked; retrying cannot make it valid.
  * - no handler registered: retried, so a deploy that adds the handler (or the DLQ) still sees it.
  * - handler throws: retried with exponential backoff.
+ *
+ * The dead-letter queues (`pacestreak-jobs-dlq`, `pacestreak-jobs-staging-dlq`) come through the same entry point
+ * and are routed by queue name to `handleDeadLetters`, which records each message for the hourly error alert.
  */
 import * as z from "zod";
 import { type Ctx, createCtx, type Deferrer } from "../ctx.ts";
 import { loadConfig } from "../env.ts";
 import { createLogger } from "../lib/logger.ts";
+import { type DeadLetter, recordDeadLetters } from "../modules/ops/service.ts";
 import type { JobMessage, MessageOf, MessageType } from "./dispatch.ts";
 import { JOB_NAMES } from "./scheduled.ts";
 
@@ -87,6 +91,57 @@ export function retryDelaySeconds(attempts: number): number {
   return Math.min(600, 10 * 2 ** Math.max(0, attempts - 1));
 }
 
+/** Dead-letter queues end in `-dlq` (wrangler.jsonc). */
+export const isDeadLetterQueue = (queue: string) => queue.endsWith("-dlq");
+
+const MAX_IDS_SHOWN = 10;
+
+const idList = (ids: readonly string[]) =>
+  ids.length <= MAX_IDS_SHOWN
+    ? ids.join(", ")
+    : `${ids.slice(0, MAX_IDS_SHOWN).join(", ")} (+${ids.length - MAX_IDS_SHOWN} more)`;
+
+/** The job type and its ids, nothing else: message bodies are never copied into the errors table. */
+export function deadLetterSummary(body: unknown): string {
+  const parsed = JobMessageSchema.safeParse(body);
+  if (!parsed.success) return "malformed message";
+  const m = parsed.data;
+  switch (m.type) {
+    case "deliver":
+      return `deliver ids=${idList(m.ids)}`;
+    case "recompute":
+      return `recompute userId=${m.userId}`;
+    case "rebuild-slice":
+      return `rebuild-slice userId=${m.userId}`;
+    case "job-slice":
+      return `job-slice ${m.job} ids=${idList(m.ids)}`;
+    case "import-slice":
+      return `import-slice jobId=${m.jobId}`;
+    case "export-slice":
+      return `export-slice jobId=${m.jobId} part=${m.part}`;
+    case "purge":
+      return `purge userIds=${idList(m.userIds)}`;
+  }
+}
+
+/** Records every dead message in one write batch, then acks them all; a failed write retries the batch. */
+export async function handleDeadLetters(ctx: Ctx, batch: MessageBatch): Promise<void> {
+  const letters: DeadLetter[] = batch.messages.map((m) => ({
+    msgId: m.id,
+    summary: deadLetterSummary(m.body),
+    queue: batch.queue,
+  }));
+  try {
+    await recordDeadLetters(ctx, letters);
+  } catch (err) {
+    ctx.log.error("could not record dead letters", err, { count: letters.length });
+    batch.retryAll({ delaySeconds: 60 });
+    return;
+  }
+  for (const l of letters) ctx.log.warn("dead-lettered job", { msgId: l.msgId, summary: l.summary });
+  batch.ackAll();
+}
+
 /** `queue()` entry point. Messages are processed one at a time, in order. */
 export async function handleQueue(
   batch: MessageBatch,
@@ -102,6 +157,10 @@ export async function handleQueue(
     return;
   }
   const ctx = createCtx(env, cfg.config, exec, `queue:${batch.queue}`);
+  if (isDeadLetterQueue(batch.queue)) {
+    await handleDeadLetters(ctx, batch);
+    return;
+  }
   for (const message of batch.messages) {
     const parsed = JobMessageSchema.safeParse(message.body);
     if (!parsed.success) {

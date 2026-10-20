@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   type ConsumerRegistry,
   createConsumerRegistry,
+  deadLetterSummary,
   handleQueue,
+  isDeadLetterQueue,
   JobMessageSchema,
   retryDelaySeconds,
 } from "../../src/jobs/consumer.ts";
@@ -102,5 +104,72 @@ describe("queue consumer", () => {
 
   it("backoff doubles and caps at 10 minutes", () => {
     expect([1, 2, 3, 4, 10].map(retryDelaySeconds)).toEqual([10, 20, 40, 80, 600]);
+  });
+});
+
+describe("dead-letter consumer", () => {
+  async function consumeDlq(queue: string, bodies: unknown[], tag = "d") {
+    const batch = createMessageBatch(
+      queue,
+      bodies.map((body, i) => ({ id: `${queue}-${tag}${i}`, timestamp: Date.now(), attempts: 1, body })),
+    );
+    const exec = createExecutionContext();
+    // A registry with no handlers: a dead letter must never be routed to a job handler.
+    await handleQueue(batch, env, exec, createConsumerRegistry());
+    return getQueueResult(batch, exec);
+  }
+
+  const rows = async (queue: string) =>
+    (
+      await env.DB.prepare(
+        "SELECT message, stack, alerted_at AS alertedAt FROM client_errors WHERE path = ? ORDER BY message",
+      )
+        .bind(`queue:${queue}`)
+        .all<{ message: string; stack: string | null; alertedAt: number | null }>()
+    ).results;
+
+  it.each(["pacestreak-jobs-dlq", "pacestreak-jobs-staging-dlq"])(
+    "%s records the job type and ids, unalerted, then acks",
+    async (queue) => {
+      const res = await consumeDlq(queue, [
+        { type: "purge", userIds: ["u1", "u2"] },
+        { type: "job-slice", job: "nudges", ids: ["p1"] },
+        { secret: "someone@example.com" },
+      ]);
+      expect(res.ackAll).toBe(true);
+      expect(res.retryBatch.retry).toBe(false);
+      expect(res.retryMessages).toEqual([]);
+      const got = await rows(queue);
+      expect(got.map((r) => r.message)).toEqual([
+        "Dead-lettered job: job-slice nudges ids=p1",
+        "Dead-lettered job: malformed message",
+        "Dead-lettered job: purge userIds=u1, u2",
+      ]);
+      expect(got.every((r) => r.stack === null && r.alertedAt === null)).toBe(true);
+      expect(JSON.stringify(got)).not.toContain("example.com");
+    },
+  );
+
+  it("a redelivered dead letter counts on its own row instead of adding one", async () => {
+    const queue = "pacestreak-jobs-dlq";
+    await consumeDlq(queue, [{ type: "recompute", userId: "u9" }], "again");
+    await consumeDlq(queue, [{ type: "recompute", userId: "u9" }], "again");
+    const r = await env.DB.prepare("SELECT count FROM client_errors WHERE message LIKE '%u9%'").all<{
+      count: number;
+    }>();
+    expect(r.results).toEqual([{ count: 2 }]);
+  });
+
+  it("caps the id list it records", () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `n${i}`);
+    expect(deadLetterSummary({ type: "deliver", ids })).toBe(
+      `deliver ids=${ids.slice(0, 10).join(", ")} (+20 more)`,
+    );
+  });
+
+  it("only queues ending in -dlq are dead-letter queues", () => {
+    expect(isDeadLetterQueue("pacestreak-jobs-dlq")).toBe(true);
+    expect(isDeadLetterQueue("pacestreak-jobs-staging-dlq")).toBe(true);
+    expect(isDeadLetterQueue("pacestreak-jobs")).toBe(false);
   });
 });

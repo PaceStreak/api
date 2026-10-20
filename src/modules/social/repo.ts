@@ -242,12 +242,27 @@ const feedSelect = (viewer: string) =>
     FROM activity_events e JOIN profiles p ON p.user_id = e.user_id`;
 
 type FeedRow = import("./people.ts").FeedRow;
+type FeedCursor = import("./people.ts").FeedCursor;
+
+/** Keyset paging on `(created_at, id)`, the feed's sort key; the old timestamp-only cursor pages by time. */
+const keyset = (before: FeedCursor | null) =>
+  before === null
+    ? sql``
+    : before.id === null
+      ? sql`AND e.created_at < ${before.at}`
+      : sql`AND (e.created_at, e.id) < (${before.at}, ${before.id})`;
 
 /**
  * One feed page (Python `_feed_page`): `authors` null means the viewer's own feed (self plus accepted followees);
  * otherwise the user in that subquery. Newest first, 26 rows so the caller knows whether there is more.
  */
-export const feedPage = (db: Db, viewer: string, authors: SQL | null, before: number | null, year: number) =>
+export const feedPage = (
+  db: Db,
+  viewer: string,
+  authors: SQL | null,
+  before: FeedCursor | null,
+  year: number,
+) =>
   db.all<FeedRow>(
     sql`${feedSelect(viewer)}
       WHERE e.hidden_at IS NULL AND ${canSee(viewer, "p", year)}
@@ -257,7 +272,7 @@ export const feedPage = (db: Db, viewer: string, authors: SQL | null, before: nu
                   WHERE follower_id = ${viewer} AND status = 'accepted'))`
             : sql`e.user_id = ${authors}`
         }
-        ${before === null ? sql`` : sql`AND e.created_at < ${before}`}
+        ${keyset(before)}
       ORDER BY e.created_at DESC, e.id DESC LIMIT ${PAGE + 1}`,
   );
 
@@ -265,13 +280,13 @@ export const feedPage = (db: Db, viewer: string, authors: SQL | null, before: nu
  * A group's feed: members' events, co-membership counting as a follow except for private accounts. Python left
  * out comments (always 0) and reactions; this is the same item as every other feed.
  */
-export const groupFeed = (db: Db, viewer: string, groupId: string, before: number | null, year: number) =>
+export const groupFeed = (db: Db, viewer: string, groupId: string, before: FeedCursor | null, year: number) =>
   db.all<FeedRow>(
     sql`${feedSelect(viewer)}
       WHERE e.user_id IN (SELECT user_id FROM group_members WHERE group_id = ${groupId})
         AND e.hidden_at IS NULL AND p.visibility <> 'private' AND ${socialOk("p", year)}
         AND ${notBlocked(viewer, sql`e.user_id`)}
-        ${before === null ? sql`` : sql`AND e.created_at < ${before}`}
+        ${keyset(before)}
       ORDER BY e.created_at DESC, e.id DESC LIMIT ${PAGE + 1}`,
   );
 
@@ -559,9 +574,10 @@ const cases: Case[] = [
     build: (db: Db) => blockStatements(db, U, U, V, 0)[i as 0 | 1 | 2],
   })),
   { name: "social.feed", build: (db) => feedPage(db, U, null, null, Y) },
-  { name: "social.feedBefore", build: (db) => feedPage(db, U, null, 1, Y) },
-  { name: "social.personFeed", build: (db) => feedPage(db, U, H, 1, Y) },
-  { name: "social.groupFeed", build: (db) => groupFeed(db, U, V, 1, Y) },
+  { name: "social.feedBefore", build: (db) => feedPage(db, U, null, { at: 1, id: V }, Y) },
+  { name: "social.feedBeforeOld", build: (db) => feedPage(db, U, null, { at: 1, id: null }, Y) },
+  { name: "social.personFeed", build: (db) => feedPage(db, U, H, { at: 1, id: V }, Y) },
+  { name: "social.groupFeed", build: (db) => groupFeed(db, U, V, { at: 1, id: V }, Y) },
   { name: "social.visibleEvent", build: (db) => visibleEvent(db, U, V, Y) },
   { name: "social.kudosBy", build: (db) => kudosBy(db, U, V, Y) },
   { name: "social.kudosState", build: (db) => kudosState(db, U, V) },

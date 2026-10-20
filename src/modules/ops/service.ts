@@ -148,3 +148,36 @@ export async function abuse(ctx: Ctx, authed: AuthedBatch) {
 
 /** Retention sweep statements for the daily job (JOBS-12). */
 export const sweepStmts = (ctx: Ctx) => repo.sweepStmts(ctx.db, ctx.clock.now() - 30 * DAY_MS);
+
+// ---- dead letters -------------------------------------------------------------------------------------------
+
+export interface DeadLetter {
+  /** The queue message id: one crash group per dead message, so a redelivered DLQ message only bumps its count. */
+  msgId: string;
+  /** Job type and ids only; never a message body, which can hold personal data. */
+  summary: string;
+  queue: string;
+}
+
+/**
+ * Records dead-lettered queue messages as crash groups in `client_errors`, which the hourly `error_alerts` job
+ * emails to admins and Admin > Ops lists. One write batch for the whole queue batch.
+ */
+export async function recordDeadLetters(ctx: Ctx, letters: readonly DeadLetter[]): Promise<void> {
+  const now = ctx.clock.now();
+  // Hash first: drizzle statements are thenables, so awaiting them inside Promise.all would run each one alone.
+  const prints = await Promise.all(letters.map((l) => sha256Hex(`dlq|${l.queue}|${l.msgId}`)));
+  const stmts = letters.map((l, i) =>
+    repo.upsertClientError(ctx.db, {
+      id: uuid7(now),
+      fingerprint: prints[i] ?? "",
+      message: `Dead-lettered job: ${l.summary}`.slice(0, 500),
+      stack: null,
+      path: `queue:${l.queue}`,
+      release: null,
+      userAgent: null,
+      now,
+    }),
+  );
+  if (stmts.length > 0) await runBatch(ctx.db, stmts);
+}

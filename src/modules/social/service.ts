@@ -21,6 +21,7 @@ import { daysBetween, localDate, toWire, weekStart, zone } from "../../lib/time.
 import { uuid7 } from "../../lib/uuid7.ts";
 import { chainPayload, jointStreak, snapshotsFor } from "../game/service.ts";
 import { dispatchNotified, type NotifyResult, notify } from "../notifications/service.ts";
+import type { FeedCursor } from "./people.ts";
 import {
   cleanText,
   displayName,
@@ -34,7 +35,7 @@ import {
 import * as repo from "./repo.ts";
 import type { CommentInput, Reaction, ReportInput } from "./schemas.ts";
 
-export type { FeedRow, Person, PersonRow } from "./people.ts";
+export type { FeedCursor, FeedRow, Person, PersonRow } from "./people.ts";
 export {
   cleanOrNull,
   cleanText,
@@ -259,7 +260,7 @@ export async function viewPerson(ctx: Ctx, authed: AuthedBatch, handle: string) 
 }
 
 /** GET /people/{handle}/events: 404 unless the viewer may see the person. */
-export async function personEvents(ctx: Ctx, authed: AuthedBatch, handle: string, before: number | null) {
+export async function personEvents(ctx: Ctx, authed: AuthedBatch, handle: string, before: FeedCursor | null) {
   const { visible, rest } = await readPerson(
     ctx,
     authed,
@@ -394,7 +395,7 @@ export async function myBlocks(ctx: Ctx, authed: AuthedBatch) {
 
 // ---- feed, events, kudos, comments ----------------------------------------------------------------------------
 
-export async function feed(ctx: Ctx, authed: AuthedBatch, before: number | null) {
+export async function feed(ctx: Ctx, authed: AuthedBatch, before: FeedCursor | null) {
   const [, rows] = await authed.read(repo.feedPage(ctx.db, authed.userId, null, before, utcYear(ctx)));
   return feedPage(rows, authed.userId);
 }

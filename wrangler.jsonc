@@ -42,6 +42,14 @@
         "max_batch_timeout": 2,
         "max_retries": 5,
         "dead_letter_queue": "pacestreak-jobs-dlq"
+      },
+      {
+        // Dead letters are recorded in client_errors for the hourly error_alerts email, then acked
+        // (src/jobs/consumer.ts handleDeadLetters). One write batch per invocation.
+        "queue": "pacestreak-jobs-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 10
       }
     ]
   },
@@ -105,6 +113,14 @@
             "max_batch_timeout": 2,
             "max_retries": 5,
             "dead_letter_queue": "pacestreak-jobs-staging-dlq"
+          },
+          {
+            // Dead letters are recorded in client_errors for the hourly error_alerts email, then acked
+            // (src/jobs/consumer.ts handleDeadLetters). One write batch per invocation.
+            "queue": "pacestreak-jobs-staging-dlq",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 10
           }
         ]
       },

@@ -61,7 +61,7 @@ export const activityEvents = sqliteTable(
   (t) => [
     unique("uq_activity_ref").on(t.userId, t.kind, t.refKey),
     index("ix_activity_events_workout_id").on(t.workoutId),
-    index("ix_activity_feed").on(t.userId, t.createdAt),
+    index("ix_activity_feed").on(t.userId, t.createdAt, t.id),
   ],
 );
 

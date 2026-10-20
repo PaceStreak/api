@@ -5,6 +5,7 @@
  * Privacy rule (AGENTS.md): a person card carries identity, level and the whole-life training streak only. It is
  * never built from habit rows, so a habit's name, amounts and slips cannot reach a feed, profile, group or board.
  */
+import { b64urlDecode, b64urlEncode, utf8 } from "../../lib/b64url.ts";
 import { toWire } from "../../lib/time.ts";
 
 /** The person columns every social query selects (`PERSON_SQL` in repo.ts), keyed `p_*` / `s_*`. */
@@ -160,15 +161,42 @@ export function feedItem(r: FeedRow, viewer: string) {
   };
 }
 
-/** `{events, next}`: 25 per page, a 26th row says there is more; `next` is the last row's `created_at`. */
+/** `{events, next}`: 25 per page, a 26th row says there is more; `next` is the last row's opaque cursor. */
 export function feedPage(rows: readonly FeedRow[], viewer: string) {
   const more = rows.length > PAGE;
   const page = rows.slice(0, PAGE);
   const last = page[page.length - 1];
   return {
     events: page.map((r) => feedItem(r, viewer)),
-    next: more && last !== undefined ? toWire(last.e_created) : null,
+    next: more && last !== undefined ? encodeCursor({ at: last.e_created, id: last.e_id }) : null,
   };
 }
 
 export const PAGE = 25;
+
+/**
+ * A feed position: the last item's `created_at` and `id`, so events created in the same millisecond are never
+ * skipped across a page boundary. `id` is null for the old timestamp-only cursor, still accepted.
+ */
+export interface FeedCursor {
+  at: number;
+  id: string | null;
+}
+
+/** Opaque on the wire: base64url of `<ms>.<id>`. Clients pass `next` back unchanged. */
+export function encodeCursor(c: { at: number; id: string }): string {
+  return b64urlEncode(utf8(`${c.at}.${c.id}`));
+}
+
+/** The composite cursor, or null when `s` is not one (the caller then tries the old ISO instant). */
+export function decodeCursor(s: string): FeedCursor | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(b64urlDecode(s));
+  } catch {
+    return null;
+  }
+  const m = /^(\d{1,15})\.([0-9a-f-]{1,64})$/.exec(text);
+  if (m === null || m[1] === undefined || m[2] === undefined) return null;
+  return { at: Number(m[1]), id: m[2] };
+}

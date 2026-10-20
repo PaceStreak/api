@@ -1,8 +1,7 @@
 /** Request schemas (Python app/groups/router.py). Objects are non-strict, like pydantic. */
 import * as z from "zod";
 import { DISCIPLINE_IDS } from "../../catalog/exercises.ts";
-import { feedCursor } from "../social/schemas.ts";
-import { cleanOrNull } from "../social/service.ts";
+import { cleanOrNull, feedCursor } from "../social/service.ts";
 
 const uuid = z.guid().transform((s) => s.toLowerCase());
 

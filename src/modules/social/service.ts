@@ -812,3 +812,6 @@ export async function encourage(ctx: Ctx, authed: AuthedBatch, handle: string, p
   ])) as [NotifyResult];
   return { sent: dispatchNotified(ctx, note).length > 0 };
 }
+
+/** The feed cursor schema, public for the group feed. */
+export { feedCursor } from "./schemas.ts";

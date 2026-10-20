@@ -129,23 +129,14 @@ flight (housekeeping deletes them after a week). If an R2 bucket for the
 Python service's photos exists, leave it until step 19 (there are no users, so
 nothing moves across).
 
-Photo uploads and downloads go straight from the browser to R2 with presigned
-URLs, so the photo bucket needs CORS for the app origin:
+Photo bytes go through the Worker (`PUT`/`GET /v1/body-photos/{id}` on the
+`PHOTOS` binding), so the buckets need no CORS policy and there is no R2 API
+token or S3 access key. If one was made for an earlier version of this
+runbook, revoke it (R2 → Manage API tokens) and remove any bucket CORS rule
+(`pnpm wrangler r2 bucket cors delete pacestreak-photos`).
 
-```fish
-# cors.json: [{"AllowedOrigins":["https://app.pacestreak.com"],"AllowedMethods":["GET","PUT"],"AllowedHeaders":["content-type"],"MaxAgeSeconds":3600}]
-pnpm wrangler r2 bucket cors set pacestreak-photos --file cors.json
-# staging: AllowedOrigins ["http://localhost:5173"]
-pnpm wrangler r2 bucket cors set pacestreak-photos-staging --file cors-staging.json
-```
-
-Create an **R2 API token** (R2 → Manage API tokens → Object Read & Write,
-restricted to the two photo buckets of each environment). Its access key id and
-secret become `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` in step 8. Do not
-paste them into any chat.
-
-- **Check:** `pnpm wrangler r2 bucket list` shows the four; `pnpm wrangler r2 bucket cors list pacestreak-photos`.
-- **Rollback:** `pnpm wrangler r2 bucket delete <name>` (empty buckets only); revoke the token.
+- **Check:** `pnpm wrangler r2 bucket list` shows the four.
+- **Rollback:** `pnpm wrangler r2 bucket delete <name>` (empty buckets only).
 
 ## 6. Cron triggers
 
@@ -174,7 +165,6 @@ chat transcript. Production and staging get **different** values.
 | `DATA_KEY` | base64, **exactly** 32 bytes (AES-256-GCM: TOTP secrets) | `openssl rand -base64 32` |
 | `TURNSTILE_SECRET_KEY` | Turnstile widget secret | Reuse the existing widget's secret for production (same site key in the app); staging uses the always-pass test secret `1x0000000000000000000000000000000AA` |
 | `VAPID_PRIVATE_JWK` / `VAPID_PUBLIC_KEY` | P-256 private JWK (JSON) / raw public key, base64url | Node one-liner below. A **new** pair (no existing subscriptions) |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 API token from step 5 | Dashboard |
 
 ```fish
 node -e 'const s=crypto.subtle;(async()=>{const k=await s.generateKey({name:"ECDSA",namedCurve:"P-256"},true,["sign","verify"]);console.log(JSON.stringify(await s.exportKey("jwk",k.privateKey)));console.log(Buffer.from(await s.exportKey("raw",k.publicKey)).toString("base64url"))})()'
@@ -189,8 +179,6 @@ pnpm wrangler secret put DATA_KEY
 pnpm wrangler secret put TURNSTILE_SECRET_KEY
 pnpm wrangler secret put VAPID_PRIVATE_JWK
 pnpm wrangler secret put VAPID_PUBLIC_KEY
-pnpm wrangler secret put R2_ACCESS_KEY_ID
-pnpm wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
 `secret put` on a Worker that does not exist yet creates an empty one with

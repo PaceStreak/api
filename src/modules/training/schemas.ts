@@ -226,7 +226,6 @@ export const WeighInId = z.object({ weigh_in_id: uuid });
 export const PhotoIn = z.object({
   date: z.iso.date(),
   pose: z.enum(["front", "side", "back"]),
-  content_type: z.string(),
 });
 export type PhotoInput = z.output<typeof PhotoIn>;
 export const PhotoId = z.object({ photo_id: uuid });

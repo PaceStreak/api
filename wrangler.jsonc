@@ -70,7 +70,6 @@
     "CORS_ORIGINS": "https://app.pacestreak.com",
     "FRONTEND_URL": "https://app.pacestreak.com",
     "PUBLIC_API_URL": "https://api.pacestreak.com",
-    "R2_ACCOUNT_HOST": "fef2509f0377fba1f3201a655090ec0a.r2.cloudflarestorage.com",
     "MAIL_FROM": "PaceStreak <noreply@pacestreak.com>",
     "VAPID_SUBJECT": "mailto:hello@pacestreak.com",
     "PUSH_HOST_ALLOWLIST": "fcm.googleapis.com,push.apple.com,push.services.mozilla.com,notify.windows.com,push.vivaldi.net"
@@ -128,7 +127,6 @@
         "CORS_ORIGINS": "http://localhost:5173,https://staging.pacestreak-app.pages.dev",
         "FRONTEND_URL": "https://staging.pacestreak-app.pages.dev",
         "PUBLIC_API_URL": "https://pacestreak-api-staging.alzywelzy.workers.dev",
-        "R2_ACCOUNT_HOST": "fef2509f0377fba1f3201a655090ec0a.r2.cloudflarestorage.com",
         "MAIL_FROM": "PaceStreak <noreply@pacestreak.com>",
         "VAPID_SUBJECT": "mailto:hello@pacestreak.com",
         "PUSH_HOST_ALLOWLIST": "fcm.googleapis.com,push.apple.com,push.services.mozilla.com,notify.windows.com,push.vivaldi.net"

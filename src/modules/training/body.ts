@@ -5,7 +5,7 @@ import type { AuthedBatch, Stmt } from "../../db/batch.ts";
 import { bodyMetrics, bodyPhotos, weighIns } from "../../db/schema/index.ts";
 import { conflict, HttpError, notFound } from "../../lib/errors.ts";
 import { pyRound } from "../../lib/format.ts";
-import { deleteMany, isPhotoType, presignGet, presignPut, verifyUpload } from "../../lib/r2.ts";
+import { deleteMany, isPhotoType, storeChecked } from "../../lib/r2.ts";
 import { BUCKETS, perUser } from "../../lib/ratelimit.ts";
 import { addDays, localDate, parseInstant, toWire } from "../../lib/time.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
@@ -208,13 +208,8 @@ export const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 type PhotoRow = typeof bodyPhotos.$inferSelect;
 export const photoOut = (p: PhotoRow) => ({ id: p.id, date: p.takenOn, pose: p.pose, size: p.size });
 export const objectKey = (userId: string, photoId: string) => `body-photos/${userId}/${photoId}`;
-const bucketName = (ctx: Ctx) =>
-  ctx.cfg.environment === "staging" ? "pacestreak-photos-staging" : "pacestreak-photos";
-
-function creds(ctx: Ctx) {
-  if (ctx.cfg.r2 === null) throw new HttpError(503, "Photo backup is temporarily unavailable");
-  return ctx.cfg.r2;
-}
+/** The declared type, without parameters (`image/jpeg; charset=x` is `image/jpeg`); never trusted on its own. */
+const mediaType = (header: string | undefined) => (header ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
 
 /** Python `_check`, on rows read in the caller's batch. */
 function check(
@@ -223,8 +218,9 @@ function check(
   prof: Parameters<typeof profileOf>[0],
   existing: PhotoRow | undefined,
   body: PhotoInput,
+  contentType: string,
 ) {
-  if (!isPhotoType(body.content_type)) throw new HttpError(415, "Send a JPEG, WebP or PNG");
+  if (!isPhotoType(contentType)) throw new HttpError(415, "Send a JPEG, WebP or PNG");
   const today = localDate(ctx.clock.now(), profileOf(prof).timezone);
   if (body.date > addDays(today, 1)) throw new HttpError(422, "That day has not happened yet");
   if (existing !== undefined && existing.userId !== authed.userId) throw conflict("Pick another id");
@@ -235,15 +231,44 @@ export async function listPhotos(ctx: Ctx, authed: AuthedBatch) {
   return rows.map(photoOut);
 }
 
-export async function getPhoto(ctx: Ctx, authed: AuthedBatch, id: string) {
+/**
+ * The photo's bytes, streamed from the PHOTOS binding with the stored type. Owner only: anyone else, a deleted row
+ * or a missing object is the same 404. Never cached anywhere: these are body photos.
+ */
+export async function getPhoto(ctx: Ctx, authed: AuthedBatch, id: string): Promise<Response> {
   const [, rows] = await authed.read(repo.photoById(ctx.db, id));
   const p = rows[0];
   if (p === undefined || p.userId !== authed.userId) throw notFound("Not found");
-  return { url: await presignGet(creds(ctx), bucketName(ctx), p.objectKey, p.contentType), expires_in: 60 };
+  const obj = await ctx.env.PHOTOS.get(p.objectKey);
+  if (obj === null) throw notFound("Not found");
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": p.contentType,
+      "Content-Length": String(obj.size),
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": "inline",
+    },
+  });
 }
 
-/** Step 1: a presigned PUT. One round trip, which also counts the call against `body-photo` (60/h). */
-export async function startUpload(ctx: Ctx, authed: AuthedBatch, id: string, body: PhotoInput) {
+/**
+ * One request: the raw bytes, typed by Content-Type, with `date` and `pose` in the query. Round trip 1 reads the
+ * profile, the id's owner and the count, and counts the call against `body-photo` (60/h); the bytes then stream into
+ * R2 with their first bytes checked against the declared type before anything is stored; round trip 2 writes the
+ * row. A rejected upload stores nothing and leaves an earlier version of the photo as it was.
+ */
+export async function uploadPhoto(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  id: string,
+  body: PhotoInput,
+  upload: {
+    contentType: string | undefined;
+    contentLength: string | undefined;
+    stream: ReadableStream<Uint8Array> | null;
+  },
+) {
   const limit = perUser(ctx.db, BUCKETS.bodyPhoto, authed.userId, ctx.clock.now());
   const [, counter, prof, rows, count] = await authed.read(
     limit.counter,
@@ -253,26 +278,19 @@ export async function startUpload(ctx: Ctx, authed: AuthedBatch, id: string, bod
   );
   limit.check(counter);
   const existing = rows[0];
-  check(ctx, authed, prof, existing, body);
+  const contentType = mediaType(upload.contentType);
+  check(ctx, authed, prof, existing, body, contentType);
   if (existing === undefined && (count[0]?.n ?? 0) >= MAX_PHOTOS)
     throw conflict(`You have ${MAX_PHOTOS} photos backed up. Delete some old ones first.`);
-  const url = await presignPut(creds(ctx), bucketName(ctx), objectKey(authed.userId, id), body.content_type);
-  return { upload_url: url, expires_in: 300 };
-}
-
-/** Step 2: verify what landed in R2 (size, magic bytes), then and only then write the row. */
-export async function completeUpload(ctx: Ctx, authed: AuthedBatch, id: string, body: PhotoInput) {
-  const [, prof, rows] = await authed.read(repo.profile(ctx.db, authed.userId), repo.photoById(ctx.db, id));
-  check(ctx, authed, prof, rows[0], body);
+  const size = /^\d+$/.test(upload.contentLength ?? "") ? Number(upload.contentLength) : Number.NaN;
+  if (Number.isNaN(size)) throw new HttpError(411, "Send the photo with its Content-Length");
+  if (size > MAX_PHOTO_BYTES) throw new HttpError(413, "That photo is too large");
+  if (size === 0 || upload.stream === null) throw new HttpError(400, "Send the photo");
   const key = objectKey(authed.userId, id);
-  const v = await verifyUpload(ctx.env.PHOTOS, key, body.content_type, MAX_PHOTO_BYTES);
-  if (!v.ok) {
-    if (v.reason === "missing") throw new HttpError(400, "Upload it first");
-    if (v.reason === "too_large") throw new HttpError(413, "That photo is too large");
-    throw new HttpError(415, "Not the image type it claims");
-  }
+  const stored = await storeChecked(ctx.env.PHOTOS, key, contentType, upload.stream, size);
+  if (!stored.ok) throw new HttpError(415, "Not the image type it claims");
   const now = ctx.clock.now();
-  const values = { takenOn: body.date, pose: body.pose, contentType: body.content_type, size: v.size };
+  const values = { takenOn: body.date, pose: body.pose, contentType, size };
   const [saved] = await authed.write(
     ctx.db
       .insert(bodyPhotos)

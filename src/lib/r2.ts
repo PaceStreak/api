@@ -1,16 +1,8 @@
 // Progress photos in R2 (DESIGN.md §12, spec/core.md §5).
 //
-// The PHOTOS binding does every server-side read and delete; it cannot presign, so the two
-// browser-facing URLs are SigV4 query-signed locally with aws4fetch (no subrequest).
-import { AwsClient } from "aws4fetch";
-import type { Config } from "../env.ts";
+// Every read, write and delete goes through the PHOTOS binding: the bytes stream through the Worker, so no S3
+// access keys exist anywhere (CHANGES-FROM-PYTHON.md, Photos).
 
-export type R2Credentials = NonNullable<Config["r2"]>;
-
-/** Seconds a presigned upload URL stays valid (Python: `presigned_put_url` default). */
-export const PUT_EXPIRES_S = 300;
-/** Seconds a presigned view URL stays valid (Python: `presigned_get_url` default). */
-export const GET_EXPIRES_S = 60;
 /** R2's DeleteObjects limit per request. */
 export const DELETE_CHUNK = 1000;
 /** Bytes fetched for the type check: enough for every signature below. */
@@ -42,87 +34,70 @@ export function matchesMagic(contentType: string, head: Uint8Array): boolean {
   return check?.(head) ?? false;
 }
 
-function client(creds: R2Credentials): AwsClient {
-  // R2 has no regions: "auto" is Cloudflare's documented value.
-  return new AwsClient({
-    accessKeyId: creds.accessKeyId,
-    secretAccessKey: creds.secretAccessKey,
-    service: "s3",
-    region: "auto",
-  });
-}
-
-function objectUrl(creds: R2Credentials, bucket: string, key: string): URL {
-  const path = key.split("/").map(encodeURIComponent).join("/");
-  return new URL(`https://${creds.accountHost}/${encodeURIComponent(bucket)}/${path}`);
-}
+export type StoreResult = { ok: true } | { ok: false; reason: "wrong_type" };
 
 /**
- * A URL the browser PUTs the bytes to. Content-Type is a signed header, so a PUT with any other
- * type fails R2's signature check. Nothing about the bytes is trusted until `verifyUpload`.
+ * Streams an upload of exactly `length` bytes into `bucket` under `key`, checking its first bytes against the
+ * declared type before anything is stored. Only the first MAGIC_READ_BYTES are inspected; the rest is piped through
+ * a FixedLengthStream (R2 needs a known length), so the photo is never buffered whole. A body shorter or longer than
+ * `length` errors the stream and the put rejects, so nothing is left behind and an existing object is untouched.
  */
-export async function presignPut(
-  creds: R2Credentials,
-  bucket: string,
-  key: string,
-  contentType: string,
-): Promise<string> {
-  const url = objectUrl(creds, bucket, key);
-  url.searchParams.set("X-Amz-Expires", String(PUT_EXPIRES_S));
-  const req = await client(creds).sign(url.toString(), {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    aws: { signQuery: true, allHeaders: true },
-  });
-  return req.url;
-}
-
-/**
- * A single-object view URL. The response overrides are signed into the query, so R2 itself tells
- * the browser the type and never to cache it.
- */
-export async function presignGet(
-  creds: R2Credentials,
-  bucket: string,
-  key: string,
-  contentType: string,
-): Promise<string> {
-  const url = objectUrl(creds, bucket, key);
-  url.searchParams.set("X-Amz-Expires", String(GET_EXPIRES_S));
-  url.searchParams.set("response-content-type", contentType);
-  url.searchParams.set("response-cache-control", "private, no-store");
-  const req = await client(creds).sign(url.toString(), { method: "GET", aws: { signQuery: true } });
-  return req.url;
-}
-
-export type VerifyResult =
-  | { ok: true; size: number }
-  | { ok: false; reason: "missing" | "too_large" | "wrong_type" };
-
-/**
- * Confirms what a presigned PUT stored before any row points at it: real size within the cap and
- * first bytes matching the declared type. A rejected object is deleted so it never lingers.
- */
-export async function verifyUpload(
+export async function storeChecked(
   bucket: R2Bucket,
   key: string,
   contentType: string,
-  maxBytes: number,
-): Promise<VerifyResult> {
-  const head = await bucket.head(key);
-  if (head === null) return { ok: false, reason: "missing" };
-  if (head.size > maxBytes) {
-    await bucket.delete(key);
-    return { ok: false, reason: "too_large" };
+  body: ReadableStream<Uint8Array>,
+  length: number,
+): Promise<StoreResult> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let seen = 0;
+  while (seen < MAGIC_READ_BYTES) {
+    const r = await reader.read();
+    if (r.done) break;
+    chunks.push(r.value);
+    seen += r.value.byteLength;
   }
-  const obj = await bucket.get(key, { range: { offset: 0, length: MAGIC_READ_BYTES } });
-  if (obj === null) return { ok: false, reason: "missing" };
-  const bytes = new Uint8Array(await obj.arrayBuffer());
-  if (!matchesMagic(contentType, bytes)) {
-    await bucket.delete(key);
+  const first = new Uint8Array(seen);
+  let at = 0;
+  for (const c of chunks) {
+    first.set(c, at);
+    at += c.byteLength;
+  }
+  if (!matchesMagic(contentType, first)) {
+    await reader.cancel().catch(() => undefined);
     return { ok: false, reason: "wrong_type" };
   }
-  return { ok: true, size: head.size };
+  const fixed = new FixedLengthStream(length);
+  const writer = fixed.writable.getWriter();
+  const pump = (async () => {
+    try {
+      let sent = 0;
+      const send = async (chunk: Uint8Array) => {
+        sent += chunk.byteLength;
+        if (sent > length) throw new RangeError("The body is longer than its Content-Length");
+        await writer.write(chunk);
+      };
+      await send(first);
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        await send(r.value);
+      }
+      if (sent !== length) throw new RangeError("The body is shorter than its Content-Length");
+      await writer.close();
+    } catch (err) {
+      await writer.abort(err).catch(() => undefined);
+      throw err;
+    }
+  })();
+  const [stored, pumped] = await Promise.allSettled([
+    bucket.put(key, fixed.readable, { httpMetadata: { contentType } }),
+    pump,
+  ]);
+  if (stored.status === "rejected") throw stored.reason;
+  if (pumped.status === "rejected") throw pumped.reason;
+  return { ok: true };
 }
 
 /** Deletes any number of keys, at most DELETE_CHUNK per request. */

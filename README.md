@@ -220,8 +220,9 @@ and how to generate each one.
 ## Load-bearing rules
 
 - **The API host and the app's CSP move together.** `app/public/_headers`
-  allows `connect-src https://api.pacestreak.com` (and the R2 account host in
-  `R2_ACCOUNT_HOST`). If either host changes, change `_headers` in the same
+  allows `connect-src https://api.pacestreak.com`; photo bytes go through the
+  API (the `PHOTOS` binding), never to R2 directly. If the host changes,
+  change `_headers` in the same
   commit as the base URL, or every request fails silently.
 - **The refresh cookie is `Domain=pacestreak.com`, `__Secure-`, `SameSite=Lax`,
   `Path=/v1/auth`.** `__Host-` would forbid `Domain`; `SameSite=None` would

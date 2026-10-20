@@ -254,17 +254,16 @@ export const photoRoutes = new Hono<AppEnv>()
     await body.deleteAllPhotos(c.var.ctx, c.var.authed);
     return noContent(c);
   })
-  .get("/:photo_id", auth(), param(s.PhotoId), async (c) =>
-    c.json(await body.getPhoto(c.var.ctx, c.var.authed, c.req.valid("param").photo_id)),
+  .get("/:photo_id", auth(), param(s.PhotoId), (c) =>
+    body.getPhoto(c.var.ctx, c.var.authed, c.req.valid("param").photo_id),
   )
-  .post("/:photo_id/upload", auth(), param(s.PhotoId), json(s.PhotoIn), async (c) =>
+  .put("/:photo_id", auth(), param(s.PhotoId), query(s.PhotoIn), async (c) =>
     c.json(
-      await body.startUpload(c.var.ctx, c.var.authed, c.req.valid("param").photo_id, c.req.valid("json")),
-    ),
-  )
-  .post("/:photo_id/upload/complete", auth(), param(s.PhotoId), json(s.PhotoIn), async (c) =>
-    c.json(
-      await body.completeUpload(c.var.ctx, c.var.authed, c.req.valid("param").photo_id, c.req.valid("json")),
+      await body.uploadPhoto(c.var.ctx, c.var.authed, c.req.valid("param").photo_id, c.req.valid("query"), {
+        contentType: c.req.header("Content-Type"),
+        contentLength: c.req.header("Content-Length"),
+        stream: c.req.raw.body,
+      }),
     ),
   )
   .delete("/:photo_id", auth(), param(s.PhotoId), async (c) => {

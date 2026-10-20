@@ -409,6 +409,10 @@ The snooze dedupe key uses `toWire(due)` (any stable format is fine; there is no
 
 ## 12. R2 photos
 
+> **Superseded (2026-10-20, CHANGES-FROM-PYTHON.md "Photos"):** the presigned flow below is gone. Uploads are one
+> `PUT /v1/body-photos/{id}` whose bytes stream into the `PHOTOS` binding after a magic-byte check, and
+> `GET /v1/body-photos/{id}` streams them back; there are no S3 keys, no `aws4fetch` and no R2 host in the app's CSP.
+
 - `PHOTOS` binding: `head` (size check on complete), ranged `get` of the first 16 bytes (magic-byte check), `delete([... ≤ 1000])`.
 - Presigned **PUT** (300 s, Content-Type signed) and **GET** (60 s, `response-content-type`, `response-cache-control=private, no-store`) via `aws4fetch` `AwsClient.sign(url, {aws:{signQuery:true}})` against `https://<R2_ACCOUNT_HOST>/pacestreak-photos/<key>`. Signing is local, about 0.2 ms, no subrequest.
 - Wire flow unchanged: presign, then upload from the browser, then complete. The app's CSP already allows the R2 host in `connect-src` (verified), so `_headers` needs no change. The R2 bucket CORS policy allows PUT/GET from `https://app.pacestreak.com` only (and `http://localhost:5173` on the staging bucket).

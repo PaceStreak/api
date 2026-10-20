@@ -20,12 +20,14 @@ const MiB = 1024 * 1024;
 
 /**
  * Body size caps by path prefix; everything else gets 1 MiB. Import routes stream their bodies and enforce their
- * own caps with the spec's 413 texts, so they are listed here with the transport ceiling.
+ * own caps with the spec's 413 texts, so they are listed here with the transport ceiling. A photo upload streams its
+ * bytes straight into R2 and checks its 2 MiB cap from Content-Length itself.
  */
 export const BODY_LIMITS: readonly { prefix: string; bytes: number }[] = [
   { prefix: "/v1/me/import", bytes: 25 * MiB },
   { prefix: "/v1/workouts/import", bytes: 25 * MiB },
   { prefix: "/v1/habits/import", bytes: 5 * MiB },
+  { prefix: "/v1/body-photos/", bytes: 4 * MiB },
 ];
 const DEFAULT_BODY_LIMIT = MiB;
 

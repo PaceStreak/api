@@ -1,20 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import {
-  DELETE_CHUNK,
-  deleteMany,
-  isPhotoType,
-  matchesMagic,
-  presignGet,
-  presignPut,
-  verifyUpload,
-} from "../../src/lib/r2.ts";
+import { DELETE_CHUNK, deleteMany, isPhotoType, matchesMagic, storeChecked } from "../../src/lib/r2.ts";
 
-const creds = {
-  accessKeyId: "AKTEST",
-  secretAccessKey: "secret",
-  accountHost: "acct.r2.cloudflarestorage.com",
-};
 const JPEG = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1];
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52];
 const ascii = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
@@ -25,42 +12,6 @@ let n = 0;
 const uniqueKey = () => `test/${Date.now()}-${n++}`;
 const put = (key: string, bytes: number[], extra = 0) =>
   env.PHOTOS.put(key, new Uint8Array([...bytes, ...new Array<number>(extra).fill(0)]));
-
-describe("presigned URLs", () => {
-  it("PUT signs Content-Type and expires in 300 s", async () => {
-    const url = new URL(await presignPut(creds, "pacestreak-photos", "body/u 1/p.jpg", "image/jpeg"));
-    expect(url.origin).toBe("https://acct.r2.cloudflarestorage.com");
-    expect(url.pathname).toBe("/pacestreak-photos/body/u%201/p.jpg");
-    const q = url.searchParams;
-    expect(q.get("X-Amz-Expires")).toBe("300");
-    expect(q.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
-    expect(q.get("X-Amz-Credential")).toMatch(/^AKTEST\/\d{8}\/auto\/s3\/aws4_request$/);
-    expect(q.get("X-Amz-SignedHeaders")?.split(";")).toContain("content-type");
-    expect(q.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("a different Content-Type gives a different signature", async () => {
-    vi.useFakeTimers({ now: Date.UTC(2026, 9, 18, 12) });
-    try {
-      const sig = async (ct: string) =>
-        new URL(await presignPut(creds, "b", "k", ct)).searchParams.get("X-Amz-Signature");
-      expect(await sig("image/jpeg")).toBe(await sig("image/jpeg"));
-      expect(await sig("image/jpeg")).not.toBe(await sig("image/png"));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("GET carries signed response overrides and expires in 60 s", async () => {
-    const url = new URL(await presignGet(creds, "pacestreak-photos", "body/u/p", "image/png"));
-    const q = url.searchParams;
-    expect(q.get("X-Amz-Expires")).toBe("60");
-    expect(q.get("response-content-type")).toBe("image/png");
-    expect(q.get("response-cache-control")).toBe("private, no-store");
-    expect(q.get("X-Amz-SignedHeaders")).toBe("host");
-    expect(q.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
-  });
-});
 
 describe("magic bytes", () => {
   it("accepts exactly the old allowed types", () => {
@@ -81,36 +32,57 @@ describe("magic bytes", () => {
   });
 });
 
-describe("verifyUpload", () => {
-  it("returns the real size for a valid object", async () => {
-    const key = uniqueKey();
-    await put(key, JPEG, 1000);
-    expect(await verifyUpload(env.PHOTOS, key, "image/jpeg", 5000)).toEqual({ ok: true, size: 1018 });
-    expect(await env.PHOTOS.head(key)).not.toBeNull();
+/** A stream that hands out `bytes` in chunks of `size`, so a signature can straddle chunks. */
+function chunked(bytes: Uint8Array, size: number): ReadableStream<Uint8Array> {
+  let at = 0;
+  return new ReadableStream({
+    pull(c) {
+      if (at >= bytes.length) return c.close();
+      c.enqueue(bytes.slice(at, at + size));
+      at += size;
+    },
   });
+}
+const bytes = (head: number[], extra = 0) => new Uint8Array([...head, ...new Array<number>(extra).fill(7)]);
 
-  it("reports a missing object", async () => {
-    expect(await verifyUpload(env.PHOTOS, uniqueKey(), "image/jpeg", 5000)).toEqual({
-      ok: false,
-      reason: "missing",
+describe("storeChecked", () => {
+  it("stores a matching body whole, with its type, even when the signature spans chunks", async () => {
+    const key = uniqueKey();
+    const body = bytes(PNG, 5000);
+    expect(await storeChecked(env.PHOTOS, key, "image/png", chunked(body, 3), body.length)).toEqual({
+      ok: true,
     });
+    const obj = await env.PHOTOS.get(key);
+    expect(obj?.size).toBe(body.length);
+    expect(obj?.httpMetadata?.contentType).toBe("image/png");
+    expect(new Uint8Array((await obj?.arrayBuffer()) ?? new ArrayBuffer(0))).toEqual(body);
   });
 
-  it("deletes an oversized object", async () => {
+  it("stores nothing when the bytes do not match the declared type", async () => {
     const key = uniqueKey();
-    await put(key, PNG, 100);
-    expect(await verifyUpload(env.PHOTOS, key, "image/png", 50)).toEqual({ ok: false, reason: "too_large" });
-    expect(await env.PHOTOS.head(key)).toBeNull();
-  });
-
-  it("deletes an object whose bytes do not match the declared type", async () => {
-    const key = uniqueKey();
-    await put(key, WAV, 100);
-    expect(await verifyUpload(env.PHOTOS, key, "image/webp", 5000)).toEqual({
+    const body = bytes(WAV, 100);
+    expect(await storeChecked(env.PHOTOS, key, "image/webp", chunked(body, 64), body.length)).toEqual({
       ok: false,
       reason: "wrong_type",
     });
     expect(await env.PHOTOS.head(key)).toBeNull();
+  });
+
+  it("rejects a body too short to carry its signature", async () => {
+    const key = uniqueKey();
+    expect(await storeChecked(env.PHOTOS, key, "image/png", chunked(bytes([0x89, 0x50]), 8), 2)).toEqual({
+      ok: false,
+      reason: "wrong_type",
+    });
+    expect(await env.PHOTOS.head(key)).toBeNull();
+  });
+
+  it("fails and leaves an earlier object alone when the body is longer than declared", async () => {
+    const key = uniqueKey();
+    await put(key, JPEG);
+    const body = bytes(JPEG, 500);
+    await expect(storeChecked(env.PHOTOS, key, "image/jpeg", chunked(body, 64), 100)).rejects.toThrow();
+    expect((await env.PHOTOS.head(key))?.size).toBe(JPEG.length);
   });
 });
 

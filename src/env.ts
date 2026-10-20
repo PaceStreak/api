@@ -65,7 +65,6 @@ export interface Config {
   dataKey: Uint8Array;
   turnstileSecret: string | null;
   vapid: { privateJwk: string; publicKey: string; subject: string } | null;
-  r2: { accessKeyId: string; secretAccessKey: string; accountHost: string } | null;
   mailFrom: string;
   pushHostAllowlist: readonly string[];
   /** WebAuthn relying party: hostname of FRONTEND_URL, origin without a trailing slash. */
@@ -148,9 +147,6 @@ const RawEnv = z.object({
   VAPID_PRIVATE_JWK: optional,
   VAPID_PUBLIC_KEY: optional,
   VAPID_SUBJECT: z.string().default("mailto:hello@pacestreak.com"),
-  R2_ACCESS_KEY_ID: optional,
-  R2_SECRET_ACCESS_KEY: optional,
-  R2_ACCOUNT_HOST: z.string().min(1),
   MAIL_FROM: z.string().min(3),
   PUSH_HOST_ALLOWLIST: z.string().default(""),
   IP_LIMITS_OFF: z.enum(["0", "1"]).default("0"),
@@ -206,14 +202,6 @@ export function parseConfig(env: Env): ConfigResult {
     vapid:
       e.VAPID_PRIVATE_JWK !== null && e.VAPID_PUBLIC_KEY !== null
         ? { privateJwk: e.VAPID_PRIVATE_JWK, publicKey: e.VAPID_PUBLIC_KEY, subject: e.VAPID_SUBJECT }
-        : null,
-    r2:
-      e.R2_ACCESS_KEY_ID !== null && e.R2_SECRET_ACCESS_KEY !== null
-        ? {
-            accessKeyId: e.R2_ACCESS_KEY_ID,
-            secretAccessKey: e.R2_SECRET_ACCESS_KEY,
-            accountHost: e.R2_ACCOUNT_HOST,
-          }
         : null,
     mailFrom: e.MAIL_FROM,
     pushHostAllowlist: e.PUSH_HOST_ALLOWLIST.split(",")

@@ -1,7 +1,7 @@
 /**
  * Port of tests/test_body_data.py: tape measurements and the photo backup. The habit cases in that file belong to
- * HABITS, and the export halves to PROFILE-ACCOUNT. R2 is the real local bucket; a test stands in for the
- * browser's presigned PUT by writing the object under the key the routes use.
+ * HABITS, and the export halves to PROFILE-ACCOUNT. R2 is the real local bucket; photos go up as one raw-body
+ * `PUT /v1/body-photos/{id}` and come back as bytes (CHANGES-FROM-PYTHON.md, Photos).
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { firstWeekTarget, viewHabit } from "../../src/modules/habits/engine.ts";
 import { MAX_PHOTO_BYTES, objectKey } from "../../src/modules/training/body.ts";
 import { person } from "../fixtures/game.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
+import { putPhoto } from "../fixtures/photos.ts";
 import { get, type Json } from "../fixtures/training.ts";
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(64).fill(0)]);
@@ -38,37 +39,23 @@ describe("test_body_data", () => {
     const me = await person();
     const other = await person();
     const pid = crypto.randomUUID();
-    const body = { date: today(), pose: "front", content_type: "image/jpeg" };
-    const started = await api(`/v1/body-photos/${pid}/upload`, { json: body, token: me.token });
-    expect(started.status).toBe(200);
-    expect(((await jsonOf(started)) as Json).upload_url).toContain("X-Amz-Signature");
-    await env.PHOTOS.put(objectKey(me.userId, pid), JPEG);
-    const complete = () => api(`/v1/body-photos/${pid}/upload/complete`, { json: body, token: me.token });
-    expect((await complete()).status).toBe(200);
-    await env.PHOTOS.put(objectKey(me.userId, pid), JPEG);
-    expect((await complete()).status).toBe(200);
-    expect((await get(me.token, "/v1/body-photos")).map((p: Json) => p.id)).toEqual([pid]);
+    const up = await putPhoto(me.token, pid, JPEG);
+    expect(up.status).toBe(200);
+    expect(await jsonOf(up)).toEqual({ id: pid, date: today(), pose: "front", size: JPEG.length });
+    expect((await putPhoto(me.token, pid, JPEG, "image/jpeg", { pose: "side" })).status).toBe(200);
+    expect((await get(me.token, "/v1/body-photos")).map((p: Json) => [p.id, p.pose])).toEqual([
+      [pid, "side"],
+    ]);
     const got = await api(`/v1/body-photos/${pid}`, { token: me.token });
     expect(got.status).toBe(200);
-    expect(((await jsonOf(got)) as Json).url).toBeTruthy();
+    expect(new Uint8Array(await got.arrayBuffer())).toEqual(JPEG);
     expect((await api(`/v1/body-photos/${pid}`, { token: other.token })).status).toBe(404);
-    expect((await api(`/v1/body-photos/${pid}/upload`, { json: body, token: other.token })).status).toBe(409);
-    expect(
-      (await api(`/v1/body-photos/${pid}/upload/complete`, { json: body, token: other.token })).status,
-    ).toBe(409);
+    expect((await putPhoto(other.token, pid, JPEG)).status).toBe(409);
     const bad = crypto.randomUUID();
-    await env.PHOTOS.put(objectKey(me.userId, bad), new TextEncoder().encode("<svg/>"));
-    expect(
-      (await api(`/v1/body-photos/${bad}/upload/complete`, { json: body, token: me.token })).status,
-    ).toBe(415);
+    expect((await putPhoto(me.token, bad, new TextEncoder().encode("<svg/>"))).status).toBe(415);
     expect(await env.PHOTOS.head(objectKey(me.userId, bad))).toBeNull();
     expect((await api(`/v1/body-photos/${bad}`, { token: me.token })).status).toBe(404);
-    const text = { ...body, content_type: "text/html" };
-    expect((await api(`/v1/body-photos/${bad}/upload`, { json: text, token: me.token })).status).toBe(415);
-    const missing = crypto.randomUUID();
-    expect(
-      (await api(`/v1/body-photos/${missing}/upload/complete`, { json: body, token: me.token })).status,
-    ).toBe(400);
+    expect((await putPhoto(me.token, bad, JPEG, "text/html")).status).toBe(415);
     expect((await api(`/v1/body-photos/${pid}`, { token: me.token })).status).toBe(200);
     expect((await api(`/v1/body-photos/${pid}`, { method: "DELETE", token: other.token })).status).toBe(204);
     expect(await get(me.token, "/v1/body-photos")).toHaveLength(1);
@@ -80,13 +67,9 @@ describe("test_body_data", () => {
   it("oversized_upload_is_rejected_and_swept_from_r2", async () => {
     const me = await person();
     const pid = crypto.randomUUID();
-    const big = new Uint8Array(JPEG.length + MAX_PHOTO_BYTES);
+    const big = new Uint8Array(1 + MAX_PHOTO_BYTES);
     big.set(JPEG);
-    await env.PHOTOS.put(objectKey(me.userId, pid), big);
-    const body = { date: today(), pose: "front", content_type: "image/jpeg" };
-    expect(
-      (await api(`/v1/body-photos/${pid}/upload/complete`, { json: body, token: me.token })).status,
-    ).toBe(413);
+    expect((await putPhoto(me.token, pid, big)).status).toBe(413);
     expect(await env.PHOTOS.head(objectKey(me.userId, pid))).toBeNull();
     expect(await get(me.token, "/v1/body-photos")).toEqual([]);
   });

@@ -79,7 +79,17 @@ describe("test_auth", () => {
   it("login_sets_refresh_and_csrf_cookies", async () => {
     const client = new Client();
     const email = await register(client);
-    const res = await client.call("/v1/auth/login", { json: { email, password: PASSWORD } });
+    // Email codes at sign-in are on by default: the password step answers with a challenge and sets no cookie,
+    // and the code step is the one that signs in.
+    const challenge = await client.call("/v1/auth/login", { json: { email, password: PASSWORD } });
+    expect(challenge.status).toBe(200);
+    expectRoundTrips(challenge, 2);
+    expect(challenge.headers.getSetCookie()).toEqual([]);
+    const ch = await jsonOf<{ mfa_token: string; method: string }>(challenge);
+    expect(ch.method).toBe("email");
+    const res = await client.call("/v1/auth/2fa/verify", {
+      json: { mfa_token: ch.mfa_token, code: otpCode("sign-in", email) },
+    });
     expect(res.status).toBe(200);
     expectRoundTrips(res, 2);
     const body = await jsonOf<Record<string, unknown>>(res);

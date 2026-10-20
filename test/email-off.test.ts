@@ -13,7 +13,7 @@ import { totpAt } from "../src/lib/crypto/totp.ts";
 import { EMAIL_OFF } from "../src/lib/errors.ts";
 import * as notif from "../src/modules/notifications/service.ts";
 import { mountRoutes } from "../src/routes.ts";
-import { PASSWORD, sent, signup as signupOn } from "./fixtures/auth.ts";
+import { Client, loginToken, PASSWORD, sent, signup as signupOn } from "./fixtures/auth.ts";
 import { uniqueEmail } from "./fixtures/db.ts";
 import { api, jsonOf, randomIp } from "./fixtures/http.ts";
 import { uniqueHandle } from "./fixtures/profile.ts";
@@ -302,8 +302,8 @@ describe("EMAIL_ENABLED=1 is unchanged", () => {
     const hb = uniqueHandle("ob");
     const email = uniqueEmail();
     await api("/v1/auth/signup", { json: { email, password: PASSWORD } });
-    const login = await api("/v1/auth/login", { json: { email, password: PASSWORD } });
-    const { access_token: token } = await jsonOf<{ access_token: string }>(login);
+    // Email on: the sign-in asks for a mailed code, even before the address is confirmed.
+    const token = await loginToken(new Client(), email);
     await api("/v1/me/onboarding", {
       token,
       json: { handle: uniqueHandle("oa"), birth_year: 1990, accept_terms: true, visibility: "public" },

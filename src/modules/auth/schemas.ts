@@ -22,7 +22,12 @@ export const TotpCode = z.object({ code: z.string().min(6).max(10) });
 export const MfaVerify = z.object({
   mfa_token: z.string().min(1).max(4096),
   code: z.string().min(6).max(11),
+  /** Email-code sign-ins only: remember this device for 30 days. Ignored for TOTP. */
+  trust_device: z.boolean().nullable().optional(),
 });
+export const MfaToken = z.object({ mfa_token: z.string().min(1).max(4096) });
+export const EmailTwoFactor = z.object({ password: anyPassword, enabled: z.boolean() });
+export const DeviceParam = z.object({ device_id: z.uuid() });
 export const Recover = z.object({
   email,
   recovery_code: z.string().min(6).max(64),

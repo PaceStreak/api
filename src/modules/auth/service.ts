@@ -27,20 +27,24 @@ import { createMailer } from "../../lib/mailer/index.ts";
 import {
   sendEmailChangedNotice,
   sendEmailChangeEmail,
+  sendLoginCodeEmail,
   sendPasswordChangedEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../../lib/mailer/templates.ts";
+import { BUCKETS, perUser } from "../../lib/ratelimit.ts";
 import { verifyTurnstile } from "../../lib/turnstile.ts";
 import { uuid7 } from "../../lib/uuid7.ts";
 import * as repo from "./repo.ts";
 import {
   ACCESS_EXPIRES_IN,
   accessToken,
+  EMAIL_MFA_EXPIRES_IN,
   MFA_EXPIRES_IN,
   mfaToken,
   newCsrfToken,
   newRefreshToken,
+  newTrustedToken,
   readToken,
 } from "./tokens.ts";
 
@@ -72,7 +76,16 @@ export interface MfaChallenge {
   mfa_required: true;
   mfa_token: string;
   expires_in: number;
+  /** `totp`: an authenticator code. `email`: the six-digit code just mailed. Either accepts a recovery code. */
+  method: "totp" | "email";
+  /** Email challenges only: seconds until a resend is allowed. */
+  resend_in?: number;
 }
+
+/** A completed sign-in; `trusted` is the new trusted-device token for the cookie, when one was asked for. */
+export type SignedIn = TokenPair & { trusted?: string };
+
+export const CODE_NOT_SENT = "We couldn't send your code. Try again, or use a recovery code.";
 
 const mailer = (ctx: Ctx) => createMailer(ctx.cfg, ctx.env, ctx.log);
 const lower = (email: string) => email.toLowerCase();
@@ -117,6 +130,17 @@ export const emailHash = (ctx: Ctx, email: string) =>
   hmacSha256Hex(ctx.cfg.pepper, `auth-failure|${email.trim().toLowerCase()}`);
 
 const totpAad = (userId: string) => `totp|${userId}`;
+
+const loginCodeHmac = (ctx: Ctx, userId: string, code: string) =>
+  hmacSha256Hex(ctx.cfg.pepper, `login_email|${userId}|${code}`);
+
+/** The stored form of a trusted-device cookie: keyed under PEPPER, so the table alone cannot mint one. */
+export const trustedHash = (ctx: Ctx, token: string) =>
+  hmacSha256Hex(ctx.cfg.pepper, `trusted-device|${token}`);
+
+/** Email codes at sign-in apply: email is on, the owner left the setting on, and no authenticator app is set up. */
+export const emailCodesApply = (ctx: Ctx, u: { email2faEnabled: boolean; totpEnabled: boolean }) =>
+  ctx.cfg.emailEnabled && u.email2faEnabled && !u.totpEnabled;
 
 async function totpSecret(ctx: Ctx, userId: string, stored: string | null): Promise<string> {
   if (stored === null) return "";
@@ -229,7 +253,7 @@ async function startSession(
   meta: Meta,
   history: History | undefined,
   before: Stmt[] = [],
-  opts: { recordLogin?: boolean } = {},
+  opts: { recordLogin?: boolean; codeMailed?: boolean } = {},
 ): Promise<TokenPair> {
   const now = ctx.clock.now();
   const sessionId = uuid7(now);
@@ -263,6 +287,9 @@ async function startSession(
             title: "New sign-in to your PaceStreak account",
             body: `From ${describeAgent(meta.userAgent)}. If this was not you, change your password and sign out everywhere.`,
             url: "/settings/security",
+            // A sign-in code was just mailed to this inbox for this very sign-in: the notice stays in the app
+            // and on push, but a second email a few seconds later would only be noise.
+            data: opts.codeMailed ? { no_email: true } : null,
           },
           now,
         ),
@@ -345,12 +372,17 @@ export async function login(
   ctx: Ctx,
   body: { email: string; password: string; turnstile_token?: string | null | undefined },
   meta: Meta,
+  trustedToken?: string,
 ): Promise<TokenPair | MfaChallenge> {
   await verifyTurnstile({ secret: ctx.cfg.turnstileSecret, token: body.turnstile_token, remoteIp: meta.ip });
   const email = lower(body.email);
-  const [rows, hist] = await runBatch(ctx.db, [
+  const now = ctx.clock.now();
+  // No cookie: a hash no row can have, so the batch keeps one shape.
+  const trustedKey = trustedToken === undefined ? "-" : await trustedHash(ctx, trustedToken);
+  const [rows, hist, trusted] = await runBatch(ctx.db, [
     repo.userByEmail(ctx.db, email),
     repo.loginHistory(ctx.db, { email }, meta.userAgent),
+    repo.trustedForLogin(ctx.db, email, trustedKey, now),
   ] as const);
   const user = rows[0];
   // Unknown addresses still pay for a hash, so timing does not reveal which addresses exist.
@@ -360,15 +392,23 @@ export async function login(
     await recordFailure(ctx, "login", meta, { email: body.email });
     throw unauthorized("Incorrect email or password");
   }
-  if (ctx.cfg.requireVerifiedEmail && !user.isVerified) throw forbidden("Email address not verified");
+  // An unconfirmed address with email codes on gets the code instead of the 403: entering it confirms the address.
+  if (ctx.cfg.requireVerifiedEmail && !user.isVerified && !emailCodesApply(ctx, user))
+    throw forbidden("Email address not verified");
   if (user.totpEnabled) {
     return {
       mfa_required: true,
       mfa_token: await mfaToken(ctx, user.id, user.tokenVersion),
       expires_in: MFA_EXPIRES_IN,
+      method: "totp",
     };
   }
   const before: Stmt[] = [];
+  if (emailCodesApply(ctx, user)) {
+    const device = trusted[0];
+    if (device === undefined || !user.isVerified) return emailChallenge(ctx, user, meta);
+    before.push(repo.touchTrustedDevice(ctx.db, device.id, now));
+  }
   if (needsRehash(user.hashedPassword)) {
     const rehashed = await hashPassword(body.password, ctx.cfg.pepper);
     before.push(
@@ -376,6 +416,105 @@ export async function login(
     );
   }
   return startSession(ctx, user, meta, hist[0], before);
+}
+
+/**
+ * Password accepted, email code needed: one write (the challenge), then the email. The MFA token's `jti` is the
+ * challenge id. A failed send is a 503 that still carries the challenge, so the owner can finish with a recovery
+ * code, but nothing in it signs anyone in.
+ */
+async function emailChallenge(
+  ctx: Ctx,
+  user: { id: string; email: string; tokenVersion: number },
+  meta: Meta,
+): Promise<MfaChallenge> {
+  const now = ctx.clock.now();
+  const id = uuid7(now);
+  const code = sixDigitCode();
+  await commit(ctx, [
+    repo.insertLoginChallenge(
+      ctx.db,
+      {
+        id,
+        userId: user.id,
+        codeHmac: await loginCodeHmac(ctx, user.id, code),
+        expiresAt: now + SETTINGS.loginCodeMinutes * MINUTE,
+      },
+      now,
+    ),
+  ]);
+  const challenge: MfaChallenge = {
+    mfa_required: true,
+    mfa_token: await mfaToken(ctx, user.id, user.tokenVersion, { jti: id, expiresIn: EMAIL_MFA_EXPIRES_IN }),
+    expires_in: EMAIL_MFA_EXPIRES_IN,
+    method: "email",
+    resend_in: SETTINGS.loginCodeResendSeconds,
+  };
+  if (!(await sendLoginCodeEmail(mailer(ctx), user.email, code, describeAgent(meta.userAgent)))) {
+    throw new HttpError(503, CODE_NOT_SENT, {}, { detail: CODE_NOT_SENT, ...challenge, email_sent: false });
+  }
+  return challenge;
+}
+
+const CHALLENGE = "Invalid or expired challenge";
+
+/** A new email code for a pending sign-in: one per minute, five per hour per account. */
+export async function resendLoginCode(ctx: Ctx, body: { mfa_token: string }, meta: Meta) {
+  const claims = await readToken(ctx, body.mfa_token, "mfa");
+  if (claims === null) throw unauthorized(CHALLENGE);
+  const [rows, chs] = await runBatch(ctx.db, [
+    repo.userById(ctx.db, claims.userId),
+    repo.loginChallenge(ctx.db, claims.jti),
+  ] as const);
+  const u = rows[0];
+  const ch = chs[0];
+  if (
+    u === undefined ||
+    !u.isActive ||
+    u.tokenVersion !== claims.tokenVersion ||
+    !emailCodesApply(ctx, u) ||
+    ch === undefined ||
+    ch.userId !== u.id ||
+    ch.usedAt !== null
+  )
+    throw unauthorized(CHALLENGE);
+  const now = ctx.clock.now();
+  const cooldown = SETTINGS.loginCodeResendSeconds * 1000;
+  const wait = Math.ceil((ch.lastSentAt + cooldown - now) / 1000);
+  const tooSoon = (sec: number) =>
+    new HttpError(
+      429,
+      `Wait ${sec} s before asking for another code.`,
+      { "Retry-After": String(sec) },
+      {
+        detail: `Wait ${sec} s before asking for another code.`,
+        resend_in: sec,
+      },
+    );
+  if (wait > 0) throw tooSoon(wait);
+  const limit = perUser(ctx.db, BUCKETS.loginCodeResend, u.id, now);
+  const code = sixDigitCode();
+  const [counter, updated] = await commit(ctx, [
+    limit.counter,
+    repo.resendLoginChallenge(ctx.db, {
+      id: ch.id,
+      codeHmac: await loginCodeHmac(ctx, u.id, code),
+      expiresAt: now + SETTINGS.loginCodeMinutes * MINUTE,
+      now,
+      cooldownMs: cooldown,
+      allowed: limit.allowed,
+    }),
+  ]);
+  limit.check(counter as { count: number }[]);
+  // Lost a race with a parallel resend: that one sent the code.
+  if ((updated as unknown[]).length === 0) throw tooSoon(SETTINGS.loginCodeResendSeconds);
+  if (!(await sendLoginCodeEmail(mailer(ctx), u.email, code, describeAgent(meta.userAgent))))
+    throw new HttpError(503, CODE_NOT_SENT);
+  return {
+    detail: "A new code is on its way.",
+    expires_in: SETTINGS.loginCodeMinutes * 60,
+    resend_in: SETTINGS.loginCodeResendSeconds,
+  };
 }
 
 /**
@@ -858,6 +997,10 @@ export async function twoFactorStatus(ctx: Ctx, authed: AuthedBatch) {
     enabled: u.totpEnabled,
     confirmed_at: toWire(u.totpConfirmedAt),
     recovery_codes_remaining: codes.length,
+    // The owner's choice, and whether it is in force: never with email off, and TOTP takes its place.
+    email_codes: u.email2faEnabled,
+    email_codes_active: emailCodesApply(ctx, u),
+    email_available: ctx.cfg.emailEnabled,
   };
 }
 
@@ -911,6 +1054,7 @@ export async function twoFactorEnable(
       .set({ totpEnabled: true, totpConfirmedAt: now, totpLastUsedStep: step, updatedAt: now })
       .where(repo.byUserId(u.id)),
     ...repo.replaceRecoveryCodes(ctx.db, u.id, hmacs, now),
+    repo.deleteTrustedDevices(ctx.db, u.id),
     event(ctx, u.id, "totp_enabled", null),
   ]);
   return { recovery_codes: codes };
@@ -941,6 +1085,7 @@ export async function twoFactorDisable(
       .where(repo.byUserId(u.id)),
     // Email off, the codes are the only way back in after a lost password: they outlive 2FA.
     ...(ctx.cfg.emailEnabled ? [repo.deleteRecoveryCodes(ctx.db, u.id)] : []),
+    repo.deleteTrustedDevices(ctx.db, u.id),
     event(ctx, u.id, "totp_disabled", null),
   ]);
   return { detail: "Two-factor authentication disabled" };
@@ -992,48 +1137,185 @@ export async function newAccountRecoveryCodes(
   return { recovery_codes: codes };
 }
 
-/** The second step of a password sign-in: a TOTP code, or else a recovery code. */
+/**
+ * The second step of a password sign-in. TOTP accounts: an authenticator code, or else a recovery code. Email-code
+ * accounts: the mailed code, or else a recovery code, and optionally "trust this device" (a new trusted-device row
+ * in the same batch as the session).
+ */
 export async function mfaVerify(
   ctx: Ctx,
-  body: { mfa_token: string; code: string },
+  body: { mfa_token: string; code: string; trust_device?: boolean | null | undefined },
   meta: Meta,
-): Promise<TokenPair> {
-  const challenge = "Invalid or expired challenge";
+): Promise<SignedIn> {
   const claims = await readToken(ctx, body.mfa_token, "mfa");
-  if (claims === null) throw unauthorized(challenge);
-  const [rows, codes, hist] = await runBatch(ctx.db, [
+  if (claims === null) throw unauthorized(CHALLENGE);
+  const [rows, codes, hist, chs] = await runBatch(ctx.db, [
     repo.userById(ctx.db, claims.userId),
     repo.unusedRecoveryCodes(ctx.db, claims.userId),
     repo.loginHistory(ctx.db, { id: claims.userId }, meta.userAgent),
+    repo.loginChallenge(ctx.db, claims.jti),
   ] as const);
   const u = rows[0];
-  if (u === undefined || !u.isActive || !u.totpEnabled || u.tokenVersion !== claims.tokenVersion)
-    throw unauthorized(challenge);
-  let before: Stmt[];
-  const step = await freshTotpStep(ctx, u, body.code);
-  if (step !== null) {
-    before = [
-      abortUnless(ctx.db, repo.totpStepFresh(u.id, step)),
-      repo.setTotpStep(ctx.db, u.id, step, ctx.clock.now()),
-    ];
-  } else {
+  if (u === undefined || !u.isActive || u.tokenVersion !== claims.tokenVersion) throw unauthorized(CHALLENGE);
+  const now = ctx.clock.now();
+  const recovery = async (): Promise<Stmt[] | null> => {
     const want = await recoveryHmac(ctx, u.id, body.code);
     const hit = codes.find((c) => timingSafeEqualStr(c.codeHmac, want));
-    if (hit === undefined) {
-      await recordFailure(ctx, "mfa", meta, { userId: u.id });
-      throw unauthorized("Invalid code");
+    return hit === undefined
+      ? null
+      : [abortUnless(ctx.db, repo.recoveryCodeUnused(hit.id)), repo.useRecoveryCode(ctx.db, hit.id, now)];
+  };
+  let before: Stmt[];
+  let codeMailed = false;
+  let trusted: string | undefined;
+  if (u.totpEnabled) {
+    const step = await freshTotpStep(ctx, u, body.code);
+    if (step !== null) {
+      before = [
+        abortUnless(ctx.db, repo.totpStepFresh(u.id, step)),
+        repo.setTotpStep(ctx.db, u.id, step, now),
+      ];
+    } else {
+      const r = await recovery();
+      if (r === null) {
+        await recordFailure(ctx, "mfa", meta, { userId: u.id });
+        throw unauthorized("Invalid code");
+      }
+      before = r;
     }
-    before = [
-      abortUnless(ctx.db, repo.recoveryCodeUnused(hit.id)),
-      repo.useRecoveryCode(ctx.db, hit.id, ctx.clock.now()),
-    ];
+  } else {
+    const ch = chs[0];
+    if (!emailCodesApply(ctx, u) || ch === undefined || ch.userId !== u.id || ch.usedAt !== null)
+      throw unauthorized(CHALLENGE);
+    const close = repo.useLoginChallenge(ctx.db, ch.id, now);
+    if (/^\d{6}$/.test(body.code.trim())) {
+      const live = ch.expiresAt > now && ch.attempts < SETTINGS.emailCodeMaxAttempts;
+      if (!live) {
+        throw unauthorized(
+          ch.attempts >= SETTINGS.emailCodeMaxAttempts
+            ? "Too many wrong codes. Ask for a new one, or use a recovery code."
+            : "That code has expired. Ask for a new one, or use a recovery code.",
+        );
+      }
+      if (!timingSafeEqualStr(await loginCodeHmac(ctx, u.id, body.code.trim()), ch.codeHmac)) {
+        await commit(ctx, [repo.bumpLoginAttempts(ctx.db, ch.id)]);
+        await recordFailure(ctx, "mfa", meta, { userId: u.id });
+        throw unauthorized("Invalid code");
+      }
+      before = [abortUnless(ctx.db, repo.loginCodeLive(ch.id, SETTINGS.emailCodeMaxAttempts, now)), close];
+      codeMailed = true;
+      // The code reached this inbox: that confirms the address as well as a verification code would.
+      if (!u.isVerified) {
+        before.push(
+          ctx.db
+            .update(repo.tables.users)
+            .set({ isVerified: true, verifiedAt: repo.coalesceVerifiedAt(now), updatedAt: now })
+            .where(repo.byUserId(u.id)),
+          event(ctx, u.id, "email_verified", meta),
+        );
+      }
+    } else {
+      // A recovery code proves the account, not the inbox.
+      if (ctx.cfg.requireVerifiedEmail && !u.isVerified) throw forbidden("Email address not verified");
+      const r = await recovery();
+      if (r === null) {
+        await recordFailure(ctx, "mfa", meta, { userId: u.id });
+        throw unauthorized("Invalid code");
+      }
+      before = [abortUnless(ctx.db, repo.loginChallengeOpen(ch.id)), ...r, close];
+    }
+    if (body.trust_device) {
+      trusted = newTrustedToken();
+      before.push(
+        repo.insertTrustedDevice(
+          ctx.db,
+          {
+            id: uuid7(now),
+            userId: u.id,
+            tokenHash: await trustedHash(ctx, trusted),
+            tokenVersion: u.tokenVersion,
+            expiresAt: now + SETTINGS.trustedDeviceDays * 24 * HOUR,
+            userAgent: meta.userAgent,
+            ip: meta.ip,
+          },
+          now,
+        ),
+      );
+    }
   }
   try {
-    return await startSession(ctx, u, meta, hist[0], before);
+    const pair = await startSession(ctx, u, meta, hist[0], before, { codeMailed });
+    return trusted === undefined ? pair : { ...pair, trusted };
   } catch (err) {
     if (isCondAbort(err)) throw unauthorized("Invalid code");
     throw err;
   }
+}
+
+// ---- email codes at sign-in: the setting and trusted devices ---------------------------------------------
+
+export async function setEmailTwoFactor(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  body: { password: string; enabled: boolean },
+  meta: Meta,
+) {
+  const [, rows] = await authed.read(repo.userById(ctx.db, authed.userId));
+  const u = rows[0];
+  if (u === undefined) throw unauthorized("User is inactive or missing");
+  if (!(await verifyPassword(u.hashedPassword, body.password, ctx.cfg.pepper))) {
+    await recordFailure(ctx, "email_2fa", meta, { userId: u.id });
+    throw unauthorized(BAD_PASSWORD);
+  }
+  const now = ctx.clock.now();
+  await authed.write(
+    ctx.db
+      .update(repo.tables.users)
+      .set({ email2faEnabled: body.enabled, updatedAt: now })
+      .where(repo.byUserId(u.id)),
+    // Either way the old trust was granted under the old rule.
+    repo.deleteTrustedDevices(ctx.db, u.id),
+    event(ctx, u.id, body.enabled ? "email_2fa_enabled" : "email_2fa_disabled", meta),
+  );
+  return { email_enabled: body.enabled };
+}
+
+export async function listTrustedDevices(ctx: Ctx, authed: AuthedBatch, cookie: string | undefined) {
+  const [, rows] = await authed.read(repo.listTrustedDevices(ctx.db, authed.userId, ctx.clock.now()));
+  const mine = cookie === undefined ? null : await trustedHash(ctx, cookie);
+  return rows.map((d) => ({
+    id: d.id,
+    created_at: toWire(d.createdAt),
+    last_used_at: toWire(d.lastUsedAt),
+    expires_at: toWire(d.expiresAt),
+    user_agent: d.userAgent,
+    device: describeAgent(d.userAgent),
+    ip_address: d.ip,
+    current: mine !== null && timingSafeEqualStr(d.tokenHash, mine),
+  }));
+}
+
+/** Returns true when the caller's own device was the one revoked (the route then clears its cookie). */
+export async function revokeTrustedDevice(
+  ctx: Ctx,
+  authed: AuthedBatch,
+  id: string,
+  cookie: string | undefined,
+): Promise<boolean> {
+  const [gone] = await authed.write(
+    repo.deleteTrustedDevice(ctx.db, authed.userId, id),
+    event(ctx, authed.userId, "trusted_device_revoked", null, { device: id }),
+  );
+  const row = gone[0];
+  if (row === undefined) throw new HttpError(404, "Device not found");
+  return cookie !== undefined && timingSafeEqualStr(row.tokenHash, await trustedHash(ctx, cookie));
+}
+
+export async function revokeTrustedDevices(ctx: Ctx, authed: AuthedBatch): Promise<void> {
+  await authed.write(
+    repo.deleteTrustedDevices(ctx.db, authed.userId),
+    event(ctx, authed.userId, "trusted_devices_revoked", null),
+  );
 }
 
 // ---- shared with passkeys.ts ------------------------------------------------------------------------------
@@ -1042,7 +1324,8 @@ export const internal = { startSession, recordFailure, event, dbUser, commit, BA
 
 /** Worker sweep: drops expired WebAuthn challenges (Python `sweep_expired_challenges`). */
 export async function sweepExpiredChallenges(ctx: Ctx): Promise<void> {
-  await commit(ctx, [repo.sweepChallenges(ctx.db, ctx.clock.now())]);
+  const now = ctx.clock.now();
+  await commit(ctx, [repo.sweepChallenges(ctx.db, now), ...repo.sweepLoginState(ctx.db, now)]);
 }
 
 /** A security-event insert for another module's write batch (Python `account.service.record`). */

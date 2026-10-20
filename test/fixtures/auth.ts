@@ -49,6 +49,7 @@ const SUBJECTS = {
   "verify-email": "subject=Confirm your PaceStreak email",
   "reset-password": "subject=Reset your",
   "confirm-email": "subject=Confirm your new",
+  "sign-in": "subject=Your PaceStreak sign-in code",
 } as const;
 
 /** The newest code of `kind` mailed to `to` (conftest `otp_code`). */
@@ -111,11 +112,48 @@ export async function register(client: Client, email = uniqueEmail(), password =
   return email;
 }
 
-/** POST /v1/auth/login, returning the access token; cookies land on the client. */
-export async function loginToken(client: Client, email: string, password = PASSWORD): Promise<string> {
+export interface Challenge {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+  method: "totp" | "email";
+  resend_in?: number;
+}
+
+/**
+ * POST /v1/auth/login, returning the access token; cookies land on the client. Email codes at sign-in are on by
+ * default, so an untrusted client is asked for one: it is read from the mailbox and sent, the way a person would,
+ * without trusting the device (`trust` true remembers it).
+ */
+export async function loginToken(
+  client: Client,
+  email: string,
+  password = PASSWORD,
+  trust = false,
+): Promise<string> {
+  const res = await loginResponse(client, email, password, trust);
+  return (await jsonOf<{ access_token: string }>(res)).access_token;
+}
+
+/** The response that finally carried the tokens: the login itself, or the email-code step after it. */
+export async function loginResponse(
+  client: Client,
+  email: string,
+  password = PASSWORD,
+  trust = false,
+): Promise<Response> {
   const res = await client.call("/v1/auth/login", { json: { email, password } });
   expect(res.status, await res.clone().text()).toBe(200);
-  return (await jsonOf<{ access_token: string }>(res)).access_token;
+  const body = await jsonOf<{ access_token: string } | Challenge>(res.clone());
+  if (!("mfa_required" in body)) return res;
+  expect(body.method, "a TOTP account needs its own login helper").toBe("email");
+  const code = otpCode("sign-in", email);
+  expect(code, "no sign-in code was mailed").toBeTruthy();
+  const v = await client.call("/v1/auth/2fa/verify", {
+    json: { mfa_token: body.mfa_token, code, trust_device: trust },
+  });
+  expect(v.status, await v.clone().text()).toBe(200);
+  return v;
 }
 
 async function signedIn(client: Client, email: string, password: string): Promise<SignedIn> {

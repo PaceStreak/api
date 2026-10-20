@@ -23,6 +23,7 @@ export const inbox = (db: Db, userId: string, before: number | null, limit: numb
       title: notifications.title,
       body: notifications.body,
       url: notifications.url,
+      data: notifications.data,
       readAt: notifications.readAt,
       createdAt: notifications.createdAt,
       handle: profiles.handle,

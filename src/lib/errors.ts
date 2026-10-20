@@ -8,7 +8,8 @@ export const SERVER_ERROR = "Something went wrong on our side. Try again in a mo
 export const SAVED_TWICE = "That was saved twice at once. Try again.";
 export const SLOW_DOWN = "Slow down - try again in a little while.";
 
-export type ErrorBody = { detail: unknown } | { error: string };
+/** `detail` plus, on a few routes, extra fields the client acts on (e.g. a sign-in challenge that survives a 503). */
+export type ErrorBody = { detail: unknown; [extra: string]: unknown } | { error: string };
 
 export class HttpError extends Error {
   readonly status: ContentfulStatusCode;

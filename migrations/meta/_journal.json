@@ -43,6 +43,13 @@
       "when": 1792331720827,
       "tag": "0005_jobs_retention_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792427816399,
+      "tag": "0006_email_2fa",
+      "breakpoints": true
     }
   ]
 }

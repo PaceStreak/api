@@ -24,6 +24,8 @@ export const users = sqliteTable(
     totpEnabled: bool().notNull().default(false),
     totpConfirmedAt: ms(),
     totpLastUsedStep: integer(),
+    /** Email codes at sign-in for accounts without TOTP. On for every account until its owner turns it off. */
+    email2faEnabled: integer("email_2fa_enabled", { mode: "boolean" }).notNull().default(true),
   },
   (t) => [
     uniqueIndex("ix_users_email").on(t.email),
@@ -151,5 +153,58 @@ export const webauthnChallenges = sqliteTable(
     uniqueIndex("uq_webauthn_challenges_challenge").on(t.challenge),
     index("ix_webauthn_challenges_user_id").on(t.userId),
     index("ix_webauthn_challenges_expires_at").on(t.expiresAt),
+  ],
+);
+
+/**
+ * A pending email-code sign-in: one row per password sign-in that needs a code. `id` is the `jti` of the MFA token
+ * returned to the client, so a code only completes the sign-in it was sent for. The code is stored as
+ * HMAC(PEPPER, `login_email|user|code`); `attempts` is persisted, and a resend replaces the code in place.
+ */
+export const emailLoginChallenges = sqliteTable(
+  "email_login_challenges",
+  {
+    id: text().primaryKey(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    codeHmac: text().notNull(),
+    expiresAt: ms().notNull(),
+    usedAt: ms(),
+    attempts: integer().notNull().default(0),
+    lastSentAt: ms().notNull(),
+    sends: integer().notNull().default(1),
+    createdAt: ms().notNull(),
+  },
+  (t) => [
+    index("ix_email_login_challenges_user_id").on(t.userId),
+    index("ix_email_login_challenges_expires_at").on(t.expiresAt),
+  ],
+);
+
+/**
+ * "Trust this device for 30 days": the cookie holds a random token, the row holds HMAC(PEPPER, token). A row only
+ * counts while `token_version` equals the user's, so everything that signs every session out (sign out everywhere,
+ * a password change, reset or recovery) also ends every trusted device; turning a second factor on or off deletes
+ * the rows outright.
+ */
+export const trustedDevices = sqliteTable(
+  "trusted_devices",
+  {
+    ...base(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text().notNull(),
+    tokenVersion: integer().notNull(),
+    expiresAt: ms().notNull(),
+    lastUsedAt: ms(),
+    userAgent: text(),
+    ip: text(),
+  },
+  (t) => [
+    uniqueIndex("uq_trusted_devices_token_hash").on(t.tokenHash),
+    index("ix_trusted_devices_user_id").on(t.userId),
+    index("ix_trusted_devices_expires_at").on(t.expiresAt),
   ],
 );

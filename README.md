@@ -49,7 +49,7 @@ printf '{"current":"k1","keys":{"k1":"%s"}}\n' "$(openssl rand -base64 32)"   # 
 `TURNSTILE_SECRET_KEY` can be Cloudflare's always-pass test secret
 `1x0000000000000000000000000000000AA`; VAPID and R2 keys are optional locally
 (push and photo backup then answer 503). With `EMAIL_ENABLED=1` and
-`MAILER=console`, verification, reset and email-change codes print to the `wrangler dev` log.
+`MAILER=console`, verification, reset, email-change and sign-in codes print to the `wrangler dev` log.
 
 Run the app against it with `PUBLIC_API_BASE_URL=http://localhost:8787` in
 `../app`.
@@ -80,6 +80,8 @@ With `EMAIL_ENABLED=0`:
 | Confirmed address | Never required (sign-in, follows, groups) | Required in production and staging |
 | `verify-email`, `resend-verification`, `forgot-password`, `reset-password`, `confirm-email-change` | 404 `{"detail": "Email is turned off"}` | As before |
 | `change-email` | Changes at once on the current password; 409 if taken; security notice in the inbox and on push | Code to the new address |
+| Sign-in | Password (and TOTP when set up) | Email code after the password, unless TOTP is set up, the device is trusted or the owner turned it off (below) |
+| `2fa/resend`, `2fa/email` | 404 `{"detail": "Email is turned off"}` | As below |
 | Lost password | `/v1/auth/recover` with a recovery code | Reset code by email, or a recovery code |
 | Email notifications | Channel off everywhere (stored choices kept); push and inbox unchanged | Per-category choice |
 | App | `email_enabled` in `GET /v1/config` (public) and `GET /v1/me` hides every email feature | Everything shows |
@@ -87,6 +89,22 @@ With `EMAIL_ENABLED=0`:
 Recovery codes (`POST /v1/auth/recovery-codes` with the password, and a TOTP code when 2FA is on) work for every
 account in both modes. Accounts made while email was off are unconfirmed, so with it on their next sign-in goes
 through the app's confirm-your-email step once.
+
+### Email codes at sign-in
+
+On by default for every account (`users.email_2fa_enabled`, migration `0006_email_2fa`), only while
+`EMAIL_ENABLED=1`. After a correct password, an account without TOTP gets
+`{"mfa_required": true, "mfa_token", "expires_in": 1800, "method": "email", "resend_in": 60}` and a six-digit code
+by email (subject "Your PaceStreak sign-in code"; the code is in the body only). `POST /v1/auth/2fa/verify` takes
+`{mfa_token, code, trust_device}`: the mailed code (10 minutes, single use, 5 attempts, counter saved) or a
+recovery code. `trust_device` sets the HttpOnly `__Secure-trusted_device` cookie (Path `/v1/auth`, the refresh
+cookie's Domain, 30 days); its server row is bound to the account's token version, so sign out everywhere and any
+password change end it, and toggling a second factor deletes it. TOTP always wins: those accounts get
+`"method": "totp"` and no email. Passkey sign-in never asks. `POST /v1/auth/2fa/resend` `{mfa_token}` sends a new
+code (one a minute, five an hour per account). A mailer failure is a 503 that still carries the challenge, so a
+recovery code can finish it; nobody gets in without one. Settings: `POST /v1/auth/2fa/email`
+`{password, enabled}`, `GET/DELETE /v1/auth/trusted-devices`, `DELETE /v1/auth/trusted-devices/{id}`; `GET
+/v1/auth/2fa` reports `email_codes`, `email_codes_active` and `email_available`.
 
 ## Testing email locally
 

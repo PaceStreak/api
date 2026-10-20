@@ -42,18 +42,26 @@ export async function accessToken(
   });
 }
 
-export async function mfaToken(ctx: Ctx, userId: string, tokenVersion: number): Promise<string> {
+export const EMAIL_MFA_EXPIRES_IN = SETTINGS.emailMfaChallengeMinutes * 60;
+
+/** `jti` names the pending email-code challenge for email sign-ins; TOTP challenges just need it unique. */
+export async function mfaToken(
+  ctx: Ctx,
+  userId: string,
+  tokenVersion: number,
+  opts: { jti?: string; expiresIn?: number } = {},
+): Promise<string> {
   const now = ctx.clock.now();
   const iat = Math.floor(now / 1000);
   return signJwt(ctx.cfg.jwt, {
     sub: userId,
     type: "mfa",
     ver: tokenVersion,
-    jti: uuid7(now),
+    jti: opts.jti ?? uuid7(now),
     iss: SETTINGS.jwtIssuer,
     aud: SETTINGS.jwtAudience,
     iat,
-    exp: iat + MFA_EXPIRES_IN,
+    exp: iat + (opts.expiresIn ?? MFA_EXPIRES_IN),
   });
 }
 
@@ -61,6 +69,7 @@ export interface Claims {
   userId: string;
   tokenVersion: number;
   sessionId: string | null;
+  jti: string;
 }
 
 /** Null for anything that is not a valid token of `type` (the caller picks the 401 text). */
@@ -77,18 +86,23 @@ export async function readToken(ctx: Ctx, token: string, type: "access" | "mfa")
   } catch {
     return null;
   }
-  const { sub, ver, sid } = c;
+  const { sub, ver, sid, jti } = c;
   if (typeof sub !== "string" || !UUID_RE.test(sub) || !Number.isSafeInteger(ver)) return null;
   if (type === "access" && (typeof sid !== "string" || !UUID_RE.test(sid))) return null;
-  return { userId: sub, tokenVersion: ver as number, sessionId: typeof sid === "string" ? sid : null };
+  return {
+    userId: sub,
+    tokenVersion: ver as number,
+    sessionId: typeof sid === "string" ? sid : null,
+    jti: typeof jti === "string" ? jti : "",
+  };
 }
 
 // ---- cookies ----------------------------------------------------------------------------------------------
 
 export function cookieNames(cfg: Pick<Config, "cookieSecure">) {
   return cfg.cookieSecure
-    ? { refresh: "__Secure-refresh_token", csrf: "__Secure-csrf_token" }
-    : { refresh: "refresh_token", csrf: "csrf_token" };
+    ? { refresh: "__Secure-refresh_token", csrf: "__Secure-csrf_token", trusted: "__Secure-trusted_device" }
+    : { refresh: "refresh_token", csrf: "csrf_token", trusted: "trusted_device" };
 }
 
 /**
@@ -141,4 +155,31 @@ export function requireCsrf(c: Context, ctx: Ctx): void {
   const header = c.req.header("X-CSRF-Token");
   if (!cookieValue || !header || !timingSafeEqualStr(cookieValue, header))
     throw forbidden("Invalid CSRF token");
+}
+
+// ---- trusted device ---------------------------------------------------------------------------------------
+
+const TRUSTED_MAX_AGE = SETTINGS.trustedDeviceDays * 86_400;
+
+/** 32 random bytes; only its keyed hash is stored. */
+export const newTrustedToken = () => b64urlEncode(randomBytes(32));
+
+/**
+ * "Trust this device": HttpOnly, the refresh cookie's Domain, Path and SameSite, 30 days. Its value is a random
+ * token the server keys under PEPPER before storing, so a forged or guessed value matches no row.
+ */
+export function setTrustedCookie(c: Context, ctx: Ctx, token: string): void {
+  const name = cookieNames(ctx.cfg).trusted;
+  c.header("Set-Cookie", cookie(ctx.cfg, name, token, TRUSTED_MAX_AGE, true, ctx.clock.now()), {
+    append: true,
+  });
+}
+
+export function clearTrustedCookie(c: Context, ctx: Ctx): void {
+  c.header("Set-Cookie", cookie(ctx.cfg, cookieNames(ctx.cfg).trusted, '""', 0, true, 0), { append: true });
+}
+
+export function trustedCookie(c: Context, ctx: Ctx): string | undefined {
+  const v = getCookie(c, cookieNames(ctx.cfg).trusted);
+  return v === undefined || v === "" || v === '""' || v.length > 128 ? undefined : v;
 }

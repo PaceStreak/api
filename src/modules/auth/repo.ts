@@ -1,12 +1,13 @@
 /**
  * Auth query builders. Every function returns an un-awaited statement; services batch them (CONVENTIONS §3).
  */
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
 import { type AuthedBatch, abortUnless, guardError } from "../../db/batch.ts";
 import type { Db } from "../../db/client.ts";
 import type { ExplainCase } from "../../db/explain.ts";
 import {
   authFailures,
+  emailLoginChallenges,
   notifications,
   type OtpPurpose,
   oneTimeTokens,
@@ -15,6 +16,7 @@ import {
   refreshTokens,
   securityEvents,
   sessions,
+  trustedDevices,
   users,
   webauthnChallenges,
 } from "../../db/schema/index.ts";
@@ -35,6 +37,7 @@ const userCols = {
   totpEnabled: users.totpEnabled,
   totpConfirmedAt: users.totpConfirmedAt,
   totpLastUsedStep: users.totpLastUsedStep,
+  email2faEnabled: users.email2faEnabled,
 };
 
 export type UserRow = Awaited<ReturnType<typeof userByEmail>>[number];
@@ -176,15 +179,19 @@ export const insertEvent = (db: Db, e: EventIn) =>
     updatedAt: e.now,
   });
 
-/** Python `note_sign_in`: has this account signed in before, and ever with this user agent? */
+/**
+ * Python `note_sign_in`: has this account signed in before, and ever with this user agent? The outer column is
+ * written qualified by hand: drizzle renders `${users.id}` unqualified in a one-table select, and inside the
+ * subquery a bare `"id"` binds to `security_events.id`, so the notice never fired (CHANGES-FROM-PYTHON.md).
+ */
 export const loginHistory = (db: Db, by: { id: string } | { email: string }, userAgent: string | null) =>
   db
     .select({
-      hasHistory: sql<number>`EXISTS (SELECT 1 FROM security_events e WHERE e.user_id = ${users.id} AND e.kind = 'login')`,
+      hasHistory: sql<number>`EXISTS (SELECT 1 FROM security_events e WHERE e.user_id = "users"."id" AND e.kind = 'login')`,
       knownAgent:
         userAgent === null
           ? sql<number>`0`
-          : sql<number>`EXISTS (SELECT 1 FROM security_events e WHERE e.user_id = ${users.id} AND e.kind = 'login' AND e.user_agent = ${userAgent})`,
+          : sql<number>`EXISTS (SELECT 1 FROM security_events e WHERE e.user_id = "users"."id" AND e.kind = 'login' AND e.user_agent = ${userAgent})`,
     })
     .from(users)
     .where("id" in by ? eq(users.id, by.id) : eq(users.email, by.email));
@@ -211,7 +218,16 @@ export const insertAuthFailure = (
 
 export const insertNotification = (
   db: Db,
-  n: { id: string; userId: string; kind: string; category: string; title: string; body: string; url: string },
+  n: {
+    id: string;
+    userId: string;
+    kind: string;
+    category: string;
+    title: string;
+    body: string;
+    url: string;
+    data?: Record<string, unknown> | null;
+  },
   now: number,
 ) =>
   db
@@ -319,6 +335,139 @@ export const totpStepFresh = (userId: string, step: number) =>
 export const setTotpStep = (db: Db, userId: string, step: number, now: number) =>
   db.update(users).set({ totpLastUsedStep: step, updatedAt: now }).where(eq(users.id, userId));
 
+// ---- email codes at sign-in ------------------------------------------------------------------------------
+
+export const insertLoginChallenge = (
+  db: Db,
+  c: { id: string; userId: string; codeHmac: string; expiresAt: number },
+  now: number,
+) => db.insert(emailLoginChallenges).values({ ...c, lastSentAt: now, sends: 1, createdAt: now });
+
+export const loginChallenge = (db: Db, id: string) =>
+  db.select().from(emailLoginChallenges).where(eq(emailLoginChallenges.id, id));
+
+/** A wrong code: the counter is saved in its own write (the Python bug was a counter that never was). */
+export const bumpLoginAttempts = (db: Db, id: string) =>
+  db
+    .update(emailLoginChallenges)
+    .set({ attempts: sql`${emailLoginChallenges.attempts} + 1` })
+    .where(eq(emailLoginChallenges.id, id));
+
+/** Single use under concurrency: the sign-in batch aborts unless the code is still unused, unexpired and unspent. */
+export const loginCodeLive = (id: string, maxAttempts: number, now: number) =>
+  sql`EXISTS (SELECT 1 FROM email_login_challenges WHERE id = ${id} AND used_at IS NULL
+        AND attempts < ${maxAttempts} AND expires_at > ${now})`;
+
+/** A recovery code may end a challenge whose email code expired or ran out of attempts; only reuse is refused. */
+export const loginChallengeOpen = (id: string) =>
+  sql`EXISTS (SELECT 1 FROM email_login_challenges WHERE id = ${id} AND used_at IS NULL)`;
+
+export const useLoginChallenge = (db: Db, id: string, now: number) =>
+  db.update(emailLoginChallenges).set({ usedAt: now }).where(eq(emailLoginChallenges.id, id));
+
+/** A resend: a fresh code with fresh attempts, guarded on the cooldown and the caller's hourly counter. */
+export const resendLoginChallenge = (
+  db: Db,
+  r: { id: string; codeHmac: string; expiresAt: number; now: number; cooldownMs: number; allowed: SQL },
+) =>
+  db
+    .update(emailLoginChallenges)
+    .set({
+      codeHmac: r.codeHmac,
+      expiresAt: r.expiresAt,
+      attempts: 0,
+      lastSentAt: r.now,
+      sends: sql`${emailLoginChallenges.sends} + 1`,
+    })
+    .where(
+      and(
+        eq(emailLoginChallenges.id, r.id),
+        isNull(emailLoginChallenges.usedAt),
+        lte(emailLoginChallenges.lastSentAt, r.now - r.cooldownMs),
+        r.allowed,
+      ),
+    )
+    .returning({ id: emailLoginChallenges.id });
+
+// ---- trusted devices --------------------------------------------------------------------------------------
+
+/** The trusted device the cookie names, if it belongs to `email`'s account and that account's sessions are intact. */
+export const trustedForLogin = (db: Db, email: string, tokenHash: string, now: number) =>
+  db
+    .select({ id: trustedDevices.id })
+    .from(trustedDevices)
+    .innerJoin(users, eq(users.id, trustedDevices.userId))
+    .where(
+      and(
+        eq(trustedDevices.tokenHash, tokenHash),
+        eq(users.email, email),
+        eq(trustedDevices.tokenVersion, users.tokenVersion),
+        gt(trustedDevices.expiresAt, now),
+      ),
+    );
+
+export const insertTrustedDevice = (
+  db: Db,
+  d: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    tokenVersion: number;
+    expiresAt: number;
+    userAgent: string | null;
+    ip: string | null;
+  },
+  now: number,
+) => db.insert(trustedDevices).values({ ...d, lastUsedAt: now, createdAt: now, updatedAt: now });
+
+export const touchTrustedDevice = (db: Db, id: string, now: number) =>
+  db.update(trustedDevices).set({ lastUsedAt: now, updatedAt: now }).where(eq(trustedDevices.id, id));
+
+/** Live trusted devices: unexpired, and minted under the account's current token version. */
+export const listTrustedDevices = (db: Db, userId: string, now: number) =>
+  db
+    .select({
+      id: trustedDevices.id,
+      tokenHash: trustedDevices.tokenHash,
+      createdAt: trustedDevices.createdAt,
+      lastUsedAt: trustedDevices.lastUsedAt,
+      expiresAt: trustedDevices.expiresAt,
+      userAgent: trustedDevices.userAgent,
+      ip: trustedDevices.ip,
+    })
+    .from(trustedDevices)
+    .innerJoin(users, eq(users.id, trustedDevices.userId))
+    .where(
+      and(
+        eq(trustedDevices.userId, userId),
+        eq(trustedDevices.tokenVersion, users.tokenVersion),
+        gt(trustedDevices.expiresAt, now),
+      ),
+    )
+    .orderBy(desc(trustedDevices.createdAt));
+
+export const deleteTrustedDevice = (db: Db, userId: string, id: string) =>
+  db
+    .delete(trustedDevices)
+    .where(and(eq(trustedDevices.id, id), eq(trustedDevices.userId, userId)))
+    .returning({ id: trustedDevices.id, tokenHash: trustedDevices.tokenHash });
+
+export const deleteTrustedDevices = (db: Db, userId: string) =>
+  db.delete(trustedDevices).where(eq(trustedDevices.userId, userId));
+
+/** Worker sweep: spent or expired sign-in challenges, and expired or revoked trusted devices. */
+export const sweepLoginState = (db: Db, now: number) => [
+  db.delete(emailLoginChallenges).where(lt(emailLoginChallenges.expiresAt, now - DAY_MS)),
+  db
+    .delete(trustedDevices)
+    .where(
+      or(
+        lt(trustedDevices.expiresAt, now),
+        sql`${trustedDevices.tokenVersion} <> (SELECT token_version FROM users WHERE id = ${trustedDevices.userId})`,
+      ),
+    ),
+];
+
 // ---- passkeys ---------------------------------------------------------------------------------------------
 
 export const listPasskeys = (db: Db, userId: string) =>
@@ -401,6 +550,9 @@ export const explain: ExplainCase[] = [
   { name: "auth.passkeyByCredential", build: (db) => passkeyByCredential(db, "c") },
   { name: "auth.challengeRow", build: (db) => challengeRow(db, "c", "sign_in") },
   { name: "auth.sweepChallenges", build: (db) => sweepChallenges(db, 0) },
+  { name: "auth.loginChallenge", build: (db) => loginChallenge(db, "c") },
+  { name: "auth.trustedForLogin", build: (db) => trustedForLogin(db, "a@b.c", "h", 0) },
+  { name: "auth.listTrustedDevices", build: (db) => listTrustedDevices(db, "u", 0) },
 ];
 
 // ---- small pieces used by the service ---------------------------------------------------------------------

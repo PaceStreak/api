@@ -13,7 +13,7 @@ export type Environment = (typeof ENVIRONMENTS)[number];
 /** Settings that are product decisions, not deployment configuration. */
 export const SETTINGS = {
   appName: "PaceStreak",
-  termsVersion: "2026-10-19",
+  termsVersion: "2026-10-20",
   accessTokenMinutes: 15,
   refreshTokenDays: 7,
   mfaChallengeMinutes: 5,

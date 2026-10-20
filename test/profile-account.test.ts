@@ -15,10 +15,10 @@ import { jobCtx } from "./jobs/helpers.ts";
 
 describe("terms version", () => {
   it("changed: the cutover's privacy rewrite bumps terms_version past the Python service's 2026-10-17", async () => {
-    expect(SETTINGS.termsVersion).toBe("2026-10-19");
+    expect(SETTINGS.termsVersion).toBe("2026-10-20");
     const { token } = await person();
     const me = await jsonOf<{ terms_version: string }>(await api("/v1/me", { token }));
-    expect(me.terms_version).toBe("2026-10-19");
+    expect(me.terms_version).toBe("2026-10-20");
   });
 });
 

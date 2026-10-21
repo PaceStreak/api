@@ -4,7 +4,7 @@ The PaceStreak API: Hono on Cloudflare Workers, D1 through Drizzle, Zod.
 **`main` is live at `api.pacestreak.com`** (since 2026-10-19). The old Python
 service is on branch `old`, kept for reference: `git show old:app/<path>`.
 Nothing Python applies to `main`: no `make`, Docker Compose, Postgres, Redis or
-Alembic. `next` is an alias kept equal to `main`.
+Alembic. `next` was the rewrite branch; it is retired and no longer updated. Work on `main`.
 
 Workspace-wide rules (CSP, cookies, privacy, commit conventions, what is
 already decided) live in the root

@@ -17,13 +17,13 @@ running a modified version over a network must offer its source to its users.
 
 | | |
 | --- | --- |
-| Runtime | Cloudflare Workers (Paid plan), Smart Placement |
+| Runtime | Cloudflare Workers (Free plan; `PLAN` in `wrangler.jsonc` switches every limit to Paid), Smart Placement |
 | Storage | D1 `pacestreak` (location `apac`), R2 `pacestreak-photos` and `pacestreak-staging` |
 | Background work | Three cron triggers and the `pacestreak-jobs` queue (one message per invocation, DLQ `pacestreak-jobs-dlq`) |
 | Mail | Brevo SMTP relay (`MAILER=smtp`, see Email switch); Brevo HTTP API or Cloudflare Email Service by config; a `console` transport in dev and tests |
 | Hostname | `api.pacestreak.com`, a Workers custom domain (after cutover) |
 | Consumer | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
-| Deploys | Workers Builds: push to `main` applies D1 migrations, then deploys; other branches deploy `--env staging` |
+| Deploys | **Manual** from a clean `main` (Workers Builds is not connected): migrations, then `wrangler deploy`; staging with `--env staging` |
 | Monitoring | `/health`, `/health/ready`, `/health/worker` on [`status.pacestreak.com`](https://status.pacestreak.com) |
 
 Everything deployable is declared in [`wrangler.jsonc`](./wrangler.jsonc).
@@ -202,8 +202,8 @@ test that covers it.
 
 ## Deploy
 
-Workers Builds deploys on push; there is no deploy workflow and CI needs no
-secrets. On `main`:
+**Pushing does not deploy.** Workers Builds is not connected and there is no
+deploy workflow. Deploy by hand from a clean `main`:
 
 ```bash
 pnpm wrangler d1 migrations apply pacestreak --remote && pnpm wrangler deploy
@@ -212,10 +212,13 @@ pnpm wrangler d1 migrations apply pacestreak --remote && pnpm wrangler deploy
 Migrations land before the code, and the old code briefly runs against the
 new schema, so a migration must stay backward compatible (add, never rename
 or drop in the same release). Roll back code with `pnpm wrangler rollback`;
-roll back data with D1 Time Travel (30 days on Workers Paid). Secrets are set
+roll back data with D1 Time Travel (7 days on Free, 30 on Paid) or the
+nightly Neon copy. Secrets are set
 with `wrangler secret put` and never committed: see
 [`docs/rewrite/CUTOVER.md`](./docs/rewrite/CUTOVER.md) step 8 for the list
-and how to generate each one.
+and how to generate each one. Staging is the same with `pacestreak-staging`
+and `--env staging`, at `pacestreak-api-staging.alzywelzy.workers.dev`.
+`wrangler triggers deploy` counts as a production deployment.
 
 ## Load-bearing rules
 

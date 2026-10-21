@@ -1,10 +1,10 @@
-# AGENTS.md — api (branch `next`: TypeScript on Cloudflare Workers)
+# AGENTS.md — api (TypeScript on Cloudflare Workers)
 
 The PaceStreak API: Hono on Cloudflare Workers, D1 through Drizzle, Zod.
-**`main` still holds the Python service until cutover**
-(`docs/rewrite/CUTOVER.md`); it is the reference implementation:
-`git show main:app/<path>`. Nothing Python applies on this branch: no `make`,
-Docker Compose, Postgres, Redis or Alembic.
+**`main` is live at `api.pacestreak.com`** (since 2026-10-19). The old Python
+service is on branch `old`, kept for reference: `git show old:app/<path>`.
+Nothing Python applies to `main`: no `make`, Docker Compose, Postgres, Redis or
+Alembic. `next` is an alias kept equal to `main`.
 
 Workspace-wide rules (CSP, cookies, privacy, commit conventions, what is
 already decided) live in the root
@@ -14,9 +14,12 @@ The rewrite's plan and rules are in `docs/rewrite/`:
 - `OWNER-DECISIONS.md` overrides everything else.
 - `DESIGN.md` is the architecture; `WORKPLAN.json` the units.
 - `CONVENTIONS.md` is how to write a module, a query and a test here. Read it before coding.
-- `PROGRESS.md` is the state: its `Next step:` line says where to resume.
+- `PROGRESS.md` records how the rewrite was built (complete).
 - `CHANGES-FROM-PYTHON.md` is append-only: every behaviour or contract change, why, and its test.
-- `CUTOVER.md` is the owner's deploy and retirement runbook.
+- `CUTOVER.md` is the deploy and retirement runbook used for the switch.
+
+The docs site, [docs.pacestreak.com](https://docs.pacestreak.com), describes
+every repository, the topology and the runbook.
 
 ## Commands
 
@@ -32,6 +35,7 @@ pnpm build            # wrangler deploy --dry-run + 400 KiB gzip budget
 pnpm db:generate      # new migration from src/db/schema; then pnpm db:fk-users
 pnpm types            # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm admin <cmd>      # create-admin | set-password | set-role: prints SQL for `wrangler d1 execute`
+pnpm openapi          # regenerate openapi.json (the API reference) from the routes
 ```
 
 A test that times out under load passes on a rerun; rerun it once before
@@ -47,16 +51,18 @@ add a test path that reads `.dev.vars` or a remote binding.
 
 ## Deploy
 
-Workers Builds: push to `main` runs
-`wrangler d1 migrations apply pacestreak --remote && wrangler deploy`; other
-branches deploy `--env staging`. Migrations must stay backward compatible
+Workers Builds: push to `main` runs `pnpm run build`, then
+`pnpm wrangler d1 migrations apply pacestreak --remote && pnpm wrangler deploy`.
+Staging (`pacestreak-api-staging.alzywelzy.workers.dev`) is deployed by hand
+with `--env staging`. `wrangler triggers deploy` counts as a production
+deployment. Migrations must stay backward compatible
 (old code runs briefly on the new schema). CI (`.github/workflows/ci.yml`)
 deploys nothing and needs no secrets; workflow files are pushed over SSH.
 
 ## Rules for this repo
 
-- Never deploy, never create Cloudflare resources, never change DNS and never
-  push `main` from an unattended session. Push `next` only.
+- Pushing `main` deploys production. Unattended sessions never push `main`,
+  never create Cloudflare resources and never change DNS.
 - No `any`, no non-null assertions, strict TypeScript. Handlers never touch
   `env.DB`; they use `ctx.db` and `AuthedBatch` (`src/db/batch.ts`).
 - One read batch and one write batch per request; tests assert round trips.

@@ -55,6 +55,8 @@ export const ProfilePatch = z.object({
   quiet_end: z.int().min(0).max(23).nullable().optional(),
   quiet_days: z.int().min(0).max(127).nullable().optional(),
   weekly_target: z.int().min(1).max(7).nullable().optional(),
+  /** Turning it off deletes every backed-up photo in the same write. */
+  photo_backup: z.boolean().nullable().optional(),
 });
 export type ProfilePatchInput = z.infer<typeof ProfilePatch>;
 

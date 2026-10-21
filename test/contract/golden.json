@@ -593,6 +593,7 @@
       "official": "boolean",
       "onboarded": "boolean",
       "onboarded_at": "string",
+      "photo_backup": "boolean",
       "quiet_days": "null",
       "quiet_end": "number",
       "quiet_start": "number",

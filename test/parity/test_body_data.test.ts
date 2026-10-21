@@ -10,7 +10,7 @@ import { firstWeekTarget, viewHabit } from "../../src/modules/habits/engine.ts";
 import { MAX_PHOTO_BYTES, objectKey } from "../../src/modules/training/body.ts";
 import { person } from "../fixtures/game.ts";
 import { api, jsonOf } from "../fixtures/http.ts";
-import { putPhoto } from "../fixtures/photos.ts";
+import { backedUp, putPhoto } from "../fixtures/photos.ts";
 import { get, type Json } from "../fixtures/training.ts";
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(64).fill(0)]);
@@ -36,8 +36,8 @@ describe("test_body_data", () => {
   });
 
   it("photo_backup_is_owner_only_and_checked", async () => {
-    const me = await person();
-    const other = await person();
+    const me = await backedUp();
+    const other = await backedUp();
     const pid = crypto.randomUUID();
     const up = await putPhoto(me.token, pid, JPEG);
     expect(up.status).toBe(200);
@@ -65,7 +65,7 @@ describe("test_body_data", () => {
   });
 
   it("oversized_upload_is_rejected_and_swept_from_r2", async () => {
-    const me = await person();
+    const me = await backedUp();
     const pid = crypto.randomUUID();
     const big = new Uint8Array(1 + MAX_PHOTO_BYTES);
     big.set(JPEG);

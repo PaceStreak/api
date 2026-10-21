@@ -1,6 +1,7 @@
 /** Photo uploads for route tests, shaped like the app's (src/lib/photos.ts). */
 import { SELF } from "cloudflare:test";
-import { BASE, randomIp, recordStatements } from "./http.ts";
+import { person } from "./game.ts";
+import { api, BASE, randomIp, recordStatements } from "./http.ts";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const ascii = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
@@ -31,4 +32,12 @@ export function putPhoto(
     recordStatements(`PUT /v1/body-photos/${id}`, res);
     return res;
   });
+}
+
+/** A fresh person with the account's photo backup on (uploads are refused while it is off). */
+export async function backedUp() {
+  const me = await person();
+  const res = await api("/v1/me/profile", { method: "PATCH", json: { photo_backup: true }, token: me.token });
+  if (res.status !== 200) throw new Error(`photo_backup on: ${res.status}`);
+  return me;
 }

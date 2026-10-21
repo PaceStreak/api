@@ -43,6 +43,7 @@ export const DEFAULT_PROFILE: ProfileRow = {
   socialSuspendedAt: null,
   deletionScheduledAt: null,
   onboardedAt: null,
+  photoBackup: false,
 };
 
 export const profileOf = (rows: readonly ProfileRow[]): ProfileRow => {

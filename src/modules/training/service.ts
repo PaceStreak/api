@@ -3,6 +3,7 @@
  * export/import and trash restore use the row shapes and the workout write path).
  */
 
+export { photoWipe } from "./body.ts";
 export { hrSummary, kmSplits, zoneSeconds } from "./importers.ts";
 export { blockWeek } from "./personal.ts";
 export {

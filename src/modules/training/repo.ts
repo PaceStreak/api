@@ -105,6 +105,7 @@ export const profile = (db: Db, userId: string) =>
       socialSuspendedAt: profiles.socialSuspendedAt,
       deletionScheduledAt: profiles.deletionScheduledAt,
       onboardedAt: profiles.onboardedAt,
+      photoBackup: profiles.photoBackup,
     })
     .from(profiles)
     .where(eq(profiles.userId, userId));
@@ -578,6 +579,26 @@ export const photoById = (db: Db, id: string) => db.select().from(bodyPhotos).wh
 export const countPhotos = (db: Db, userId: string) =>
   db.all<{ n: number }>(sql`SELECT count(*) AS n FROM body_photos WHERE user_id = ${userId}`);
 
+/** Every backed-up photo row of the user, gone; the object keys come back for R2. */
+export const deleteAllPhotos = (db: Db, userId: string) =>
+  db.delete(bodyPhotos).where(eq(bodyPhotos.userId, userId)).returning({ key: bodyPhotos.objectKey });
+
+/**
+ * Undoes an upload's row in the same batch that wrote it when the account's backup is off by then (it was turned
+ * off on another device between the upload's read and its write). Returns the key when it did.
+ */
+export const dropPhotoIfBackupOff = (db: Db, userId: string, id: string) =>
+  db
+    .delete(bodyPhotos)
+    .where(
+      and(
+        eq(bodyPhotos.id, id),
+        eq(bodyPhotos.userId, userId),
+        sql`NOT EXISTS (SELECT 1 FROM profiles WHERE user_id = ${userId} AND photo_backup = 1)`,
+      ),
+    )
+    .returning({ key: bodyPhotos.objectKey });
+
 // ---- chains and pauses -----------------------------------------------------------------------------------------
 
 export const liveChains = (db: Db, userId: string) =>
@@ -802,6 +823,8 @@ const cases: Case[] = [
   { name: "training.photos", build: (db) => photos(db, "u") },
   { name: "training.photoById", build: (db) => photoById(db, "p") },
   { name: "training.countPhotos", build: (db) => countPhotos(db, "u") },
+  { name: "training.deleteAllPhotos", build: (db) => deleteAllPhotos(db, "u") },
+  { name: "training.dropPhotoIfBackupOff", build: (db) => dropPhotoIfBackupOff(db, "u", "p") },
   { name: "training.liveChains", build: (db) => liveChains(db, "u") },
   { name: "training.pauseById", build: (db) => pauseById(db, "p") },
   { name: "training.listGear", build: (db) => listGear(db, "u") },

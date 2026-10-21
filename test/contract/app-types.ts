@@ -38,6 +38,8 @@ export interface Profile {
   quiet_end: number;
   /** Whole days without nudges, Monday = bit 0. */
   quiet_days?: number | null;
+  /** Progress-photo backup, an account setting; turning it off deletes the server copies. */
+  photo_backup?: boolean;
 }
 
 export interface Me {

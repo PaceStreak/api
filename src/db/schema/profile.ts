@@ -52,6 +52,8 @@ export const profiles = sqliteTable(
     quietEnd: integer().notNull().default(7),
     /** Bitmask, bit 0 = Monday. */
     quietDays: integer(),
+    /** Progress-photo backup to R2: opt-in, and an account setting so every device follows it. */
+    photoBackup: bool().notNull().default(false),
   },
   (t) => [
     uniqueIndex("ix_profiles_user_id").on(t.userId),

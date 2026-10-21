@@ -204,6 +204,7 @@ export async function deleteWeighIn(ctx: Ctx, authed: AuthedBatch, id: string) {
 
 export const MAX_PHOTOS = 500;
 export const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+export const BACKUP_OFF = "Photo backup is off for this account. Turn it on to upload photos.";
 
 type PhotoRow = typeof bodyPhotos.$inferSelect;
 export const photoOut = (p: PhotoRow) => ({ id: p.id, date: p.takenOn, pose: p.pose, size: p.size });
@@ -277,6 +278,7 @@ export async function uploadPhoto(
     repo.countPhotos(ctx.db, authed.userId),
   );
   limit.check(counter);
+  if (!prof[0]?.photoBackup) throw conflict(BACKUP_OFF);
   const existing = rows[0];
   const contentType = mediaType(upload.contentType);
   check(ctx, authed, prof, existing, body, contentType);
@@ -291,7 +293,7 @@ export async function uploadPhoto(
   if (!stored.ok) throw new HttpError(415, "Not the image type it claims");
   const now = ctx.clock.now();
   const values = { takenOn: body.date, pose: body.pose, contentType, size };
-  const [saved] = await authed.write(
+  const [saved, dropped] = await authed.write(
     ctx.db
       .insert(bodyPhotos)
       .values({ id, userId: authed.userId, objectKey: key, createdAt: now, updatedAt: now, ...values })
@@ -301,7 +303,12 @@ export async function uploadPhoto(
         setWhere: eq(bodyPhotos.userId, authed.userId),
       })
       .returning(),
+    repo.dropPhotoIfBackupOff(ctx.db, authed.userId, id),
   );
+  if (dropped.length > 0) {
+    await ctx.env.PHOTOS.delete(key);
+    throw conflict(BACKUP_OFF);
+  }
   const row = saved[0];
   if (row === undefined) throw conflict("Pick another id");
   return photoOut(row);
@@ -319,15 +326,23 @@ export async function deletePhoto(ctx: Ctx, authed: AuthedBatch, id: string) {
   if (key !== undefined) await ctx.env.PHOTOS.delete(key);
 }
 
+/**
+ * Wiping the account's backed-up photos, in two halves so a caller can put the row delete in its own write batch
+ * (turning `photo_backup` off does): the statement, then `purge` with its result once the batch commits. The rows
+ * go first; objects whose rows are gone are unreachable, and an account purge sweeps the prefix.
+ */
+export const photoWipe = (ctx: Ctx, userId: string) => ({
+  statement: repo.deleteAllPhotos(ctx.db, userId),
+  purge: (rows: readonly { key: string }[]) =>
+    deleteMany(
+      ctx.env.PHOTOS,
+      rows.map((r) => r.key),
+    ),
+});
+
+/** `DELETE /body-photos`: the server copies go; the account's `photo_backup` setting is left as it is. */
 export async function deleteAllPhotos(ctx: Ctx, authed: AuthedBatch) {
-  const [rows] = await authed.write(
-    ctx.db
-      .delete(bodyPhotos)
-      .where(eq(bodyPhotos.userId, authed.userId))
-      .returning({ key: bodyPhotos.objectKey }),
-  );
-  await deleteMany(
-    ctx.env.PHOTOS,
-    rows.map((r) => r.key),
-  );
+  const wipe = photoWipe(ctx, authed.userId);
+  const [rows] = await authed.write(wipe.statement);
+  await wipe.purge(rows);
 }

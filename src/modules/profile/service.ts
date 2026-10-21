@@ -20,6 +20,7 @@ import { uuid7 } from "../../lib/uuid7.ts";
 import type { Meta } from "../auth/service.ts";
 import { securityEvent } from "../auth/service.ts";
 import { type Loaded, recompute } from "../game/service.ts";
+import { photoWipe } from "../training/service.ts";
 import * as repo from "./repo.ts";
 import type { OnboardingInput, ProfilePatchInput } from "./schemas.ts";
 
@@ -69,6 +70,7 @@ export function profileOut(p: ProfileRow) {
     quiet_start: p.quietStart,
     quiet_end: p.quietEnd,
     quiet_days: p.quietDays,
+    photo_backup: p.photoBackup,
   };
 }
 
@@ -294,6 +296,7 @@ const NOT_NULL = new Set([
   "reminder_mode",
   "quiet_start",
   "quiet_end",
+  "photo_backup",
 ]);
 
 const COLUMN: Record<string, keyof ProfileRow> = {
@@ -317,6 +320,7 @@ const COLUMN: Record<string, keyof ProfileRow> = {
   quiet_start: "quietStart",
   quiet_end: "quietEnd",
   quiet_days: "quietDays",
+  photo_backup: "photoBackup",
 };
 
 /** Snapshot inputs a profile change can move (game's ProfileIn), by column. */
@@ -383,9 +387,12 @@ export async function patchProfile(ctx: Ctx, authed: AuthedBatch, data: ProfileP
   // Changes that move the week ride inside a recompute: its read is the only read.
   const movesWeek =
     (data.weekly_target ?? null) !== null || (data.week_starts_on ?? null) !== null || "timezone" in data;
+  // Backup off: the server copies go in the same write as the flag, so neither can happen without the other.
+  const wipe = data.photo_backup === false ? photoWipe(ctx, authed.userId) : null;
   if (movesWeek) {
     if (brandCheck) await checkDisplayName(ctx, authed, data.display_name);
     let row: ProfileRow | undefined;
+    let wiped: { key: string }[] = [];
     try {
       await recompute(
         ctx,
@@ -400,6 +407,7 @@ export async function patchProfile(ctx: Ctx, authed: AuthedBatch, data: ProfileP
             for (const f of SNAPSHOT_FIELDS) if (f in v) (p as unknown as Record<string, unknown>)[f] = v[f];
             retime(ctx, l, v.timezone, v.weekStartsOn);
             const stmts: Stmt[] = [repo.updateProfile(ctx.db, authed.userId, v, now)];
+            if (wipe !== null) stmts.push(wipe.statement);
             if (plan.target !== null) {
               const main = mainChainOf(l);
               if (plan.target !== currentTarget(main.targetHistory)) {
@@ -412,6 +420,7 @@ export async function patchProfile(ctx: Ctx, authed: AuthedBatch, data: ProfileP
           },
           written: (results) => {
             row = (results[0] as ProfileRow[])[0];
+            if (wipe !== null) wiped = results[1] as { key: string }[];
           },
         },
       );
@@ -419,6 +428,7 @@ export async function patchProfile(ctx: Ctx, authed: AuthedBatch, data: ProfileP
       throw handleClash(err);
     }
     if (row === undefined) throw new Error("profile update returned nothing");
+    if (wipe !== null) await wipe.purge(wiped);
     return { profile: profileOut(row) };
   }
 
@@ -432,7 +442,13 @@ export async function patchProfile(ctx: Ctx, authed: AuthedBatch, data: ProfileP
   const plan = planPatch(data, handle, p, year);
   if ("display_name" in data) await checkDisplayName(ctx, authed, data.display_name, p.isOfficial);
   try {
-    const [updated] = await authed.write(repo.updateProfile(ctx.db, authed.userId, plan.values, now));
+    const update = repo.updateProfile(ctx.db, authed.userId, plan.values, now);
+    if (wipe === null) {
+      const [updated] = await authed.write(update);
+      return { profile: profileOut(only(updated)) };
+    }
+    const [updated, wiped] = await authed.write(update, wipe.statement);
+    await wipe.purge(wiped);
     return { profile: profileOut(only(updated)) };
   } catch (err) {
     throw handleClash(err);

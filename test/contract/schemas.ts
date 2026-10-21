@@ -52,6 +52,7 @@ export const Profile = z.object({
   quiet_start: num,
   quiet_end: num,
   quiet_days: nnum,
+  photo_backup: bool,
 }) satisfies z.ZodType<app.Profile>;
 
 export const Me = z.object({

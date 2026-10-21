@@ -1,0 +1,1 @@
+ALTER TABLE `profiles` ADD `photo_backup` integer DEFAULT false NOT NULL;

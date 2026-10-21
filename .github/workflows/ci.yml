@@ -42,6 +42,10 @@ jobs:
           test -z "$(git status --porcelain -- migrations)" || { echo "schema changed without a migration"; exit 1; }
           pnpm db:fk-users
           git diff --exit-code -- src/db/fk-users.gen.ts
+      - name: openapi.json is current
+        run: |
+          pnpm openapi
+          git diff --exit-code -- openapi.json || { echo "openapi.json is stale: run pnpm openapi"; exit 1; }
       - name: Tests
         run: pnpm vitest run
       - name: Ported test names (pytest parity)

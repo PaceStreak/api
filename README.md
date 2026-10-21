@@ -202,7 +202,7 @@ test that covers it.
 
 ## Deploy
 
-**A push to `main` deploys.** Workers Builds (connected 2026-10-21) runs
+**A push to `main` deploys.** Workers Builds runs
 `pnpm run build` (a dry-run deploy plus the bundle-size check), then this
 deploy command, so migrations land before the code:
 

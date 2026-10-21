@@ -23,7 +23,7 @@ running a modified version over a network must offer its source to its users.
 | Mail | Brevo SMTP relay (`MAILER=smtp`, see Email switch); Brevo HTTP API or Cloudflare Email Service by config; a `console` transport in dev and tests |
 | Hostname | `api.pacestreak.com`, a Workers custom domain (after cutover) |
 | Consumer | [`PaceStreak/app`](https://github.com/PaceStreak/app) at `app.pacestreak.com` |
-| Deploys | **Manual** from a clean `main` (Workers Builds is not connected): migrations, then `wrangler deploy`; staging with `--env staging` |
+| Deploys | Workers Builds: a push to `main` applies D1 migrations, then deploys; staging by hand with `--env staging` |
 | Monitoring | `/health`, `/health/ready`, `/health/worker` on [`status.pacestreak.com`](https://status.pacestreak.com) |
 
 Everything deployable is declared in [`wrangler.jsonc`](./wrangler.jsonc).
@@ -202,8 +202,9 @@ test that covers it.
 
 ## Deploy
 
-**Pushing does not deploy.** Workers Builds is not connected and there is no
-deploy workflow. Deploy by hand from a clean `main`:
+**A push to `main` deploys.** Workers Builds (connected 2026-10-21) runs
+`pnpm run build` (a dry-run deploy plus the bundle-size check), then this
+deploy command, so migrations land before the code:
 
 ```bash
 pnpm wrangler d1 migrations apply pacestreak --remote && pnpm wrangler deploy
